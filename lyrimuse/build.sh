@@ -253,6 +253,14 @@ BIN="$APP_DIR/Contents/MacOS/lyrimuse"
 # 空气(或者拷到一个只写了一半的文件)。SwiftPM 的 .build/.lock 只锁 `swift build` 本身,
 # 管不到这里。跟上面的暂存包是同一族问题(共享可写路径),顺手一并修掉。
 FAT_DIR="$(mktemp -d)"
+# 退出时连同暂存包一起收走,两个分支(装机 / --dest)都要删 FAT_DIR —— 不删的话每跑一次在 $TMPDIR
+# 留一份各架构的编译产物(约 110MB)。
+cleanup_build() {
+  rm -rf "$FAT_DIR"
+  if [ -n "$STAGE" ]; then rm -rf "$STAGE"; fi
+  release_build_lock
+}
+trap cleanup_build EXIT
 
 echo "==> building (release) [$ARCHES]"
 # 每个架构单独编一次再 lipo 合并,而不是 `swift build --arch arm64 --arch x86_64` 一步
