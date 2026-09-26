@@ -373,12 +373,18 @@ func (b *lyricSourceBreaker) coolingDown(source string) (time.Duration, bool) {
 type lyricSourceRound struct {
 	mu      sync.Mutex
 	skipped map[string]bool
+	// reached:这一轮拿到过正常应答(状态码 < 500 且不是 429,404 也算)的源,由 doHTTPTracked 记。
+	// 一个都没有 = 这一轮没连上任何歌词源(断网、DNS 抽风、全被熔断),结论不作数,见 reachedAny。
+	reached map[string]bool
+	// parent:外层的 round(补空扫描套在 retryLyricsUpgrade / rescoreLyrics 外面那一层)。
+	// reached 往上传,外层才看得见里层这一轮连没连上;skipped 不传,那是写缓存的那一层自己的账。
+	parent *lyricSourceRound
 }
 
 type lyricSourceRoundKey struct{}
 
 func withLyricSourceRound(ctx context.Context) (context.Context, *lyricSourceRound) {
-	r := &lyricSourceRound{skipped: map[string]bool{}}
+	r := &lyricSourceRound{skipped: map[string]bool{}, reached: map[string]bool{}, parent: lyricSourceRoundFrom(ctx)}
 	return context.WithValue(ctx, lyricSourceRoundKey{}, r), r
 }
 
@@ -426,6 +432,24 @@ func (r *lyricSourceRound) markSkipped(source string) {
 	r.mu.Lock()
 	r.skipped[source] = true
 	r.mu.Unlock()
+}
+
+// markReached / reachedAny 同样对 nil 接收者安全。
+func (r *lyricSourceRound) markReached(source string) {
+	for ; r != nil; r = r.parent {
+		r.mu.Lock()
+		r.reached[source] = true
+		r.mu.Unlock()
+	}
+}
+
+func (r *lyricSourceRound) reachedAny() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reached) > 0
 }
 
 func (r *lyricSourceRound) skippedSources() []string {

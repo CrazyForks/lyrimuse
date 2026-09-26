@@ -345,22 +345,22 @@ func lyricsFullScanCandidates() []string {
 //
 // 进门再核一遍资格,理由同 lyricsFillSweepOne:挑候选到轮到它可能隔了几十小时,期间它可能
 // 被播到(自己升级过了)、被用户手改/删除/校准。
-func lyricsFullScanOne(key string) bool {
+func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 	artist, title, album := splitEnrichKey(key)
 	enrichMu.Lock()
 	before, ok := enrichCache[key]
 	if !ok || before.ManualLyrics || before.Instrumental || enrichInflight[key] {
 		enrichMu.Unlock()
-		return false
+		return lyricsSweepOutcome{}
 	}
 	enrichMu.Unlock()
 	// 没词的整条交给补空那支:写回规则(升级/纯音乐标记/纯文本兜底/退避账)全在那边,
 	// 这里一个字都不重写。它自己会重新取锁、重新核资格。
 	if before.Lyrics == "" {
-		return lyricsFillSweepOne(key)
+		return lyricsFillSweepOne(ctx, key)
 	}
 	if lyricsPinned(key) {
-		return false
+		return lyricsSweepOutcome{}
 	}
 	duration := before.ResolvedDurationSecs
 	if duration <= 0 {
@@ -370,17 +370,22 @@ func lyricsFullScanOne(key string) bool {
 	// 重新确认没被别人抢走 —— 上面那段解锁期间可能有播放侧的后台任务插进来。
 	if enrichInflight[key] {
 		enrichMu.Unlock()
-		return false
+		return lyricsSweepOutcome{}
 	}
 	enrichInflight[key] = true
 	enrichMu.Unlock()
+	// 外层 round 同 lyricsFillSweepOne:看里层这一轮连没连上任何歌词源。
+	roundCtx, round := withLyricSourceRound(ctx)
 	// 同步跑:rescoreLyrics 自己 defer 清 enrichInflight,并负责落盘/导出/通知重推。
-	rescoreLyrics(withBackgroundOutbound(context.Background()), key, artist, title, album, duration)
+	rescoreLyrics(withBackgroundOutbound(roundCtx), key, artist, title, album, duration)
 	enrichMu.Lock()
 	after := enrichCache[key]
 	enrichMu.Unlock()
 	// 只认"歌词族内容真的换过"。rescoreLyrics 就算什么都没换也会推进重选计数和版本号,
 	// 把那些算成"更新了"会让收据上的数字虚高一个数量级。
-	return after.Lyrics != before.Lyrics || after.LyricsYRC != before.LyricsYRC ||
-		after.LyricsTr != before.LyricsTr
+	return lyricsSweepOutcome{
+		filled: after.Lyrics != before.Lyrics || after.LyricsYRC != before.LyricsYRC ||
+			after.LyricsTr != before.LyricsTr,
+		offline: !round.reachedAny(),
+	}
 }

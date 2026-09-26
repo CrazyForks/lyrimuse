@@ -171,6 +171,7 @@ func runSettingsSearchTests() {
         // 正则里 `title:` 会顺带匹配到 `subtitle:` 的尾巴,所以状态子行一律走白名单
         // (同「已改用自定义位置」)。
         "上一轮还没跑完，稍后会自动接着跑",
+        "网络不通，已暂停，稍后会自动接着跑",
     ]
     let scannedFiles = [
         "SettingsView.swift", "AccountLinkingTab.swift",

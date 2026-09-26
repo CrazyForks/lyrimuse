@@ -1095,6 +1095,45 @@ func runLyricsManagerTests() {
         """.utf8))
         expectEqual(done?.cancelled, true, "补空进度: cancelled 解出来")
         expectEqual(done?.finishedAt, 3, "补空进度: finishedAt 解出来")
+        expectEqual(done?.isOffline, false, "补空进度: 没有 offline 键(omitempty)读成 false")
+        let offline = try? JSONDecoder().decode(S.Info.self, from: Data("""
+        {"running":false,"manual":true,"total":80,"done":12,"filled":3,"startedAt":1,"updatedAt":2,"finishedAt":3,"offline":true}
+        """.utf8))
+        expectEqual(offline?.isOffline, true, "补空进度: 断网停下的 offline 解出来")
+
+        // 请求写下、collector 还没接手:按钮置灰的那几秒。
+        func sweepInfo(running: Bool, startedAt: Int64, filled: Int = 0) -> S.Info {
+            S.Info(running: running, manual: true, total: 10, done: 0, filled: filled, current: nil,
+                   startedAt: startedAt, updatedAt: startedAt, finishedAt: running ? nil : startedAt, cancelled: nil)
+        }
+        let asked = Date(timeIntervalSince1970: 1_788_700_000.6)
+        expectEqual(S.isPending(requestedAt: nil, status: nil, now: asked), false, "补空等待: 没点过就不在等")
+        expectEqual(S.isPending(requestedAt: asked, status: nil, now: asked.addingTimeInterval(1)), true,
+                    "补空等待: 状态文件还没有(collector 这个进程没跑过)时在等")
+        expectEqual(S.isPending(requestedAt: asked, status: sweepInfo(running: false, startedAt: 1_788_600_000),
+                                now: asked.addingTimeInterval(2)), true,
+                    "补空等待: 状态文件还是上一轮的就接着等")
+        expectEqual(S.isPending(requestedAt: asked, status: sweepInfo(running: true, startedAt: 1_788_700_001),
+                                now: asked.addingTimeInterval(2)), false,
+                    "补空等待: 出现晚于请求的一轮就是接手了")
+        expectEqual(S.isPending(requestedAt: asked, status: sweepInfo(running: false, startedAt: 1_788_700_000),
+                                now: asked.addingTimeInterval(2)), false,
+                    "补空等待: 一条候选都没有、一开工就收尾的那一轮也算接手(按整秒比)")
+        expectEqual(S.isPending(requestedAt: asked, status: nil, now: asked.addingTimeInterval(S.pendingTimeout + 1)), false,
+                    "补空等待: collector 没在跑,等超时就放弃、按钮恢复")
+
+        // 扫描期间什么时候值得整份重读缓存。
+        let r1 = sweepInfo(running: true, startedAt: 100)
+        expectEqual(S.changesVisibleRows(previous: r1, current: r1), false,
+                    "补空重读: 同一轮、没补出东西 → 不重读(缓存文件每条都变,列表上什么都没变)")
+        expectEqual(S.changesVisibleRows(previous: r1, current: sweepInfo(running: true, startedAt: 100, filled: 1)), true,
+                    "补空重读: 补出了一首 → 重读")
+        expectEqual(S.changesVisibleRows(previous: r1, current: sweepInfo(running: false, startedAt: 100)), true,
+                    "补空重读: 这一轮结束 → 重读一次收尾")
+        expectEqual(S.changesVisibleRows(previous: r1, current: sweepInfo(running: true, startedAt: 200)), true,
+                    "补空重读: 换了一轮 → 重读")
+        expectEqual(S.changesVisibleRows(previous: nil, current: r1), true, "补空重读: 第一次读到状态 → 重读")
+        expectEqual(S.changesVisibleRows(previous: nil, current: nil), false, "补空重读: 从没跑过 → 不因它重读")
     }
 
     // ---- 全量重新扫库(LyricsFullScan)----
@@ -1424,5 +1463,16 @@ func runLyricsManagerTests() {
             .deletingLastPathComponent().appendingPathComponent("lyrimuse/LyricsManager/LyricsManagerView.swift"),
             encoding: .utf8)) ?? ""
         expectEqual(view.contains("LyricsManagerRefresh.shouldPoll(busy: busy"), true, "列表刷新: 歌词管理的轮询走这条判定")
+        expectEqual(view.contains(".task(id: windowSurface.isVisible)") && view.contains("guard windowSurface.isVisible else { return }"),
+                    true, "列表刷新: 窗口看不见时轮询整个停掉(补搜期间不然会跟着反复解析整份缓存)")
+        expectEqual(view.contains("LyricsFillSweep.changesVisibleRows(previous: previous, current: sweep)"), true,
+                    "列表刷新: 扫描跑着时只在补出一首 / 一轮开始或结束时紧跟,别改回「在跑就每拍重读」")
+        expectEqual(view.contains("if let status, status.finishedAt != nil, !status.isFullScan,"), true,
+                    "补搜收据: 工具栏菜单不拿全量扫库那一轮的累计数当补搜收据")
+        let sweepGo = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lyrimuse-collector/lyricsfillsweep.go"), encoding: .utf8)) ?? ""
+        expectEqual(sweepGo.contains("`json:\"offline,omitempty\"`"), true,
+                    "补搜进度: collector 写的 offline 键跟 LyricsFillSweep.Info.offline 同名")
     }
 }

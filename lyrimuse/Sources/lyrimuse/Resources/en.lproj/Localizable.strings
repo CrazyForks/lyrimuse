@@ -455,6 +455,7 @@
 "唯一的差别是胜者在「%1$@」上多 %2$d 分。" = "The only difference: the winner scored %2$d more on “%1$@”.";
 "喜欢" = "Favorite";
 "回到当前播放" = "Jump to Now Playing";
+"因网络不通已停下" = "Stopped: no connection";
 "固定" = "Fixed";
 "在 %@ 中显示" = "Show in %@";
 "在 %@ 播放任意歌曲，歌词会自动出现" = "Play something in %@ and lyrics will appear here";
@@ -1270,6 +1271,8 @@
 "网易云接口限流（短时间内请求过多，操作频繁，code 405），不是网络故障" = "NetEase Cloud Music's API is rate-limiting (too many requests in a short time, code 405) — not a network fault";
 "网易云音乐" = "NetEase Cloud Music";
 "网易云音乐歌曲页" = "NetEase Music song page";
+"网络不通，已暂停，稍后会自动接着跑" = "Paused: no connection; it resumes automatically";
+"网络不通，稍后重试…" = "No connection, retrying shortly…";
 "网络似乎不通" = "Couldn't Reach Any Source";
 "网络似乎不通，这一轮没搜到任何候选" = "The network looks down; no candidate came back this round";
 "网络请求全部失败（DNS/连接问题），这一轮探测本身就没跑起来" = "All network requests failed (DNS/connection issue) — this probe round never got off the ground";

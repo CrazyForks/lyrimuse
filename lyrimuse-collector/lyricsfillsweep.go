@@ -70,6 +70,13 @@ const (
 	lyricsFullScanGap              = 5 * time.Second
 	lyricsFillSweepDailyCap        = 40
 	lyricsFillRequestCheckInterval = 2 * time.Second
+	// 一首搜完一个歌词源都没连上(见 lyricSourceRound.reachedAny):原地等这么久再搜同一首,
+	// 连续 lyricsFillSweepOfflineLimit 次都这样就停下。75 秒 × 4 次等待 = 5 分钟,盖得住
+	// 熔断最长那一档冷却;再往后多半是真断网,接着跑只会让剩下的每一首都白搜一轮。
+	lyricsFillSweepOfflineWait  = 75 * time.Second
+	lyricsFillSweepOfflineLimit = 5
+	// 全量扫库因为断网停下之后,多久再试着接着跑(「待续」标记留着,见 runLyricsFillSweep 出口)。
+	lyricsFullScanOfflineResumeDelay = 10 * time.Minute
 )
 
 var (
@@ -79,7 +86,33 @@ var (
 	lyricsFillSweepMu      sync.Mutex
 	lyricsFillSweepRunning bool
 	lyricsFillSweepCancel  context.CancelFunc
+
+	// lyricsFillSweepReschedule:扫描那个 goroutine 请 startLyricsFillSweeper 把下一发定时器提前
+	// 到给定时长之后(全量扫库断网停下时用)。容量 1、非阻塞发送,多发的丢掉。
+	lyricsFillSweepReschedule = make(chan time.Duration, 1)
+	// lyricsFillSweepWait 在两首之间 / 断网重试前等待,ctx 取消时立刻返回。单测换成不等。
+	lyricsFillSweepWait = func(ctx context.Context, d time.Duration) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(d):
+		}
+	}
+	// lyricsFillSweepRunOne 跑一条。单测换成假的。
+	lyricsFillSweepRunOne = func(ctx context.Context, key string, full bool) lyricsSweepOutcome {
+		if full {
+			return lyricsFullScanOne(ctx, key)
+		}
+		return lyricsFillSweepOne(ctx, key)
+	}
 )
+
+// lyricsSweepOutcome:扫描里一条跑完的结果。
+type lyricsSweepOutcome struct {
+	// filled:这一轮补出了结论 / 真的更新了歌词(计入收据)。
+	filled bool
+	// offline:真的发出去搜了,但一个歌词源都没连上。这一条没有结论,扫描原地等网络回来再搜它。
+	offline bool
+}
 
 // lyricsFillStatus 是写给 App 看的进度。Total 是这一轮开工时挑出的条数;Done 含"跑到一半发现
 // 已经不需要(被删/被手改/已有词)而跳过"的;Filled 是这一轮真的补出了结论(拿到歌词、或纯音乐
@@ -102,6 +135,8 @@ type lyricsFillStatus struct {
 	UpdatedAt  int64  `json:"updatedAt"`
 	FinishedAt int64  `json:"finishedAt,omitempty"`
 	Cancelled  bool   `json:"cancelled,omitempty"`
+	// Offline:跑着时 = 上一首一个歌词源都没连上、正在等网络回来;停下时 = 因为一直连不上而停下。
+	Offline bool `json:"offline,omitempty"`
 }
 
 // setLyricsFillPaths 在 main() 启动时调一次。顺带清掉上一次运行遗留的请求/状态文件:请求跟这次
@@ -174,6 +209,14 @@ func startLyricsFillSweeper(ctx context.Context) {
 			}
 			go runLyricsFillSweep(ctx, req)
 			next.Reset(lyricsFillSweepInterval)
+		case d := <-lyricsFillSweepReschedule:
+			if !next.Stop() {
+				select {
+				case <-next.C:
+				default:
+				}
+			}
+			next.Reset(d)
 		case <-poll.C:
 			req, ok := readLyricsFillRequest()
 			if !ok {
@@ -343,45 +386,23 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 		}
 		return
 	}
-	gap := lyricsFillSweepPace(req.full)
-	for i, key := range keys {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-			case <-time.After(gap):
-			}
-		}
-		if ctx.Err() != nil {
-			status.Cancelled = true
-			break
-		}
-		status.Current = key
-		writeLyricsFillStatus(status)
-		done := lyricsFillSweepOne
-		if req.full {
-			done = lyricsFullScanOne
-		}
-		if done(key) {
-			status.Filled++
-		}
-		status.Done++
-		status.RoundDone++
-		status.Current = ""
-		// 先落盘再写状态:进程在这两行之间被杀时,宁可界面少算一条,也不要续跑时把已经
-		// 跑过的那条重新算进"还剩"。
-		if req.full {
-			saveLyricsFullScanProgress(status.Done, status.Filled)
-		}
-		writeLyricsFillStatus(status)
-	}
+	status = runLyricsFillSweepKeys(ctx, keys, req.full, status)
 	status.Running = false
 	status.Current = ""
 	status.FinishedAt = time.Now().Unix()
 	writeLyricsFillStatus(status)
+	// 断网停下的全量扫库:「待续」标记留着(下面那个分支不走),10 分钟后让定时器再试一次。
+	if req.full && status.Offline {
+		select {
+		case lyricsFillSweepReschedule <- lyricsFullScanOfflineResumeDelay:
+		default:
+		}
+	}
 	// 整份候选列表跑完了才清"待续"。被取消的两种情形都不在这里清:用户按停止由
 	// cancelLyricsFillSweep 负责,进程关机则**必须**留着标记等下次续跑 —— 这里分不清
-	// 这两者(都只表现为 ctx 被取消),所以这个分支只认"没被取消"。见 lyricsfullscan.go 头注。
-	if req.full && !status.Cancelled {
+	// 这两者(都只表现为 ctx 被取消),所以这个分支只认"没被取消"。断网停下的同样留着。
+	// 见 lyricsfullscan.go 头注。
+	if req.full && !status.Cancelled && !status.Offline {
 		setLyricsFullScanActive(false)
 		// 整份候选列表跑完 = 这一场全量结束,累计分母/分子就此清零,下次点「开始」是新的一场。
 		// 被取消的两种情形都不走这里,累计值留在盘上等着接着数。
@@ -390,15 +411,71 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 	slog.Info("lyrics fill sweep: done", "manual", req.manual, "full", req.full, "total", status.Total, "done", status.Done, "filled", status.Filled, "cancelled", status.Cancelled)
 }
 
-// lyricsFillSweepOne 对一条走一次补空,返回这一轮有没有补出结论。进门再核一遍资格:挑候选到
-// 轮到它可能隔了几十分钟,期间它可能被播到(自己补上了)、被用户手改/删除。
-func lyricsFillSweepOne(key string) bool {
+// runLyricsFillSweepKeys 逐条跑 keys,返回跑完(或停下)那一刻的状态。
+//
+// 一条搜完一个歌词源都没连上(outcome.offline)时不往下走:这一条不算进度,等
+// lyricsFillSweepOfflineWait 再搜它;连续 lyricsFillSweepOfflineLimit 次都这样就停下、标 Offline。
+// 往下走的话,断网期间剩下的每一首都会白搜一轮,收据上还显示成「搜了、没补出来」。
+// 搜到一半被停(ctx 取消)的那一条什么都没写,同样不算进度。
+func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, status lyricsFillStatus) lyricsFillStatus {
+	gap := lyricsFillSweepPace(full)
+	offlineStreak := 0
+	var wait time.Duration
+	for i := 0; i < len(keys); {
+		if wait > 0 {
+			lyricsFillSweepWait(ctx, wait)
+		}
+		if ctx.Err() != nil {
+			status.Cancelled = true
+			break
+		}
+		status.Current = keys[i]
+		writeLyricsFillStatus(status)
+		out := lyricsFillSweepRunOne(ctx, keys[i], full)
+		if ctx.Err() != nil {
+			status.Cancelled = true
+			break
+		}
+		if out.offline {
+			offlineStreak++
+			status.Offline = true
+			if offlineStreak >= lyricsFillSweepOfflineLimit {
+				slog.Warn("lyrics fill sweep: no lyric source reachable, stopping", "attempts", offlineStreak, "key", keys[i])
+				break
+			}
+			writeLyricsFillStatus(status)
+			wait = lyricsFillSweepOfflineWait
+			continue
+		}
+		offlineStreak = 0
+		status.Offline = false
+		if out.filled {
+			status.Filled++
+		}
+		status.Done++
+		status.RoundDone++
+		status.Current = ""
+		// 先落盘再写状态:进程在这两行之间被杀时,宁可界面少算一条,也不要续跑时把已经
+		// 跑过的那条重新算进"还剩"。
+		if full {
+			saveLyricsFullScanProgress(status.Done, status.Filled)
+		}
+		writeLyricsFillStatus(status)
+		i++
+		wait = gap
+	}
+	return status
+}
+
+// lyricsFillSweepOne 对一条走一次补空。进门再核一遍资格:挑候选到轮到它可能隔了几十分钟,
+// 期间它可能被播到(自己补上了)、被用户手改/删除 —— 那种情形什么都不做,也不算断网。
+func lyricsFillSweepOne(ctx context.Context, key string) lyricsSweepOutcome {
 	artist, title, album := splitEnrichKey(key)
 	enrichMu.Lock()
 	before, ok := enrichCache[key]
 	if !ok || before.Lyrics != "" || before.ManualLyrics || before.Instrumental || enrichInflight[key] {
 		enrichMu.Unlock()
-		return false
+		return lyricsSweepOutcome{}
 	}
 	dur := before.ResolvedDurationSecs
 	if dur <= 0 {
@@ -406,12 +483,17 @@ func lyricsFillSweepOne(key string) bool {
 	}
 	enrichInflight[key] = true
 	enrichMu.Unlock()
+	// 外层套一个 round:里层 retryLyricsUpgrade 那一轮连上过哪个源会传上来(见 markReached)。
+	roundCtx, round := withLyricSourceRound(ctx)
 	// 同步跑:retryLyricsUpgrade 自己负责清 enrichInflight、落盘、导出、通知重推。
-	retryLyricsUpgrade(withBackgroundOutbound(context.Background()), key, artist, title, album, dur, true)
+	retryLyricsUpgrade(withBackgroundOutbound(roundCtx), key, artist, title, album, dur, true)
 	enrichMu.Lock()
 	after := enrichCache[key]
 	enrichMu.Unlock()
-	return after.Lyrics != "" || after.Instrumental || (after.PlainLyrics != "" && before.PlainLyrics == "")
+	return lyricsSweepOutcome{
+		filled:  after.Lyrics != "" || after.Instrumental || (after.PlainLyrics != "" && before.PlainLyrics == ""),
+		offline: !round.reachedAny(),
+	}
 }
 
 func writeLyricsFillStatus(s lyricsFillStatus) {

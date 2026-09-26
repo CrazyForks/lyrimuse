@@ -1418,7 +1418,9 @@ func needsLyricsRetry(e enrichEntry, wrongDuration, pinned, autoUpgrade bool) bo
 // (见 lyricsUpgradeBaseline 里空歌词那一支)。另写一份必然跟这边漂,而这个函数尾部那一
 // 长串"解锁→落盘→导出→通知"的顺序正是这个仓库反复踩过坑的地方。
 //
-// ctx 只用来带出站优先级(批量路径传 withBackgroundOutbound),不指望它取消这一轮。
+// ctx 带出站优先级(批量路径传 withBackgroundOutbound),也能取消:补空扫描传的是这一轮的 ctx,
+// 用户按「停止」或进程退出时搜到一半就收工,这一轮什么都不写(半截结果不是结论)。
+// 播放侧传 context.Background(),不会被取消。
 func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, durationSecs float64, firstFill bool) {
 	defer func() {
 		enrichMu.Lock()
@@ -1431,10 +1433,15 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	stamp := enrichEditStampLocked()
 	enrichMu.Unlock()
 
-	// 后台周期重试,没有对应的"停止"入口,见 backfillPeripheralFields 同款注释。
+	// 播放侧的后台重试没有"停止"入口(见 backfillPeripheralFields 同款注释);补空扫描 / 全量扫库
+	// 传进来的 ctx 可以取消。
 	roundCtx, round := withLyricSourceRound(ctx)
 	roundCtx, queries := withLyricQueryLog(roundCtx)
 	_, scored := scoredLyricCandidates(roundCtx, artist, title, album, durationSecs)
+	if ctx.Err() != nil {
+		return
+	}
+	reached := round.reachedAny()
 	// 用户选定过源就只在那个源内重选,见 LyricsSourceChoice 字段注释。
 	picked := pickLyricCandidatePreferring(scored, sourceChoice)
 	seen := lyricSourcesWithCandidates(scored)
@@ -1483,11 +1490,18 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 		// 快照已经过期,以拿锁这一刻的实际状态为准(跟 rescoreLyrics 里同一道判断)。
 		return
 	}
+	// 一个歌词源都没连上(断网、DNS 抽风、全被熔断)的这一轮不算一次尝试:计数只记时间戳。
+	// 算上的话,补空的指数退避、「有源被跳过就快点重来」那一次机会(只认计数 0)、没歌手没专辑
+	// 满 3 次就放弃(lyricsNoAnchorGaveUp)都会被一次断网白白用掉。时间戳照记,免得断网期间每拍重搜。
 	if firstFill {
-		e.LyricsFillCount++
+		if reached {
+			e.LyricsFillCount++
+		}
 		e.LyricsFillTS = time.Now().Unix()
 	} else {
-		e.LyricsRetryCount++
+		if reached {
+			e.LyricsRetryCount++
+		}
 		e.LyricsRetryTS = time.Now().Unix()
 	}
 	if len(seen) > 0 {
@@ -1695,10 +1709,15 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	stamp := enrichEditStampLocked()
 	enrichMu.Unlock()
 
-	// 后台周期重试,没有对应的"停止"入口,见 backfillPeripheralFields 同款注释。
+	// 播放侧的后台重试没有"停止"入口(见 backfillPeripheralFields 同款注释);补空扫描 / 全量扫库
+	// 传进来的 ctx 可以取消。
 	roundCtx, round := withLyricSourceRound(ctx)
 	roundCtx, queries := withLyricQueryLog(roundCtx)
 	_, scored := scoredLyricCandidates(roundCtx, artist, title, album, durationSecs)
+	if ctx.Err() != nil {
+		return
+	}
+	reached := round.reachedAny()
 	// 用户选定过源就只在那个源内重选,见 LyricsSourceChoice 字段注释。
 	picked := pickLyricCandidatePreferring(scored, sourceChoice)
 	// 传 false:走到这里的前置是 needsLyricsRescore,它第一行就要求 e.Lyrics != "",
@@ -1756,7 +1775,10 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 		e.LyricsRescoreCount = 0
 		e.LyricsRescoreVersion = lyricsScoringVersion
 	}
-	e.LyricsRescoreCount++
+	// 一个歌词源都没连上的这一轮不占上限次数,理由同 retryLyricsUpgrade。
+	if reached {
+		e.LyricsRescoreCount++
+	}
 	e.LyricsRescoreTS = time.Now().Unix()
 	if len(seen) > 0 {
 		e.LyricsSourcesSeen = seen

@@ -31811,6 +31811,75 @@
         }
       }
     },
+    "网络不通，稍后重试…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection, retrying shortly…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络不通，稍后重试…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路不通，稍後重試…"
+          }
+        }
+      }
+    },
+    "因网络不通已停下" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped: no connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "因网络不通已停下"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "因網路不通已停下"
+          }
+        }
+      }
+    },
+    "网络不通，已暂停，稍后会自动接着跑" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: no connection; it resumes automatically"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络不通，已暂停，稍后会自动接着跑"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路不通，已暫停，稍後會自動接著跑"
+          }
+        }
+      }
+    },
     "上次：过了 %1$@ 首，更新 %2$@ 首" : {
       "extractionState" : "manual",
       "localizations" : {

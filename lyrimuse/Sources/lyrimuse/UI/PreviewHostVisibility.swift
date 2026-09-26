@@ -22,14 +22,18 @@ extension EnvironmentValues {
     }
 }
 
-/// 设置窗口的可见性,按 occlusionState 算(遮挡、最小化、切到别的桌面都会让它失去 .visible)。
-/// 由 `SettingsWindowConfigurator` 拿到窗口后接上。
+/// 一扇窗口的可见性,按 occlusionState 算(遮挡、最小化、切到别的桌面都会让它失去 .visible)。
+/// 设置窗口由 `SettingsWindowConfigurator` 接上,「歌词管理」窗口由 `LyricsManagerWindowCapture` 接上。
 @MainActor
 final class SettingsWindowSurface: ObservableObject {
     @Published private(set) var isVisible = true
     private var observer: NSObjectProtocol?
+    private weak var window: NSWindow?
 
+    /// 同一扇窗口重复接是空操作(`updateNSView` 每次重新求值都会调)。
     func attach(_ window: NSWindow) {
+        guard self.window !== window else { return }
+        self.window = window
         if let observer { NotificationCenter.default.removeObserver(observer) }
         // 接上时窗口可能还没 orderFront(此时 occlusionState 也是"不可见"),先按可见算,
         // 首次显示后系统会补一次通知。同 LyricsWindowController.attach。

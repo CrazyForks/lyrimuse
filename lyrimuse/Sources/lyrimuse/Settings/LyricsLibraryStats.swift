@@ -172,10 +172,11 @@ struct LyricsLibraryStatsPanel: View {
     @State private var fullScanState: LyricsFullScan.State?
     @State private var confirmFullScan = false
     @ObservedObject private var pins = LyricsPinStore.shared
-    /// 补空扫描"开始"按钮点击后、扫描真正开始前的过渡状态(显示 loading 动画)。
-    /// 点击「开始」时置 true,下一次轮询读到 running = true 时清空。
+    /// 补空扫描"开始"按钮点击后、collector 接手前的过渡状态(显示 loading 动画)。
+    /// 点击「开始」时置 true,轮询按 `LyricsFillSweep.isPending` 清掉 —— 那道判据也管「一条候选都
+    /// 没有、一开工就收尾」和「collector 没在跑、等超时」两种情形,只认 running 的话两种都会一直转下去。
     @State private var fillSweepStarting = false
-    /// 全量扫描"开始"按钮点击后、扫描真正开始前的过渡状态(显示 loading 动画)。
+    /// 全量扫描确认开始后、collector 接手前的过渡状态,清法同上。
     @State private var fullScanStarting = false
 
     private static let snapshotHolder = "settings-library-stats"
@@ -229,9 +230,10 @@ struct LyricsLibraryStatsPanel: View {
         // 开销)。用 .task 而不是 .onAppear:reload 本身是 async 的,挂在 .task 上由 SwiftUI
         // 负责视图消失时取消。
         //
-        // 之后留在这个循环里轮询补空扫描的进度:跑着的时候 2 秒一次、顺带
-        // reload —— 每补上一首「暂无」那格就该少一;没在跑 5 秒一次只看进度文件的 mtime,
-        // 一次 stat 的开销。视图消失即取消,没有常驻计时器。设置窗口看不见时整个循环停掉,
+        // 之后留在这个循环里轮询补空扫描的进度:跑着的时候 2 秒一次,补出一首 / 一轮开始或结束时
+        // 顺带 reload(LyricsFillSweep.changesVisibleRows)—— 每补上一首「暂无」那格就该少一,
+        // 没补出东西的那些条目统计上什么都不变,不必每条都整份重读;没在跑 5 秒一次只看进度文件的
+        // mtime,一次 stat 的开销。视图消失即取消,没有常驻计时器。设置窗口看不见时整个循环停掉,
         // 重新看得见时从头来一遍(先按指纹 reload,再接着轮询)。
         // 这一页看得见时握着「歌词管理」那份快照,看不见 / 离开这一页就放手(见 EnrichCacheStore.snapshotHolders)。
         // 设置窗口隐藏时视图不一定消失,所以按 windowVisible 走,onDisappear 兜离开这一页。
@@ -245,20 +247,24 @@ struct LyricsLibraryStatsPanel: View {
             await store.reload(onlyIfChanged: true)
             fullScanState = LyricsFullScan.current
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(fillSweepStatus?.running == true ? 2 : 5))
+                let starting = fillSweepStarting || fullScanStarting
+                try? await Task.sleep(for: .seconds(starting ? 1 : (fillSweepStatus?.running == true ? 2 : 5)))
                 guard !Task.isCancelled else { break }
+                let previous = fillSweepStatus
                 let sweep = LyricsFillSweep.current
                 if sweep != fillSweepStatus { fillSweepStatus = sweep }
-                // 扫描真正开始后,清除"正在启动"状态(让 loading 动画消失、切换到进度条)
-                if sweep?.running == true {
-                    if fillSweepStarting { fillSweepStarting = false }
-                    if fullScanStarting && sweep?.isFullScan == true { fullScanStarting = false }
+                // collector 接手了(或者等超时了),清掉"正在启动"(loading 动画消失、切换到进度条)。
+                if starting && !LyricsFillSweep.isPending {
+                    fillSweepStarting = false
+                    fullScanStarting = false
                 }
                 // 这份文件一轮里只在开头/结尾各写一次(外加 collector 每次启动),按 mtime
                 // 读的开销就是一次 stat,跟着同一个节拍走即可。
                 let full = LyricsFullScan.current
                 if full != fullScanState { fullScanState = full }
-                if sweep?.running == true { await store.reload(onlyIfChanged: true) }
+                if LyricsFillSweep.changesVisibleRows(previous: previous, current: sweep) {
+                    await store.reload(onlyIfChanged: true)
+                }
             }
         }
         // 确认框而不是直接开跑:这一轮要联网重搜几千首、跑一两天,而且**会改写已经有词的
@@ -269,7 +275,9 @@ struct LyricsLibraryStatsPanel: View {
             isPresented: $confirmFullScan,
             titleVisibility: .visible
         ) {
-            Button(L10n.t("开始扫描")) { LyricsFillSweep.requestFullScan() }
+            Button(L10n.t("开始扫描")) {
+                if LyricsFillSweep.requestFullScan() { fullScanStarting = true }
+            }
             Button(L10n.t("取消"), role: .cancel) {}
         } message: {
             Text(fullScanConfirmMessage)
@@ -427,8 +435,7 @@ struct LyricsLibraryStatsPanel: View {
                     ProgressView(value: Double(status.done), total: Double(max(status.total, 1)))
                         .progressViewStyle(.circular)
                         .controlSize(.small)
-                    Text(String(format: L10n.t("扫描中 %1$@/%2$@"),
-                                Self.format(status.done), Self.format(status.total)))
+                    Text(Self.runningText(status))
                         .font(.system(size: 11))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
@@ -456,8 +463,7 @@ struct LyricsLibraryStatsPanel: View {
                     // 不带 SF Symbol:同一行左边已经写着这一行在干什么,再叠一个 ⟳ 是往控件上
                     // 加装饰(要强调就改文字,别叠图标)。
                     Button(L10n.t("开始")) {
-                        fillSweepStarting = true
-                        LyricsFillSweep.request(keys: [])
+                        if LyricsFillSweep.request(keys: []) { fillSweepStarting = true }
                     }
                         .controlSize(.small)
                         .fixedSize()
@@ -479,11 +485,22 @@ struct LyricsLibraryStatsPanel: View {
     /// 一首都没搜的那一轮**也不给**。「上次:搜了 0 首,补出 0 首」两个数都是 0,占着一行
     /// 副标题却一个字的信息都没有(库里当时没有可搜的条目,或者刚点下就被停了);这一行本来
     /// 就该跟「全量重新扫库」等高,凭空多出来的那一行还把两行的对称打破了。
+    ///
+    /// 断网停下的那一轮例外:要说清楚它为什么停了,不然看起来像是搜完了、都没有词。
     private static func sweepReceipt(_ status: LyricsFillSweep.Info?) -> String? {
         guard let status, status.running != true, status.isFullScan != true,
-              status.finishedAt != nil, status.done > 0 else { return nil }
+              status.finishedAt != nil else { return nil }
+        if status.isOffline { return L10n.t("因网络不通已停下") }
+        guard status.done > 0 else { return nil }
         return String(format: L10n.t("上次搜索 %1$@ 首，补全 %2$@ 首"),
                       format(status.done), format(status.filled))
+    }
+
+    /// 两行跑着时行尾那段文字。上一首一个歌词源都没连上时 collector 在原地等网络,说这个,
+    /// 不说「扫描中」—— 分子停着不动,不解释的话看起来像卡住了。
+    private static func runningText(_ status: LyricsFillSweep.Info) -> String {
+        if status.isOffline { return L10n.t("网络不通，稍后重试…") }
+        return String(format: L10n.t("扫描中 %1$@/%2$@"), format(status.done), format(status.total))
     }
 
     // MARK: 全量重新扫库
@@ -559,8 +576,7 @@ struct LyricsLibraryStatsPanel: View {
                         ProgressView(value: Double(status.done), total: Double(max(status.total, 1)))
                             .progressViewStyle(.circular)
                             .controlSize(.small)
-                        Text(String(format: L10n.t("扫描中 %1$@/%2$@"),
-                                    Self.format(status.done), Self.format(status.total)))
+                        Text(Self.runningText(status))
                             .font(.system(size: 11))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
@@ -586,8 +602,9 @@ struct LyricsLibraryStatsPanel: View {
                                 .controlSize(.small)
                                 .frame(width: 16, height: 16)
                         }
+                        // 这里只弹确认框;「正在启动」在确认框里点了「开始扫描」才置上 —— 在这里置的话,
+                        // 确认框点「取消」之后按钮会一直转着、一直点不了。
                         Button(L10n.t("开始")) {
-                            fullScanStarting = true
                             confirmFullScan = true
                         }
                             .controlSize(.small)
@@ -607,8 +624,15 @@ struct LyricsLibraryStatsPanel: View {
             // 期里(或者刚被 launchd 拉起来)。不说一句的话,界面看起来就是"我明明点过了,
             // 怎么什么都没发生"。
             if state.active && !fullRunning {
-                SettingsSubRow(title: nil, subtitle: L10n.t("上一轮还没跑完，稍后会自动接着跑")) {
-                    EmptyView()
+                // 断网停下的那一轮同样留着「待续」,collector 10 分钟后自己再试(lyricsFullScanOfflineResumeDelay)。
+                if status?.isFullScan == true && status?.isOffline == true {
+                    SettingsSubRow(title: nil, subtitle: L10n.t("网络不通，已暂停，稍后会自动接着跑")) {
+                        EmptyView()
+                    }
+                } else {
+                    SettingsSubRow(title: nil, subtitle: L10n.t("上一轮还没跑完，稍后会自动接着跑")) {
+                        EmptyView()
+                    }
                 }
             } else if let status, status.isFullScan, status.finishedAt != nil, !fullRunning {
                 SettingsSubRow(

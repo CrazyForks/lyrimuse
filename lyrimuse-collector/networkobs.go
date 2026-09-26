@@ -116,6 +116,11 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 	}
 	lyricSourceBreakerShared.observeTraced(req.URL.Host, guardEndpointKey(req.URL), nil, resp.StatusCode, resp.Header.Get("Retry-After"), tr)
 	hostGuardShared.observe(req, resp.StatusCode, resp.Header.Get("Retry-After"))
+	if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		if src := lyricSourceForHost(req.URL.Host); src != "" {
+			lyricSourceRoundFrom(req.Context()).markReached(src)
+		}
+	}
 	// 404 跟别的 4xx/5xx 分开(修)。对歌词源来说 404 是**正常应答**——"这个库里没有这首歌",
 	// 跟"这个源坏了"是两回事,原来 `>= 400` 一刀切同时污染了两头:
 	//   - WARN 被淹:amll 走 GitHub 裸文件,查不到就是 404,三天 18530 行 WARN、占日志体积

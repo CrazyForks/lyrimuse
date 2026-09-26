@@ -39,9 +39,15 @@ public enum LyricsFillSweep {
         public let updatedAt: Int64
         public let finishedAt: Int64?
         public let cancelled: Bool?
+        /// 跑着时 = 上一首一个歌词源都没连上、collector 正在等网络回来再搜它;停下时 = 因为一直连不上
+        /// 而停下(见 collector 的 runLyricsFillSweepKeys)。可选:collector 带 `omitempty`,旧版也不写。
+        public let offline: Bool?
 
         /// 这一轮是不是全量扫库。字段缺席(补空那一轮)读成 false。
         public var isFullScan: Bool { full == true }
+
+        /// 见 `offline`。字段缺席读成 false。
+        public var isOffline: Bool { offline == true }
 
         /// 这一轮跑完的条数,拿不到就退回 `done`(补空那一轮两者本来就相等)。
         public var roundDoneOrDone: Int { roundDone ?? done }
@@ -49,7 +55,7 @@ public enum LyricsFillSweep {
         public init(running: Bool, manual: Bool, full: Bool? = nil, total: Int, done: Int, filled: Int,
                     roundDone: Int? = nil,
                     current: String?, startedAt: Int64, updatedAt: Int64, finishedAt: Int64?,
-                    cancelled: Bool?) {
+                    cancelled: Bool?, offline: Bool? = nil) {
             self.running = running
             self.manual = manual
             self.full = full
@@ -62,6 +68,7 @@ public enum LyricsFillSweep {
             self.updatedAt = updatedAt
             self.finishedAt = finishedAt
             self.cancelled = cancelled
+            self.offline = offline
         }
     }
 
@@ -99,7 +106,7 @@ public enum LyricsFillSweep {
     /// 要一轮补空:keys 为空 = 全部符合条件的空条目。返回写文件是否成功。
     @discardableResult
     public static func request(keys: [String]) -> Bool {
-        (try? requestBody(keys: keys).write(to: requestURL, atomically: true, encoding: .utf8)) != nil
+        write(requestBody(keys: keys), startsRound: true)
     }
 
     /// 要一轮「全量重新扫库」。范围、分层与跨重启续跑全在 collector 侧(lyricsfullscan.go),
@@ -107,12 +114,58 @@ public enum LyricsFillSweep {
     /// 请求文件:那份列表在一两天的扫描期间会不断过时(歌被播到就自己升级了)。
     @discardableResult
     public static func requestFullScan() -> Bool {
-        (try? "full\n".write(to: requestURL, atomically: true, encoding: .utf8)) != nil
+        write("full\n", startsRound: true)
     }
 
     /// 停掉正在跑的这一轮。
     @discardableResult
     public static func requestCancel() -> Bool {
-        (try? "cancel\n".write(to: requestURL, atomically: true, encoding: .utf8)) != nil
+        write("cancel\n", startsRound: false)
+    }
+
+    private static func write(_ body: String, startsRound: Bool) -> Bool {
+        let ok = (try? body.write(to: requestURL, atomically: true, encoding: .utf8)) != nil
+        lock.lock()
+        requestedAt = ok && startsRound ? Date() : nil
+        lock.unlock()
+        return ok
+    }
+
+    // MARK: - 请求写下、collector 还没接手的那几秒
+
+    /// collector 每 2 秒读一次请求文件,读到后先挑候选、再写状态文件;点下「开始」到界面上出现进度
+    /// 之间有几秒空档。这段时间按钮要置灰、给个在忙的样子,否则用户会再点一次(第二份请求被
+    /// collector 静默丢掉)。等太久(collector 没在跑)就放弃,按钮恢复可点。
+    public static let pendingTimeout: TimeInterval = 10
+
+    nonisolated(unsafe) private static var requestedAt: Date?
+
+    /// 此刻是不是「请求写下了、collector 还没接手」。两个入口(歌词管理工具栏、设置页歌词库)共用。
+    public static var isPending: Bool {
+        lock.lock()
+        let at = requestedAt
+        lock.unlock()
+        return isPending(requestedAt: at, status: current, now: Date())
+    }
+
+    /// 判据本体,纯函数,selftest 覆盖。状态文件里出现了开工时刻不早于请求的一轮(含一条候选都没有、
+    /// 一开工就收尾的那种)就算接手了。比较按整秒:collector 写的 startedAt 是 Unix 秒。
+    public static func isPending(requestedAt: Date?, status: Info?, now: Date) -> Bool {
+        guard let requestedAt, now.timeIntervalSince(requestedAt) < pendingTimeout else { return false }
+        guard let status else { return true }
+        return status.startedAt < Int64(requestedAt.timeIntervalSince1970)
+    }
+
+    // MARK: - 扫描期间要不要重读缓存
+
+    /// 扫描跑着时缓存文件每搜完一首都会变(没补出东西也要记重试时间和决策留痕),而重读整份缓存
+    /// 一次要一两秒 CPU、内存临时涨两三百 MB。列表和统计上看得见的东西只在这几个时刻变:
+    /// 补出了一首(`filled` 变了)、一轮开始或结束、换了一轮。其余时候按平时的节奏读就够。纯函数,selftest 覆盖。
+    public static func changesVisibleRows(previous: Info?, current: Info?) -> Bool {
+        guard let current else { return previous != nil }
+        guard let previous else { return true }
+        return current.filled != previous.filled
+            || current.running != previous.running
+            || current.startedAt != previous.startedAt
     }
 }
