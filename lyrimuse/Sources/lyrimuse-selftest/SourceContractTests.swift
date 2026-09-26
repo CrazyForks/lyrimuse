@@ -3939,6 +3939,15 @@ func runSourceContractTests() {
                     "Last.fm 榜单: 头像按 10 个名字一批、几批依次交给 collector")
         expectEqual(stats.contains("resolveTrackCovers(visible, cred: cred, priority: .background)"), true,
                     "Last.fm 榜单: 显示更多补封面走后台档")
+        // 榜单封面:Last.fm 没图时退到本机缓存;缓存变了跟着重算。
+        expectEqual(stats.contains("refreshLocalCovers()\n        refreshChartLocalCovers()"), true,
+                    "Last.fm 榜单封面: 本机缓存变了也重算榜单的本机封面")
+        expectEqual(code("LastfmStatsSection.swift").contains("?? stats.chartLocalCover(kind: kind, entry: e)"), true,
+                    "Last.fm 榜单封面: 缩略图在 Last.fm 之后退到本机封面")
+        let catalog = (try? String(contentsOfFile: appDir.deletingLastPathComponent()
+            .appendingPathComponent("LyrimuseCore/Local/MusicCatalogSearch.swift").path, encoding: .utf8)) ?? ""
+        expectEqual(catalog.components(separatedBy: "for store in storefronts(primary: storefront) {").count - 1, 2,
+                    "Apple 目录搜索: 封面兜底和跳转两个入口都按店面依次问")
         expectEqual(stats.contains("chartLimit: ChartVisibleRows.fetchLimit)")
                     && stats.contains("snap.chartLimit != ChartVisibleRows.fetchLimit { continue }"), true,
                     "Last.fm 榜单: 快照记下条数,条数口径变了不带回新鲜戳(打开就按新条数重取)")

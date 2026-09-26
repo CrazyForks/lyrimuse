@@ -38,6 +38,48 @@ public enum MusicCatalogSearch {
 
     struct Response: Decodable { let results: [Item] }
 
+    /// 依次要问的店面:调用方给的(系统地区)在前,搜出来一条都没有才换下一个。中国区的 search 接口对
+    /// 任何歌都回 0 条(见 12 章),只问系统地区的话,系统地区是中国的用户这条路整个是死的。台区、港区的
+    /// 华语曲库最全,美区兜底。目录 id 全球通用,别的店面查回来的封面和链接一样能用。
+    public static func storefronts(primary: String) -> [String] {
+        var out: [String] = []
+        for s in [primary.lowercased(), "tw", "hk", "us"] where !s.isEmpty && !out.contains(s) {
+            out.append(s)
+        }
+        return out
+    }
+
+    /// 这次响应是不是「这个店面一条都搜不到」:只有这种情况才换下一个店面。有结果但挑不出(那边确实没有
+    /// 这一首)、没问成(限流 / 超时 / 非 200)都不换 —— 前者换了也是白问,后者交给退避。纯函数,selftest 钉住。
+    public static func shouldTryNextStorefront(status: Int?, data: Data) -> Bool {
+        guard status == 200, let decoded = try? JSONDecoder().decode(Response.self, from: data) else { return false }
+        return decoded.results.isEmpty
+    }
+
+    /// 发一次搜索请求并记审计日志、喂退避。没问成返回 nil。
+    private static func fetch(_ url: URL, gate: ITunesSearchGate) async -> (status: Int?, data: Data)? {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        let start = Date()
+        let data: Data
+        let resp: URLResponse
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
+                                   statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
+            return nil
+        }
+        let http = resp as? HTTPURLResponse
+        let status = http?.statusCode
+        NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
+                               statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
+        if let status {
+            gate.note(status: status, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
+        }
+        return (status, data)
+    }
+
     /// 请求 URL。storefront 传系统地区码、外层兜底 "us" —— 账号店面与系统地区可能
     /// 不一致,搜错店面的代价只是链接落到别的店面页,Music.app 会自己按账号跳转。
     /// limit 默认 8 是跳转链接那条路径的老口径(第一条命中就够);封面兜底要在候选里
@@ -166,34 +208,20 @@ public enum MusicCatalogSearch {
         return .noMatch
     }
 
-    /// 按 歌手+歌名 查一次 iTunes,挑一张能对上的封面。挑不出是 `.noMatch`(不留退路)。
-    /// 后台批量调用,`ITunesSearchGate` 退避期间不发请求。
+    /// 按 歌手+歌名 查 iTunes,挑一张能对上的封面。挑不出是 `.noMatch`(不留退路)。店面按 storefronts(primary:)
+    /// 依次问,一条都搜不到才换下一个。后台批量调用,`ITunesSearchGate` 退避期间不发请求。
     public static func resolveArtwork(title: String, artist: String, album: String?,
                                       storefront: String,
                                       gate: ITunesSearchGate = .shared) async -> ArtworkLookup {
-        guard !gate.coolingDown(),
-              let url = searchURL(title: title, artist: artist, storefront: storefront, limit: 12)
-        else { return .unreached }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 8
-        let start = Date()
-        let data: Data
-        let resp: URLResponse
-        do {
-            (data, resp) = try await URLSession.shared.data(for: req)
-        } catch {
-            NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
-                                   statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
-            return .unreached
+        for store in storefronts(primary: storefront) {
+            guard !gate.coolingDown(),
+                  let url = searchURL(title: title, artist: artist, storefront: store, limit: 12),
+                  let (status, data) = await fetch(url, gate: gate)
+            else { return .unreached }
+            if shouldTryNextStorefront(status: status, data: data) { continue }
+            return artworkLookup(status: status, data: data, title: title, artist: artist, album: album)
         }
-        let http = resp as? HTTPURLResponse
-        let status = http?.statusCode
-        NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
-                               statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
-        if let status {
-            gate.note(status: status, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
-        }
-        return artworkLookup(status: status, data: data, title: title, artist: artist, album: album)
+        return .noMatch
     }
 
     /// https://music.apple.com/… → music://…(注册给 Music.app 的 scheme,经
@@ -205,30 +233,17 @@ public enum MusicCatalogSearch {
     }
 
     /// 拉取并挑选(URLSession async,调用方自行放到非主线程上下文)。用户点一次发一次,
-    /// 不看 `ITunesSearchGate` 的退避,但响应照样记进去。
+    /// 不看 `ITunesSearchGate` 的退避,但响应照样记进去。店面同 resolveArtwork,一条都搜不到才换下一个。
     public static func resolve(title: String, artist: String, storefront: String) async -> Item? {
-        guard let url = searchURL(title: title, artist: artist, storefront: storefront) else { return nil }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 8
-        let start = Date()
-        let data: Data
-        let resp: URLResponse
-        do {
-            (data, resp) = try await URLSession.shared.data(for: req)
-        } catch {
-            NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
-                                   statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
-            return nil
+        for store in storefronts(primary: storefront) {
+            guard let url = searchURL(title: title, artist: artist, storefront: store),
+                  let (status, data) = await fetch(url, gate: .shared)
+            else { return nil }
+            if shouldTryNextStorefront(status: status, data: data) { continue }
+            guard status == 200, let decoded = try? JSONDecoder().decode(Response.self, from: data)
+            else { return nil }
+            return pickBest(decoded.results, title: title, artist: artist)
         }
-        let http = resp as? HTTPURLResponse
-        let status = http?.statusCode
-        NetworkAuditLog.record(service: "itunes", operation: "itunes.search", host: url.host ?? "itunes.apple.com",
-                               statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
-        if let status {
-            ITunesSearchGate.shared.note(status: status, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
-        }
-        guard status == 200, let decoded = try? JSONDecoder().decode(Response.self, from: data)
-        else { return nil }
-        return pickBest(decoded.results, title: title, artist: artist)
+        return nil
     }
 }

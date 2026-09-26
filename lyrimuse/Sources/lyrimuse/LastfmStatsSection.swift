@@ -311,6 +311,12 @@ struct LastfmStatsSection: View {
             if nowCollapsed { resetChartExpansion() }
             if !nowCollapsed { stats.refreshChart(kind: kind, period: period) }
         }
+        // 已经展开到 25 / 50 行时榜单到点刷新、换进来新名字:给露出的行补头像 / 封面(已经查过的不会重查)
+        .onChange(of: stats.chart(kind, period)?.map(\.name) ?? []) { _, _ in
+            if chartVisibleRows > ChartVisibleRows.initial {
+                stats.ensureChartImages(kind: kind, period: period, from: ChartVisibleRows.initial, rows: chartVisibleRows)
+            }
+        }
         .task(id: artistTracksPrefetchID) {
             if artistTracksPrefetchID != nil { stats.loadArtistTracks(period: period, full: false) }
         }
@@ -600,8 +606,10 @@ struct LastfmStatsSection: View {
     private func thumb(for e: LastfmStatsService.ChartEntry) -> some View {
         // 歌手榜(detail 为空的就是歌手行)优先用 collector 解析的真头像,圆形;
         // 还没解析出来/查不到时落回首字母色块 —— 头像是异步补上的,先字母后照片。
-        // 歌曲榜(detail 非空、imageURL 为 nil 的行):用 track.getInfo 补出来的专辑封面
-        if e.imageURL == nil, !e.detail.isEmpty, let cover = stats.trackCovers["\(e.detail)|\(e.name)"] {
+        // 歌曲榜(detail 非空、imageURL 为 nil 的行):用 track.getInfo 补出来的专辑封面;Last.fm 那边没有时
+        // (歌曲没挂专辑、专辑页没图),歌曲 / 专辑都退到本机缓存的封面
+        if e.imageURL == nil, !e.detail.isEmpty,
+           let cover = stats.trackCovers["\(e.detail)|\(e.name)"] ?? stats.chartLocalCover(kind: kind, entry: e) {
             CachedImage(url: cover) {
                 RoundedRectangle(cornerRadius: 5).fill(.quaternary)
             }

@@ -177,6 +177,32 @@ func runCoverArtTests() {
                     "noMatch", "封面⑤: 200 空结果 = 那边没有")
         expectEqual(lookupKind(M.artworkLookup(status: 200, data: hitBody, title: "晴天", artist: "周杰伦", album: "叶惠美")),
                     "found", "封面⑤: 200 且对得上 = 命中")
+
+        // 店面:系统地区在前,一条都搜不到才换下一个(中国区的 search 对任何歌都回 0 条)。
+        expectEqual(M.storefronts(primary: "cn"), ["cn", "tw", "hk", "us"], "店面兜底: 中国区后面依次是台区、港区、美区")
+        expectEqual(M.storefronts(primary: "US"), ["us", "tw", "hk"], "店面兜底: 系统地区不重复问、统一小写")
+        expectEqual(M.storefronts(primary: "tw"), ["tw", "hk", "us"], "店面兜底: 台区用户")
+        expectEqual(M.storefronts(primary: ""), ["tw", "hk", "us"], "店面兜底: 没有地区码")
+        expectEqual(M.shouldTryNextStorefront(status: 200, data: emptyBody), true, "店面兜底: 一条都搜不到才换店面")
+        expectEqual(M.shouldTryNextStorefront(status: 200, data: hitBody), false, "店面兜底: 有结果就不换(挑不出也不换)")
+        expectEqual(M.shouldTryNextStorefront(status: 403, data: emptyBody), false, "店面兜底: 没问成不换,交给退避")
+        expectEqual(M.shouldTryNextStorefront(status: 200, data: Data("<html>".utf8)), false, "店面兜底: 解不开不换")
+    }
+
+    // ---- 榜单专辑的本机封面兜底:「歌手 + 专辑」索引 ----
+    do {
+        typealias R = EnrichCacheReader
+        let index = R.albumCoverIndex([
+            (key: "陈柏宇|你瞒我瞒|Quinquennium (新曲+精选)", cover: "https://cover/unverified", coverAlbum: nil),
+            (key: "陈柏宇|一事无成|Quinquennium (新曲+精选)", cover: "https://cover/verified", coverAlbum: "Quinquennium (新曲+精选)"),
+            (key: "蔡徐坤 & 某某|Jasmine|KUN", cover: "https://cover/kun", coverAlbum: "KUN"),
+            (key: "方大同|昙花|", cover: "https://cover/no-album", coverAlbum: nil),
+        ])
+        expectEqual(index[R.albumCoverKey(artist: "陳柏宇", album: "Quinquennium (新曲+精选)")], "https://cover/verified",
+                    "专辑封面兜底: 繁简不同也对得上,同一张专辑优先核实过归属的那张")
+        expectEqual(index[R.albumCoverKey(artist: "蔡徐坤", album: "kun")], "https://cover/kun",
+                    "专辑封面兜底: 合唱署名按主歌手也能查到,专辑名大小写不算差异")
+        expectEqual(index.values.contains("https://cover/no-album"), false, "专辑封面兜底: 没有专辑名的条目不进索引")
     }
 
     // ---- iTunes Search 限流退避(口径同 collector apple.go noteITunesSearchStatus) ----

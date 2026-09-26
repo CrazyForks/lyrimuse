@@ -630,6 +630,10 @@ final class LastfmStatsService: ObservableObject {
     /// 时段(period)→ 歌手榜展开行要的「每位歌手听得最多的歌」,见 loadArtistTracks。只在内存里:
     /// 点开一行才用得到,不值得进快照。
     @Published private(set) var artistTracks: [String: ArtistTracksBatch] = [:]
+    /// 歌曲榜 / 专辑榜的本机封面兜底,见 refreshChartLocalCovers。发布出去:缓存变了单独重算时没有别的字段一起变。
+    @Published private(set) var chartLocalCovers: [String: URL] = [:]
+    /// 上一次算 chartLocalCovers 用的输入(要查的行 + 本机缓存版本),没变就不重算。
+    private var chartLocalCoversInputs: (keys: [String], cacheVersion: Date?)?
     @Published private(set) var artistTracksLoading: Set<String> = []
     @Published private(set) var artistTracksFailed: Set<String> = []
     /// 每个时段上次取完的时间、当时传给 collector 的名字(榜上换了人要重取)、是不是取了全部分页。
@@ -836,6 +840,15 @@ final class LastfmStatsService: ObservableObject {
 
     func artistTracksBatch(_ period: Period) -> ArtistTracksBatch? {
         artistTracks[period.rawValue]
+    }
+
+    /// 榜单一行在本机缓存里的封面(Last.fm 那边没图时的兜底),见 refreshChartLocalCovers。
+    func chartLocalCover(kind: ChartKind, entry e: ChartEntry) -> URL? {
+        chartLocalCovers[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)]
+    }
+
+    private static func chartLocalCoverKey(kind: ChartKind, artist: String, name: String) -> String {
+        "\(kind.rawValue)|\(artist)|\(name)"
     }
 
     /// 断开/换账号时把一切归零 —— 统计数字、榜单、头像、封面都是**上一个身份**的,
@@ -2381,6 +2394,7 @@ final class LastfmStatsService: ObservableObject {
         recentTotalPages = snap.recentTotalPages ?? 1
         charts = snap.charts
         chartWindows = snap.chartWindows ?? [:]
+        refreshChartLocalCovers()
         artistAvatars = snap.artistAvatars
         trackCovers = snap.trackCovers
         // 旧口径的次数不端上桌 —— 见 mergedCountsVersion 字段注释。 改动合并口径必须
@@ -2748,6 +2762,7 @@ final class LastfmStatsService: ObservableObject {
         guard stamp != localCoversStamp else { return }
         localCoversStamp = stamp
         refreshLocalCovers()
+        refreshChartLocalCovers()
         // 同一份缓存还派生第三层歌名别名:collector 刚给某首英文名的歌解析出跟
         // 中文名同一个网易云 id,这一拍就该并族、次数标过期,不等下次启动。写法索引没加载时
         // 不动 —— loadTitleForms 自己会在建族前灌一次。
@@ -2791,6 +2806,36 @@ final class LastfmStatsService: ObservableObject {
         }
         localCovers = out
         localAlbumVerifiedCovers = verified
+    }
+
+    /// 重算榜单的本机封面兜底。Last.fm 对中文曲库缺图很常见(歌曲没挂专辑、专辑页一张图都没有),而榜单上的歌
+    /// 大多在本机播过,本机缓存里有 collector 解析出来的封面。只查 Last.fm 没给图的行:专辑榜里没有图的、
+    /// 歌曲榜里 track.getInfo 还没补到封面的。每行一次 EnrichCacheReader 查询,所以按输入判重,行和缓存都没变
+    /// 就不重算(同 localCoversInputs)。
+    private func refreshChartLocalCovers() {
+        var wanted: [(key: String, kind: ChartKind, artist: String, name: String)] = []
+        var seen = Set<String>()
+        for (chartKey, entries) in charts {
+            guard let kind = ChartKind(rawValue: String(chartKey.prefix { $0 != "|" })), kind != .artists else { continue }
+            for e in entries {
+                let missing = kind == .albums ? e.imageURL == nil : trackCovers["\(e.detail)|\(e.name)"] == nil
+                let key = Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)
+                if missing, seen.insert(key).inserted { wanted.append((key, kind, e.detail, e.name)) }
+            }
+        }
+        wanted.sort { $0.key < $1.key }
+        let keys = wanted.map(\.key)
+        let cacheVersion = EnrichCacheReader.decodedContentVersion
+        if let last = chartLocalCoversInputs, last.keys == keys, last.cacheVersion == cacheVersion { return }
+        chartLocalCoversInputs = (keys, cacheVersion)
+        var out: [String: URL] = [:]
+        for w in wanted {
+            let url = w.kind == .tracks
+                ? EnrichCacheReader.coverURL(artist: w.artist, title: w.name, album: "")
+                : EnrichCacheReader.albumCoverURL(artist: w.artist, album: w.name)
+            if let url { out[w.key] = url }
+        }
+        if out != chartLocalCovers { chartLocalCovers = out }
     }
 
     /// 「正在记录」那一行要复用的封面:列表里**这首歌 / 这张专辑**的历史行此刻正在显示的
@@ -3638,6 +3683,7 @@ final class LastfmStatsService: ObservableObject {
             for i in entries.indices { entries[i].previousRank = ranks[i] }
         }
         charts[key] = entries
+        refreshChartLocalCovers()
         if let window, let previous {
             chartWindows[key] = ChartWindow(from: window.from, to: window.to, listens: previous.listens)
         } else {

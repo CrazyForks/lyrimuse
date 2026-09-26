@@ -212,6 +212,8 @@ public enum EnrichCacheReader {
     private static var cachedEntries: [String: EnrichCacheEntry]?
     // 忽略专辑的封面索引,跟 cachedEntries 同寿命 —— 见 coverByArtistTitle()。
     private static var cachedCoverIndex: [String: String]?
+    // 「歌手 + 专辑」的封面索引,跟 cachedCoverIndex 同寿命、在同样的地方作废 —— 见 albumCoverURL。
+    private static var cachedAlbumCoverIndex: [String: String]?
     // 宽松匹配索引(looseKey → 组内字典序最小的原 key),跟 cachedEntries 同寿命、惰性
     // 构建 —— 见 looseMatch(性能审计:原来每次精确 miss 都对全部 ~900 个 key
     // 逐个现算 ICU 繁简 transform,~7ms 主线程,新歌未解析窗口内每 2s 重复一遍)。
@@ -686,6 +688,57 @@ public enum EnrichCacheReader {
         return index
     }
 
+    /// 按「歌手 + 专辑」找一张本机缓存的封面:Last.fm 统计页专辑榜在 Last.fm 那边缺图时的兜底。
+    /// 专辑榜的专辑名来自本机上报的 scrobble,跟缓存 key 里的专辑同源,所以按宽松口径(looseKey)比就够。
+    public static func albumCoverURL(artist: String, album: String) -> URL? {
+        guard !album.trimmingCharacters(in: .whitespaces).isEmpty, loadEntries() != nil else { return nil }
+        let index: [String: String]
+        if let cachedAlbumCoverIndex {
+            index = cachedAlbumCoverIndex
+        } else {
+            let rows = (cachedEntries ?? [:]).compactMap { key, entry -> (key: String, cover: String, coverAlbum: String?)? in
+                guard let cover = entry.coverURL, !cover.isEmpty else { return nil }
+                return (key, cover, entry.coverAlbum)
+            }
+            index = Self.albumCoverIndex(rows)
+            cachedAlbumCoverIndex = index
+        }
+        let hit = index[albumCoverKey(artist: artist, album: album)]
+            ?? index[albumCoverKey(artist: ArtistCredit.mergeArtist(artist), album: album)]
+        return hit.flatMap(URL.init(string:))
+    }
+
+    public nonisolated static func albumCoverKey(artist: String, album: String) -> String {
+        EnrichCacheKeys.looseKey(artist) + "|" + EnrichCacheKeys.looseKey(album)
+    }
+
+    /// 从缓存条目建「歌手 + 专辑 → 封面」索引。纯函数,selftest 直接覆盖。
+    ///
+    /// 同一张专辑有好几首歌时,优先 cover_album 也对得上这张专辑的那条(collector 核实过这张图就是这张专辑的,
+    /// 见 albumVerifiedCoverURL);都没核实过才取 key 排序最前的那条,不随字典遍历顺序变。合唱 credit 另外
+    /// 按主歌手进一个别名键,只填精确键没占的位置。
+    public nonisolated static func albumCoverIndex(_ rows: [(key: String, cover: String, coverAlbum: String?)]) -> [String: String] {
+        var verified: [String: String] = [:]
+        var loose: [String: String] = [:]
+        var aliases: [String: String] = [:]
+        for row in rows.sorted(by: { $0.key < $1.key }) {
+            let parts = row.key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3, !parts[2].isEmpty else { continue }
+            let artist = String(parts[0]), album = String(parts[2])
+            let exact = albumCoverKey(artist: artist, album: album)
+            if coverAlbumVerified(coverAlbum: row.coverAlbum, requestedAlbum: album) {
+                if verified[exact] == nil { verified[exact] = row.cover }
+            } else if loose[exact] == nil {
+                loose[exact] = row.cover
+            }
+            let alias = albumCoverKey(artist: ArtistCredit.mergeArtist(artist), album: album)
+            if alias != exact, aliases[alias] == nil { aliases[alias] = row.cover }
+        }
+        var index = loose.merging(verified) { _, v in v }
+        for (key, cover) in aliases where index[key] == nil { index[key] = cover }
+        return index
+    }
+
     /// 从「缓存 key → 封面 URL」建出忽略专辑的封面索引。纯函数,selftest 直接覆盖。
     ///
     /// 每个条目进**两个**键:歌手写法原样的精确键,以及合唱 credit 归并到主歌手之后的别名键
@@ -811,6 +864,7 @@ public enum EnrichCacheReader {
             cachedMTime = nil
             cachedEntries = nil
             cachedCoverIndex = nil
+            cachedAlbumCoverIndex = nil
             cachedLooseIndex = nil
             cachedAliasTables = nil; aliasTablesGeneration += 1
             return
@@ -852,6 +906,7 @@ public enum EnrichCacheReader {
             cachedMTime = nil
             cachedEntries = nil
             cachedCoverIndex = nil
+            cachedAlbumCoverIndex = nil
             cachedLooseIndex = nil
             cachedAliasTables = nil; aliasTablesGeneration += 1
             return
@@ -907,6 +962,7 @@ public enum EnrichCacheReader {
         cachedFromIndex = fromIndex
         cachedBody = nil
         cachedCoverIndex = nil  // 内容换了,派生索引跟着作废,下次要用时按新内容重建
+        cachedAlbumCoverIndex = nil
         cachedLooseIndex = nil
         cachedAliasTables = nil; aliasTablesGeneration += 1
         if previous != nil {
@@ -934,6 +990,7 @@ public enum EnrichCacheReader {
                 cachedMTime = nil
                 cachedEntries = nil
                 cachedCoverIndex = nil
+                cachedAlbumCoverIndex = nil
                 cachedLooseIndex = nil
                 cachedAliasTables = nil; aliasTablesGeneration += 1
             }
