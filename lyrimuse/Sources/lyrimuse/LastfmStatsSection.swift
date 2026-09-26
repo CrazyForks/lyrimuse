@@ -65,6 +65,12 @@ struct LastfmStatsSection: View {
     /// 热力图卡当前画的年份。0 = 还没选过,读的时候折成"最近一个有数据的年份"
     /// (见 heatmapYearBinding)—— 有哪几年要等日桶同步落地才知道,定不到初始值上。
     @State private var heatmapYear = 0
+    /// 「听得最多」露出几行:10 → 25 → 50(ChartVisibleRows)。不持久化,切种类 / 时段、收起卡片都回到 10 行。
+    @State private var chartVisibleRows = ChartVisibleRows.initial
+    /// 歌手榜展开的那一行(歌手名),同一时间只展开一行。
+    @State private var expandedArtist: String?
+    /// 展开区点过「显示 10 首」的歌手。
+    @State private var artistShowsTen: Set<String> = []
 
     private var kind: LastfmStatsService.ChartKind {
         .init(rawValue: kindRaw) ?? .artists
@@ -248,14 +254,22 @@ struct LastfmStatsSection: View {
                     SettingsSegmentedControl(
                         selection: Binding(
                             get: { kind },
-                            set: { kindRaw = $0.rawValue; stats.refreshChart(kind: kind, period: period) }
+                            set: {
+                                kindRaw = $0.rawValue
+                                resetChartExpansion()
+                                stats.refreshChart(kind: kind, period: period)
+                            }
                         ),
                         options: LastfmStatsService.ChartKind.allCases,
                         label: \.displayName
                     )
                     Picker("", selection: Binding(
                         get: { periodRaw },
-                        set: { periodRaw = $0; stats.refreshChart(kind: kind, period: period) }
+                        set: {
+                            periodRaw = $0
+                            resetChartExpansion()
+                            stats.refreshChart(kind: kind, period: period)
+                        }
                     )) {
                         ForEach(LastfmStatsService.Period.allCases) { p in
                             Text(p.displayName).tag(p.rawValue)
@@ -273,7 +287,8 @@ struct LastfmStatsSection: View {
                     placeholderRow(L10n.t("这个时段还没有记录"))
                 } else {
                     let window = stats.chartWindow(kind, period)
-                    chartList(entries, showMovement: (window?.listens ?? 0) > 0)
+                    chartList(Array(entries.prefix(chartVisibleRows)), showMovement: (window?.listens ?? 0) > 0)
+                    if ChartVisibleRows.hasMore(total: entries.count) { chartMoreButton(entries) }
                     if let window { chartWindowCaption(window) }
                 }
             } else if stats.chartFailed(kind, period) {
@@ -293,8 +308,153 @@ struct LastfmStatsSection: View {
         // 收起时不查榜:那是一次 collector 进程 + 一轮网络请求,收起来了就别花
         // (展开时补上,见下面的 onChange)
         .onChange(of: chartCollapsed) { _, nowCollapsed in
+            if nowCollapsed { resetChartExpansion() }
             if !nowCollapsed { stats.refreshChart(kind: kind, period: period) }
         }
+        .task(id: artistTracksPrefetchID) {
+            if artistTracksPrefetchID != nil { stats.loadArtistTracks(period: period, full: false) }
+        }
+    }
+
+    /// 看歌手榜时预取这一档的「歌手 → 歌」(只取歌曲榜第 1 页),点开一行时多半已经有了。榜单条数变了就重新判
+    /// 一次(loadArtistTracks 自己按 15 分钟和榜上的名字判要不要真的去取)。
+    private var artistTracksPrefetchID: String? {
+        guard kind == .artists, !chartCollapsed,
+              let n = stats.chart(.artists, period)?.count, n > 0 else { return nil }
+        return "\(period.rawValue)|\(n)"
+    }
+
+    private func resetChartExpansion() {
+        chartVisibleRows = ChartVisibleRows.initial
+        expandedArtist = nil
+        artistShowsTen = []
+    }
+
+    /// 卡底「显示更多（前 N 名）」/「收起」。露出新的行时补这些行的头像 / 封面;收起时展开的那一行
+    /// 如果不在前 10 名里,一并收起。
+    private func chartMoreButton(_ entries: [LastfmStatsService.ChartEntry]) -> some View {
+        let target = ChartVisibleRows.nextTarget(current: chartVisibleRows, total: entries.count)
+        return Button {
+            let previous = chartVisibleRows
+            let next = ChartVisibleRows.next(after: previous, total: entries.count)
+            if let name = expandedArtist, let rank = entries.first(where: { $0.name == name })?.rank, rank > next {
+                expandedArtist = nil
+            }
+            chartVisibleRows = next
+            if target != nil { stats.ensureChartImages(kind: kind, period: period, from: previous, rows: next) }
+        } label: {
+            Text(target.map { String(format: L10n.t("显示更多（前 %d 名）"), $0) } ?? L10n.t("收起"))
+                .font(.system(size: 12))
+        }
+        .buttonStyle(.link)
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 8)
+    }
+
+    /// 歌手榜某一行展开后的内容:这段时间听这位歌手最多的 5 首(可以再露出到 10 首),底部是共几首和
+    /// Last.fm 链接。歌来自 stats.loadArtistTracks;还在取的时候先显示已经到手的前几首。
+    @ViewBuilder
+    private func artistTracksPanel(_ e: LastfmStatsService.ChartEntry, indent: CGFloat) -> some View {
+        let batch = stats.artistTracksBatch(period)
+        let top = batch?.rows[e.name]
+        let limit = artistShowsTen.contains(e.name) ? 10 : 5
+        let loading = stats.artistTracksLoading.contains(period.rawValue)
+        VStack(alignment: .leading, spacing: 0) {
+            if let top, !top.tracks.isEmpty {
+                let shown = Array(top.tracks.prefix(limit))
+                let maxCount = max(shown.map(\.playCount).max() ?? 1, 1)
+                ForEach(Array(shown.enumerated()), id: \.offset) { i, t in
+                    artistTrackRow(index: i + 1, track: t, rowName: e.name, maxCount: maxCount, indent: indent)
+                }
+                // 只有第 1 页的结果:歌是完整结果的前几首,可能不够数。还在取就说一声;取失败了给重试。
+                if batch?.partial == true, top.tracks.count < limit {
+                    if loading {
+                        Text(L10n.t("正在读取其余的歌…"))
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                            .padding(.leading, indent + 24).padding(.vertical, 3)
+                    } else if stats.artistTracksFailed.contains(period.rawValue) {
+                        Button(L10n.t("重试")) { stats.loadArtistTracks(period: period, full: true, force: true) }
+                            .buttonStyle(.link).font(.system(size: 10.5))
+                            .padding(.leading, indent + 24).padding(.vertical, 3)
+                    }
+                }
+            } else if loading {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Text("占位占位占位占位").font(.system(size: 12))
+                    }
+                }
+                .redacted(reason: .placeholder)
+                .padding(.leading, indent + 24).padding(.vertical, 4)
+            } else if stats.artistTracksFailed.contains(period.rawValue) {
+                HStack(spacing: 8) {
+                    Text(L10n.t("加载失败")).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button(L10n.t("重试")) { stats.loadArtistTracks(period: period, full: true, force: true) }
+                        .buttonStyle(.link).font(.system(size: 11))
+                }
+                .padding(.leading, indent + 24).padding(.vertical, 4)
+            } else {
+                Text(L10n.t("这段时间的歌曲榜里没有这位歌手的歌"))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(.leading, indent + 24).padding(.vertical, 4)
+            }
+            HStack(spacing: 10) {
+                if let top, batch?.partial == false {
+                    Text(String(format: L10n.t(batch?.complete == false ? "至少 %d 首" : "共 %d 首"), top.trackCount))
+                        .foregroundStyle(.secondary)
+                }
+                if let top, limit < 10, top.tracks.count > limit {
+                    Button(L10n.t("显示 10 首")) { artistShowsTen.insert(e.name) }.buttonStyle(.link)
+                }
+                Button(L10n.t("在 Last.fm 打开") + " ↗") {
+                    if let url = Self.lastfmURL(kind: .artists, entry: e) { NSWorkspace.shared.open(url) }
+                }
+                .buttonStyle(.link)
+            }
+            .font(.system(size: 10.5))
+            .padding(.leading, indent + 24)
+            .padding(.top, 3)
+        }
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.05))
+    }
+
+    /// 展开区里的一首歌。合唱署名在歌名后面用小字标出完整署名(跟行上的名字一样时不标,比如本名就带「&」的乐队);
+    /// 点一下打开这首歌的 Last.fm 页。
+    private func artistTrackRow(index: Int, track t: ArtistTopTracks.Track, rowName: String,
+                                maxCount: Int, indent: CGFloat) -> some View {
+        Button {
+            if let url = Self.trackURL(artist: t.artist, title: t.name) { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 10) {
+                Text("\(index)")
+                    .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(.tertiary)
+                    .frame(width: 14, alignment: .trailing)
+                HStack(spacing: 4) {
+                    Text(t.name).font(.system(size: 12)).lineLimit(1)
+                    if ArtistTopTracks.isCollaboration(t.artist), t.artist.lowercased() != rowName.lowercased() {
+                        Text(t.artist).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .frame(width: 210, alignment: .leading)
+                GeometryReader { geo in
+                    Capsule().fill(Color.accentColor.opacity(0.45))
+                        .frame(width: max(geo.size.width * CGFloat(t.playCount) / CGFloat(maxCount), 3))
+                        .frame(maxHeight: .infinity, alignment: .center)
+                }
+                .frame(height: 4)
+                Text(String(format: L10n.t("%d 次"), t.playCount))
+                    .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(.secondary)
+                    .frame(width: 54, alignment: .trailing)
+            }
+            .padding(.leading, indent + 10)
+            .padding(.trailing, 34)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .rowHoverHighlight()
     }
 
     private func chartList(_ entries: [LastfmStatsService.ChartEntry], interactive: Bool = true,
@@ -302,9 +462,18 @@ struct LastfmStatsSection: View {
         let maxCount = max(entries.map(\.playcount).max() ?? 1, 1)
         return VStack(spacing: 0) {
             ForEach(entries) { e in
+                let expanded = interactive && kind == .artists && expandedArtist == e.name
                 Button {
                     guard interactive else { return }
-                    if let url = Self.lastfmURL(kind: kind, entry: e) { NSWorkspace.shared.open(url) }
+                    // 歌手行点一下是展开 / 收起它听得最多的歌,Last.fm 链接挪进展开区底部。
+                    if kind == .artists {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            expandedArtist = expandedArtist == e.name ? nil : e.name
+                        }
+                        stats.loadArtistTracks(period: period, full: true)
+                    } else if let url = Self.lastfmURL(kind: kind, entry: e) {
+                        NSWorkspace.shared.open(url)
+                    }
                 } label: {
                 HStack(spacing: 10) {
                     Text("\(e.rank)")
@@ -331,6 +500,14 @@ struct LastfmStatsSection: View {
                     Text(String(format: L10n.t("%d 次"), e.playcount))
                         .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                         .frame(width: 64, alignment: .trailing)
+                    if kind == .artists {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(expanded ? Color.accentColor : Color.secondary.opacity(0.6))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .frame(width: 10)
+                            .opacity(interactive ? 1 : 0)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 5)
@@ -339,6 +516,10 @@ struct LastfmStatsSection: View {
                 .buttonStyle(.plain)
                 .disabled(!interactive)
                 .rowHoverHighlight(enabled: interactive)
+                if expanded {
+                    // 缩进对齐到缩略图那一列:名次 16 + 间距 10(有升降列再加 34 + 10)
+                    artistTracksPanel(e, indent: showMovement ? 70 : 26)
+                }
             }
         }
         .padding(.vertical, 5)

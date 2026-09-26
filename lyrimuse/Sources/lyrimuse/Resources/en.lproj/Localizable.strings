@@ -286,6 +286,7 @@
 "共 %@ 次" = "%@ plays total";
 "共 %@ 首" = "%@ songs";
 "共 %d 条，占用 %@" = "Cached: %d · %@ on disk";
+"共 %d 首" = "%d songs in total";
 "关于" = "About";
 "关于 Lyrimuse" = "About Lyrimuse";
 "关掉之后灵动岛只保留贴着刘海那一条的高度，歌词行不再渲染——适合想看播放状态、又不想被歌词挡住视线的场合。\n\n指向展开仍然可用（那是够到播放控制和进度条的唯一入口），只是展开区里那行「下一句」跟着一起不显示。" = "With this off, the notch keeps only the strip hugging the cutout and stops rendering the lyric row — handy when you want to see playback status without lyrics in the way.\n\nHovering to expand still works (it is the only way to reach the transport controls and the scrubber); the next-line row inside just goes away with it.";
@@ -851,6 +852,7 @@
 "时间轴整体偏移" = "Whole timeline offset";
 "昨天" = "Yesterday";
 "显示" = "Show";
+"显示 10 首" = "Show 10 songs";
 "显示/隐藏悬浮歌词" = "Show/Hide Floating Lyrics";
 "显示/隐藏灵动岛歌词" = "Show/Hide Notch Lyrics";
 "显示/隐藏罗马音" = "Show/Hide Romanization";
@@ -862,6 +864,7 @@
 "显示封面" = "Show Artwork";
 "显示播放控制" = "Show Playback Controls";
 "显示更多" = "Show more";
+"显示更多（前 %d 名）" = "Show more (top %d)";
 "显示桌面悬浮歌词" = "Show Desktop Floating Lyrics";
 "显示歌名" = "Show Track Title";
 "显示歌手" = "Show Artist";
@@ -1074,6 +1077,7 @@
 "正在自动保存…" = "Auto-saving…";
 "正在获取授权令牌…" = "Requesting authorization token…";
 "正在记录" = "Scrobbling now";
+"正在读取其余的歌…" = "Loading the rest…";
 "正在采用…" = "Applying…";
 "正在重启歌词引擎，它要把歌词缓存重新读一遍，通常要一两分钟…" = "Restarting the lyrics engine. It has to read the whole lyrics cache again, which usually takes a minute or two…";
 "正在重启歌词引擎，等它重新确认授权…" = "Restarting the lyrics engine and waiting for it to check access again…";
@@ -1310,6 +1314,7 @@
 "自由：拖到任意位置。\n顶部居中 / 底部居中：贴着菜单栏下方 / Dock 上方水平居中，屏幕或 Dock 变化时自动对齐；此时窗口不可拖动。" = "Free: drag it anywhere.\nTop Center / Bottom Center: centered just below the menu bar / just above the Dock, re-aligned automatically when the screen or Dock changes; the window can't be dragged in these modes.";
 "自适应" = "Adaptive";
 "至少 %@ 次" = "At least %@";
+"至少 %d 首" = "At least %d songs";
 "至少两家自报曲长跟本地一致、时间轴彼此对齐的来源都显示，这份歌词整首提前或延后了 2.5 秒以上——多半是按前奏长短不同的另一个母带做的轴，套在这次播放上会整首错位" = "At least two sources whose reported length matches this track, and whose timings agree with each other, show this lyric running more than 2.5 seconds early or late throughout — it was most likely synced to another master with a different intro length, so it will be off for the whole song here";
 "至少两家自报曲长跟本地一致的来源在这段都是间奏、没有歌词，这份却在里面放了一段别处的歌词——时间轴排错了，套在这次播放上中段会乱" = "At least two sources whose reported length matches this track have no lyrics here — it is an instrumental break — yet this one places lines copied from elsewhere in the song inside it. Its timing is wrong, so the middle of the song will be out of step here";
 "节拍器" = "Metronome";
@@ -1497,6 +1502,7 @@
 "这条广告可以跳过" = "This ad can be skipped";
 "这条广告还不能跳过" = "This ad can't be skipped yet";
 "这次请求耗时有点久。如果你已经看到系统弹窗，请去处理它；找不到弹窗的话，可以直接去系统设置里手动开启" = "This is taking longer than usual. If a system dialog appeared, respond to it there. If you don't see one, you can turn this on in System Settings instead";
+"这段时间的歌曲榜里没有这位歌手的歌" = "No songs by this artist in this period's track chart";
 "这里是一句歌词示例" = "A line of lyrics looks like this";
 "这里是下一句歌词示例" = "The next line looks like this";
 "这里是罗马音示例" = "Romanization looks like this";

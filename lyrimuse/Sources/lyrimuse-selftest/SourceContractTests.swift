@@ -3920,7 +3920,8 @@ func runSourceContractTests() {
         expectEqual(stats.contains("* 0.7"), false, "设置判定走 Core: 截断阈值不在 App 里另写一份")
         // 歌手榜头像:合并榜一次拉回四档、只补正在看的那一档,切到还新鲜的另一档时要在「新鲜就返回」之前补。
         if let fn = stats.range(of: "func refreshChart(kind: ChartKind, period: Period) {"),
-           let avatars = stats.range(of: "resolveAvatars(names: entries.map(\\.name))", range: fn.upperBound..<stats.endIndex),
+           let avatars = stats.range(of: "resolveAvatars(names: entries.prefix(ChartVisibleRows.initial).map(\\.name))",
+                                     range: fn.upperBound..<stats.endIndex),
            let freshGate = stats.range(of: "guard fresh(key) == false else { return }", range: fn.upperBound..<stats.endIndex) {
             expectEqual(avatars.lowerBound < freshGate.lowerBound, true,
                         "Last.fm 榜单: 切到还新鲜的歌手榜也补头像(在新鲜判断之前)")
@@ -3929,6 +3930,32 @@ func runSourceContractTests() {
         }
         expectEqual(stats.contains("!avatarRequested.contains($0)"), true,
                     "Last.fm 榜单: 同一次运行里问过的歌手名不再起 collector 查头像")
+        // 显示更多:榜单一次取 50 条(合并榜和直连同一个数),头像一个进程最多查 10 个名字(看门狗按 10 个定的)。
+        expectEqual(stats.contains("\"-limit\", String(ChartVisibleRows.fetchLimit)")
+                    && stats.contains("\"limit\": String(ChartVisibleRows.fetchLimit)"), true,
+                    "Last.fm 榜单: 合并榜与直连都取 fetchLimit 条")
+        expectEqual(stats.contains("stride(from: 0, to: missing.count, by: 10)")
+                    && stats.contains("for batch in batches { await Self.runAvatarLookup(batch, collectorPath: collectorPath) }"), true,
+                    "Last.fm 榜单: 头像按 10 个名字一批、几批依次交给 collector")
+        expectEqual(stats.contains("resolveTrackCovers(visible, cred: cred, priority: .background)"), true,
+                    "Last.fm 榜单: 显示更多补封面走后台档")
+        expectEqual(stats.contains("chartLimit: ChartVisibleRows.fetchLimit)")
+                    && stats.contains("snap.chartLimit != ChartVisibleRows.fetchLimit { continue }"), true,
+                    "Last.fm 榜单: 快照记下条数,条数口径变了不带回新鲜戳(打开就按新条数重取)")
+        let section = code("LastfmStatsSection.swift")
+        // 歌手展开行:预取只取第 1 页,点开才取全部(先吐第 1 页再吐最终结果);"--" 之后是歌手名。
+        expectEqual(stats.contains("+ (full ? [\"-progress\"] : [\"-max-pages\", \"1\"]) + [\"--\"] + names"), true,
+                    "Last.fm 歌手展开: 预取只取第 1 页、点开取全部,名字在 -- 之后")
+        expectEqual(stats.contains("let startNow = artistTracksQueue.submit(")
+                    && stats.contains("let next = svc.artistTracksQueue.finish()"), true,
+                    "Last.fm 歌手展开: 同一时间只跑一个 artist-tracks 进程,排队规则走 Core")
+        expectEqual(section.contains("stats.loadArtistTracks(period: period, full: false)")
+                    && section.contains("stats.loadArtistTracks(period: period, full: true)"), true,
+                    "Last.fm 歌手展开: 看榜时预取第 1 页,点开一行才取全部")
+        expectEqual(section.contains("chartList(Array(entries.prefix(chartVisibleRows))"), true,
+                    "Last.fm 榜单: 只画露出的那几行")
+        expectEqual(section.contains("@State private var chartVisibleRows = ChartVisibleRows.initial"), true,
+                    "Last.fm 榜单: 显示更多的行数不持久化,每次从 10 行开始")
         // 今天 / 近 7 天:feed 派生的「今天」只收精确值;日桶靠页面主刷新和过零点补增量,增量至少重扫 14 天。
         expectEqual(stats.contains("mergeOverview(total: feed.total, today: today.count, week: nil)"), false,
                     "Last.fm 今天: 不精确的下界不拿去盖界面上的数字")

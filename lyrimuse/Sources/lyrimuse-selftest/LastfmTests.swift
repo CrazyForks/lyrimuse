@@ -447,6 +447,62 @@ func runLastfmTests() {
         expectEqual(M.new.stepText, nil, "榜单升降: 新没有数字")
     }
 
+    // ---- ChartVisibleRows / ArtistTopTracks:「听得最多」显示更多与歌手展开行 ----
+    do {
+        typealias R = ChartVisibleRows
+        expectEqual(R.nextTarget(current: 10, total: 50), 25, "显示更多: 10 → 25")
+        expectEqual(R.nextTarget(current: 25, total: 50), 50, "显示更多: 25 → 50")
+        expectEqual(R.nextTarget(current: 50, total: 50), nil, "显示更多: 全部露出后是收起")
+        expectEqual(R.next(after: 50, total: 50), 10, "显示更多: 收起回到 10 行")
+        expectEqual(R.nextTarget(current: 10, total: 30), 25, "显示更多: 不足 50 条时照常先到 25")
+        expectEqual(R.nextTarget(current: 25, total: 30), 30, "显示更多: 下一档超过条数就到条数为止")
+        expectEqual(R.nextTarget(current: 30, total: 30), nil, "显示更多: 30 条全露出后是收起")
+        expectEqual(R.nextTarget(current: 10, total: 18), 18, "显示更多: 18 条一步到底")
+        expectEqual(R.nextTarget(current: 25, total: 80), 50, "显示更多: 最多 50 行")
+        expectEqual(R.nextTarget(current: 50, total: 80), nil, "显示更多: 多于 50 条时到 50 行就是收起")
+        expectEqual(R.hasMore(total: 10), false, "显示更多: 只有 10 条时不给按钮")
+        expectEqual(R.hasMore(total: 11), true, "显示更多: 多于 10 条才给按钮")
+
+        typealias A = ArtistTopTracks
+        expectEqual(A.isCollaboration("Prince & The Revolution"), true, "歌手展开: 合唱署名要标出来")
+        expectEqual(A.isCollaboration("Michael Jackson、克里夫兰管弦乐团"), true, "歌手展开: 顿号分隔的合唱")
+        expectEqual(A.isCollaboration("Drake feat. Rihanna"), true, "歌手展开: feat. 署名")
+        expectEqual(A.isCollaboration("周杰伦"), false, "歌手展开: 只是繁简不同的单人写法不标")
+        expectEqual(A.isCollaboration("Anderson .Paak"), false, "歌手展开: 单人名字里的空格不算")
+
+        let line = #"{"rows":{"周杰倫":{"tracks":[{"name":"晴天","artist":"周杰伦","playCount":30}],"trackCount":3,"playCount":43}},"complete":true,"partial":true}"#
+        let batch = ArtistTracksBatch.parse(Data(line.utf8))
+        expectEqual(batch?.partial, true, "歌手展开: 第 1 页那行带 partial")
+        expectEqual(batch?.rows["周杰倫"]?.tracks.first?.artist, "周杰伦", "歌手展开: 保留原始署名")
+        expectEqual(batch?.rows["周杰倫"]?.trackCount, 3, "歌手展开: 共几首")
+        let final = ArtistTracksBatch.parse(Data(#"{"rows":{},"complete":false}"#.utf8))
+        expectEqual(final?.partial, false, "歌手展开: 没有 partial 字段 = 最终结果")
+        expectEqual(final?.complete, false, "歌手展开: complete=false 时共几首是下限")
+        expectEqual(ArtistTracksBatch.parse(Data("time=... level=INFO".utf8)) == nil, true, "歌手展开: 不是 JSON 的行跳过")
+
+        typealias Q = ArtistTracksQueue
+        var q = Q()
+        expectEqual(q.submit(.init(period: "12month", full: false, force: false)), true, "歌手展开排队: 空闲时直接跑")
+        expectEqual(q.submit(.init(period: "12month", full: false, force: false)), false, "歌手展开排队: 同一时段在跑就不再跑")
+        expectEqual(q.queued == nil, true, "歌手展开排队: 正在跑的已经够用,不排")
+        expectEqual(q.submit(.init(period: "12month", full: true, force: false)), false, "歌手展开排队: 在跑第 1 页时点开,排一个全部分页")
+        expectEqual(q.queued?.full, true, "歌手展开排队: 排的是全部分页")
+        expectEqual(q.submit(.init(period: "7day", full: false, force: false)), false, "歌手展开排队: 切时段只排不并发")
+        expectEqual(q.queued?.period, "7day", "歌手展开排队: 只留最后一个请求")
+        expectEqual(q.loadingPeriods, ["12month", "7day"], "歌手展开排队: 在跑的和排着的都算正在读取")
+        expectEqual(q.submit(.init(period: "7day", full: false, force: true)), false, "歌手展开排队: 同时段再来")
+        expectEqual(q.queued?.force, true, "歌手展开排队: 带上最新的 force")
+        let next = q.finish()
+        expectEqual(next?.period, "7day", "歌手展开排队: 跑完交出排着的那个")
+        expectEqual(q.running == nil && q.queued == nil && q.loadingPeriods.isEmpty, true, "歌手展开排队: 交出后清空")
+        var q2 = Q()
+        _ = q2.submit(.init(period: "1month", full: false, force: false))
+        _ = q2.submit(.init(period: "12month", full: true, force: false))
+        _ = q2.submit(.init(period: "12month", full: false, force: false))
+        expectEqual(q2.queued?.full, true, "歌手展开排队: 同时段排着的全部分页要求不被后来的预取冲掉")
+        expectEqual(q2.finish()?.full, true, "歌手展开排队: 交出的仍是全部分页")
+    }
+
     // ---- PlayCountVariants:「第 N 次听」的写法孪生族(括号风格分裂实测) ----
     //
     // 丁世光《神经志》实测:`一口（The Day You Left Me）`全角 2 次/`一口(The Day You Left

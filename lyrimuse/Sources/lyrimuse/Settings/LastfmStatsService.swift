@@ -627,6 +627,18 @@ final class LastfmStatsService: ObservableObject {
     @Published private(set) var charts: [String: [ChartEntry]] = [:]
     /// kind|period → 这一档对比的上一期窗口。没有这一项 = 没有可比的上一期(全部、上一期取数失败)。
     @Published private(set) var chartWindows: [String: ChartWindow] = [:]
+    /// 时段(period)→ 歌手榜展开行要的「每位歌手听得最多的歌」,见 loadArtistTracks。只在内存里:
+    /// 点开一行才用得到,不值得进快照。
+    @Published private(set) var artistTracks: [String: ArtistTracksBatch] = [:]
+    @Published private(set) var artistTracksLoading: Set<String> = []
+    @Published private(set) var artistTracksFailed: Set<String> = []
+    /// 每个时段上次取完的时间、当时传给 collector 的名字(榜上换了人要重取)、是不是取了全部分页。
+    private var artistTracksFetched: [String: (at: Date, names: Set<String>, full: Bool)] = [:]
+    /// 正在跑的那个 artist-tracks 进程和排在它后面的一个请求,见 loadArtistTracks。
+    private var artistTracksQueue = ArtistTracksQueue()
+    /// 在飞的 artist-tracks 进程写回前核对它;换账号时自增,旧账号的结果直接丢掉。
+    private var artistTracksGen = 0
+    private static let artistTracksTTL: TimeInterval = 15 * 60
     /// 正在拉取/拉取失败的榜单键(kind|period)。 必须按键分别追踪,不能用共享状态:
     /// 歌手榜和歌曲榜并发拉取时会互相干扰,一个的完成/失败状态会盖到另一个头上。
     @Published private(set) var chartLoadingKeys: Set<String> = []
@@ -822,6 +834,10 @@ final class LastfmStatsService: ObservableObject {
         chartWindows["\(kind.rawValue)|\(period.rawValue)"]
     }
 
+    func artistTracksBatch(_ period: Period) -> ArtistTracksBatch? {
+        artistTracks[period.rawValue]
+    }
+
     /// 断开/换账号时把一切归零 —— 统计数字、榜单、头像、封面都是**上一个身份**的,
     /// 挂着不清,重连另一个账号后页面会先展示前任的数据。
     func resetAll() {
@@ -874,6 +890,12 @@ final class LastfmStatsService: ObservableObject {
         bootstrapState = .notStarted
         charts = [:]
         chartWindows = [:]
+        artistTracksGen += 1
+        artistTracks = [:]
+        artistTracksLoading = []
+        artistTracksFailed = []
+        artistTracksFetched = [:]
+        artistTracksQueue.reset()
         artistAvatars = [:]
         avatarRequested = []
         trackCovers = [:]
@@ -2325,6 +2347,9 @@ final class LastfmStatsService: ObservableObject {
         var fetchedAt: [String: Date]?
         /// 榜单对比的上一期窗口,跟 charts 一起存(老快照没有,解码为 nil)。
         var chartWindows: [String: ChartWindow]?
+        /// 存盘时每档榜单取几条(ChartVisibleRows.fetchLimit)。跟现在的不一样(含老快照没有这个字段)时,
+        /// 榜单照常端上桌,但不带回它们的新鲜戳:打开就按现在的条数重取,不然「显示更多」要等 15 分钟才出现。
+        var chartLimit: Int?
     }
 
     /// 快照里允许持久化的 `fetchedAt` 键。榜单键是 `"\(kind)|\(period)"`,跟 `refreshChart`
@@ -2386,7 +2411,8 @@ final class LastfmStatsService: ObservableObject {
                 switch k {
                 case "onthisday": if snap.onThisDay == nil { continue }
                 case "baseline": if snap.recent.isEmpty && snap.overview == nil { continue }
-                default: if snap.charts[k] == nil { continue } // 榜单键
+                default: // 榜单键
+                    if snap.charts[k] == nil || snap.chartLimit != ChartVisibleRows.fetchLimit { continue }
                 }
                 fetchedAt[k] = v
             }
@@ -2461,7 +2487,8 @@ final class LastfmStatsService: ObservableObject {
                 onThisDayDay: onThisDayOutcome == .loaded ? onThisDayDay : nil,
                 onThisDayUpdatedAt: onThisDayOutcome == .loaded ? onThisDayUpdatedAt : nil,
                 fetchedAt: fetchedAt.filter { Self.persistedFetchedAtKeys.contains($0.key) },
-                chartWindows: chartWindows)
+                chartWindows: chartWindows,
+                chartLimit: ChartVisibleRows.fetchLimit)
             // 编码 + 落盘挪出主线程:这个类是 @MainActor,Task{} 会继承它的隔离,原来
             // JSONEncoder 和同步的 atomic 写(临时文件 + rename)全压在主线程上。
             let url = Self.snapshotURL
@@ -3551,7 +3578,7 @@ final class LastfmStatsService: ObservableObject {
         // 切到一档还新鲜的歌手榜也要补头像:合并榜一次拉回四档,当时只补了正在看的那一档,
         // 这里不补的话,只在别的时段出现过的名字要等到榜单过期重拉、而且恰好正看着它才有头像。
         if kind == .artists, let entries = charts[key] {
-            resolveAvatars(names: entries.map(\.name))
+            resolveAvatars(names: entries.prefix(ChartVisibleRows.initial).map(\.name))
         }
         guard fresh(key) == false else { return }
         guard let cred = credentials else { return }
@@ -3586,7 +3613,8 @@ final class LastfmStatsService: ObservableObject {
             .map { ChartComparison.previousWindow(span: $0, now: Date()) }
         async let previousChart = fetchPreviousChart(kind: kind, window: window, cred: cred)
         guard let json = await request(method: kind.method, cred: cred,
-                                       extra: ["period": period.rawValue, "limit": "10"])
+                                       extra: ["period": period.rawValue,
+                                               "limit": String(ChartVisibleRows.fetchLimit)])
         else { return false }
         let previous = await previousChart
         let (outer, inner) = kind.listPath
@@ -3616,9 +3644,11 @@ final class LastfmStatsService: ObservableObject {
             chartWindows[key] = nil
         }
         scheduleSnapshotSave()
+        // 头像 / 封面只补默认露出的前 10 行,「显示更多」露出的行由 ensureChartImages 补。
+        let visible = Array(entries.prefix(ChartVisibleRows.initial))
         switch kind {
-        case .tracks: resolveTrackCovers(entries, cred: cred)
-        case .artists: resolveAvatars(names: entries.map(\.name))
+        case .tracks: resolveTrackCovers(visible, cred: cred)
+        case .artists: resolveAvatars(names: visible.map(\.name))
         case .albums: break
         }
         return true
@@ -3638,7 +3668,8 @@ final class LastfmStatsService: ObservableObject {
 
     /// 给一批歌曲榜条目补真封面。并发全放开也就 10 个轻量 JSON 请求,Last.fm 的
     /// 限速(约 5 req/s)对这个量级无感;失败静默 —— 封面是锦上添花。
-    private func resolveTrackCovers(_ entries: [ChartEntry], cred: (user: String, key: String)) {
+    private func resolveTrackCovers(_ entries: [ChartEntry], cred: (user: String, key: String),
+                                    priority: LastfmRateLimiter.Priority = .interactive) {
         let missing = entries.filter { trackCovers["\($0.detail)|\($0.name)"] == nil }
         guard !missing.isEmpty else { return }
         Task {
@@ -3649,7 +3680,8 @@ final class LastfmStatsService: ObservableObject {
                         guard let self else { return (key, nil) }
                         let json = await self.request(method: "track.getinfo", cred: cred,
                                                       extra: ["artist": e.detail, "track": e.name,
-                                                              "autocorrect": "1"])
+                                                              "autocorrect": "1"],
+                                                      priority: priority)
                         guard let json else { return (key, nil) }
                         let image = await MainActor.run {
                             self.imageURL(self.dig(json, "track", "album", "image"))
@@ -3678,7 +3710,8 @@ final class LastfmStatsService: ObservableObject {
             // -all-periods:四个时段一次进程拿全(Go 侧四路并发取数),切时段零等待、
             // 也免了每档各一次 spawn + 磁盘加载(发散采纳)。
             // -with-previous:每档再带上一期(同一套合并对齐名次),输出形状见 collector topArtistsPeriodOutput。
-            process.arguments = ["top-artists", "-all-periods", "-with-previous", "-limit", "10"]
+            process.arguments = ["top-artists", "-all-periods", "-with-previous",
+                                 "-limit", String(ChartVisibleRows.fetchLimit)]
             let pipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = pipe
@@ -3765,11 +3798,118 @@ final class LastfmStatsService: ObservableObject {
                     svc.chartFailedKeys.insert(cacheKey)
                     svc.fetchedAt[cacheKey] = nil
                 }
-                // 头像只解析当前时段的名字 —— 其它时段大量重合,切过去时按需补(有磁盘缓存)
+                // 头像只解析当前时段默认露出的前 10 行 —— 其它时段大量重合,切过去时按需补(有磁盘缓存);
+                // 「显示更多」露出的行由 ensureChartImages 补
                 if let visible = filled[cacheKey] {
-                    svc.resolveAvatars(names: visible.map(\.name))
+                    svc.resolveAvatars(names: visible.prefix(ChartVisibleRows.initial).map(\.name))
                 }
                 svc.scheduleSnapshotSave()
+            }
+        }
+    }
+
+    /// 「显示更多」露出新的行时补这些行的头像 / 封面。榜单到手时只补前 10 行:50 个名字一次交给
+    /// collector 查头像,冷缓存要好几分钟,而多数时候没人点开。
+    /// 只补 from..<rows 这几行(之前露出的行已经补过;没有专辑的歌查不到封面,不这样的话每点一次都重问);
+    /// 封面请求走后台档,不跟页面上的点击抢限速队列。
+    func ensureChartImages(kind: ChartKind, period: Period, from: Int, rows: Int) {
+        guard let entries = chart(kind, period), from < min(rows, entries.count) else { return }
+        let visible = Array(entries[from..<min(rows, entries.count)])
+        switch kind {
+        case .artists: resolveAvatars(names: visible.map(\.name))
+        case .tracks: if let cred = credentials { resolveTrackCovers(visible, cred: cred, priority: .background) }
+        case .albums: break
+        }
+    }
+
+    /// 取歌手榜展开行要的歌:collector `artist-tracks` 把这个时段 `user.getTopTracks` 的分页按歌手榜同一套合并
+    /// 规则归到榜上显示的名字下(见 artisttracks.go)。
+    ///
+    /// full = false 是看歌手榜时的预取,只取歌曲榜第 1 页(一个请求):歌曲榜按次数降序,第 1 页里每位歌手的歌就是
+    /// 完整结果的前几首,前 10 位的前 5 首实测都在里面,点开即出;共几首要取完才知道。full = true 是点开一行时,
+    /// 取全部分页(子命令先吐第 1 页那行再吐最终那行)。同一时间只跑一个进程:collector 各进程的出站限速互不相干,
+    /// 并发几个会一起打到 Last.fm 按 IP 的限速上;跑着的时候再来的请求只留最后一个,跑完接着跑。
+    /// 15 分钟内、榜上的人没变、上次取的范围够用就不重取。
+    func loadArtistTracks(period: Period, full: Bool, force: Bool = false) {
+        let p = period.rawValue
+        guard let entries = charts["\(ChartKind.artists.rawValue)|\(p)"], !entries.isEmpty,
+              credentials != nil else { return }
+        if !force, artistTracksFresh(p, names: entries.map(\.name), full: full) { return }
+        artistTracksFailed.remove(p)
+        let startNow = artistTracksQueue.submit(.init(period: p, full: full, force: force))
+        artistTracksLoading = artistTracksQueue.loadingPeriods
+        if startNow { startArtistTracks(period: p, names: entries.map(\.name), full: full) }
+    }
+
+    private func artistTracksFresh(_ p: String, names: [String], full: Bool) -> Bool {
+        guard let last = artistTracksFetched[p], last.full || !full, artistTracks[p] != nil,
+              Set(names).isSubset(of: last.names) else { return false }
+        let age = Date().timeIntervalSince(last.at)
+        return age >= 0 && age < Self.artistTracksTTL
+    }
+
+    private func startArtistTracks(period p: String, names: [String], full: Bool) {
+        let gen = artistTracksGen
+        let collectorPath = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Resources/collector").path
+        Task.detached(priority: .utility) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: collectorPath)
+            process.environment = LyrimusePaths.collectorProcessEnvironment()
+            // "--" 之后全是歌手名:名字以 "-" 开头时不会被当成参数。
+            process.arguments = ["artist-tracks", "-period", p, "-tracks", "10"]
+                + (full ? ["-progress"] : ["-max-pages", "1"]) + ["--"] + names
+            let pipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = errPipe
+            var gotFinal = false
+            do {
+                try process.run()
+                // 看门狗:子命令自己 30 秒整体超时,45 秒还没退就是卡死了。
+                let watchdog = Task.detached {
+                    try? await Task.sleep(nanoseconds: 45_000_000_000)
+                    if !Task.isCancelled, process.isRunning { process.terminate() }
+                }
+                for try await line in pipe.fileHandleForReading.bytes.lines {
+                    guard let parsed = ArtistTracksBatch.parse(Data(line.utf8)) else { continue }
+                    if !parsed.partial { gotFinal = true }
+                    // 只取第 1 页时,还有别的分页(complete=false)就是 partial:共几首不能用。
+                    let batch = full ? parsed
+                        : ArtistTracksBatch(rows: parsed.rows, complete: parsed.complete,
+                                            partial: parsed.partial || !parsed.complete)
+                    await MainActor.run {
+                        let svc = LastfmStatsService.shared
+                        guard svc.artistTracksGen == gen else { return }
+                        // 第 1 页的结果不盖掉手上的完整结果(重取时旧结果仍可用)
+                        if batch.partial, svc.artistTracks[p]?.partial == false { return }
+                        svc.artistTracks[p] = batch
+                    }
+                }
+                process.waitUntilExit()
+                watchdog.cancel()
+            } catch {
+                logger.notice("artist-tracks: \(error.localizedDescription, privacy: .public)")
+            }
+            let ok = gotFinal
+            if !ok {
+                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                                 encoding: .utf8)?.suffix(300) ?? ""
+                logger.notice("artist-tracks failed: \(String(err), privacy: .public)")
+            }
+            await MainActor.run {
+                let svc = LastfmStatsService.shared
+                guard svc.artistTracksGen == gen else { return }
+                if ok {
+                    svc.artistTracksFetched[p] = (Date(), Set(names), full)
+                } else {
+                    svc.artistTracksFailed.insert(p)
+                }
+                let next = svc.artistTracksQueue.finish()
+                svc.artistTracksLoading = svc.artistTracksQueue.loadingPeriods
+                if let next, let period = Period(rawValue: next.period) {
+                    svc.loadArtistTracks(period: period, full: next.full, force: next.force)
+                }
             }
         }
     }
@@ -3780,9 +3920,20 @@ final class LastfmStatsService: ObservableObject {
         let missing = names.filter { artistAvatars[$0] == nil && !avatarRequested.contains($0) }
         guard !missing.isEmpty else { return }
         avatarRequested.formUnion(missing)
+        // 一个进程最多查 10 个名字(看门狗按 10 个名字的冷缓存最坏耗时定的),几批依次跑:同时起几个进程
+        // 会一起打到头像源上。
+        let batches = stride(from: 0, to: missing.count, by: 10).map {
+            Array(missing[$0..<min($0 + 10, missing.count)])
+        }
         let collectorPath = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Resources/collector").path
         Task.detached(priority: .utility) {
+            for batch in batches { await Self.runAvatarLookup(batch, collectorPath: collectorPath) }
+        }
+    }
+
+    private nonisolated static func runAvatarLookup(_ missing: [String], collectorPath: String) async {
+        do {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: collectorPath)
             // 子命令必须跟本 App 同一份配置目录 / 日志文件(Dev 构建是另一套),见 LyrimusePaths.collectorEnvironment。
