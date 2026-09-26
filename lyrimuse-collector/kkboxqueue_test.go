@@ -180,6 +180,18 @@ func TestKKBOXUpcomingSingleTrack(t *testing.T) {
 	}
 }
 
+// 「一起聽」:下一首由主持人决定,本机没有队列 —— 不重读、不交曲目,ok=true 让调用方也不退回同专辑预取。
+func TestKKBOXUpcomingListenWithSkips(t *testing.T) {
+	withTestKKBOX(t, "kkbox:listen-with:channel:CH1", false)
+	retries := 0
+	kkboxUpcomingBeforeRetry = func() { retries++ }
+	t.Cleanup(func() { kkboxUpcomingBeforeRetry = nil })
+	got, ok := kkboxUpcoming("周杰倫", "最偉大的作品", 5)
+	if !ok || len(got) != 0 || retries != 0 {
+		t.Fatalf("got %+v ok=%v retries=%d", got, ok, retries)
+	}
+}
+
 // 收藏库「全部歌曲」:上下文用 track_id;曲目表每首只有 id,歌名歌手从单曲 / 批量详情补,补不上的那首不交出去。
 func TestKKBOXUpcomingLibraryAllTracks(t *testing.T) {
 	withTestKKBOX(t, "kkbox:my-library:@all:0?track_id=L1", false)
@@ -380,6 +392,9 @@ func TestParseKKBOXContext(t *testing.T) {
 	}
 	if got, ok := parseKKBOXContext("kkbox:track:4s7gyziTOGRFhEcFQf"); !ok || got.kind != "track" || got.track != "4s7gyziTOGRFhEcFQf" {
 		t.Errorf("单曲:上下文本身就是这首, got %+v ok=%v", got, ok)
+	}
+	if got, ok := parseKKBOXContext("kkbox:listen-with:channel:CH1"); !ok || got.kind != "listen-with" || got.id != "CH1" {
+		t.Errorf("一起聽:没有曲目 id 也认得出, got %+v ok=%v", got, ok)
 	}
 	for _, bad := range []string{"kkbox:void", "", "spotify:album:x?track=y", "kkbox:album:ALB:0:0"} {
 		if _, ok := parseKKBOXContext(bad); ok {

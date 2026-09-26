@@ -94,6 +94,11 @@ var kkboxContextEndpoints = map[string]string{
 // 离线不走 HTTP,自建歌单那份没见过能解开的样本,都退回同专辑预取。
 var kkboxLibraryLists = map[string]string{"@all": "all-tracks"}
 
+// kkboxListenWith:「一起聽」频道(`kkbox:listen-with:channel:<频道 id>`,没有 ?track=)。下一首由主持人实时决定,
+// 本机没有队列:磁盘缓存里不会出现这个频道的曲目表,IndexedDB / Session Storage 里也没有。这种上下文不预取,
+// 也不退回同专辑预取(那批几乎都不会播到)。
+const kkboxListenWith = "listen-with"
+
 // kkboxContextListPath:上下文对应的曲目表接口路径;收藏库里没接的那几份返回 ok=false。
 func kkboxContextListPath(ctx kkboxContext, endpoint string) (string, bool) {
 	if ctx.kind != "my-library" {
@@ -168,6 +173,10 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 	ctx, ok := parseKKBOXContext(pb.context)
 	if !ok {
 		return nil, false, ""
+	}
+	if ctx.kind == kkboxListenWith {
+		kkboxUpcomingNote("listen-with:"+ctx.id, "kkbox upcoming: listen-with channel, the host picks the next track and there is no local queue; skipping prefetch")
+		return nil, true, ""
 	}
 	endpoint, ok := kkboxContextEndpoints[ctx.kind]
 	if !ok {
@@ -381,6 +390,9 @@ func parseKKBOXContext(s string) (kkboxContext, bool) {
 	}
 	if parts[0] == "track" && track == "" {
 		track = parts[1] // 单曲:上下文本身就是这首
+	}
+	if parts[0] == kkboxListenWith {
+		return kkboxContext{kind: kkboxListenWith, id: parts[len(parts)-1]}, true // 「一起聽」没有当前曲目 id
 	}
 	if track == "" {
 		return kkboxContext{}, false
