@@ -4,34 +4,17 @@ import OSLog
 import AppKit
 import Darwin
 
-// 一键导出诊断信息:collector 日志走 ~/Library/Logs/lyrimuse.log,App 自己
-// 的日志全部走 os.Logger(系统统一日志),普通用户不会用 Console.app 去查。这个文件把
-// 两边日志 + 关键状态(权限/常驻服务/各功能是否已配置)汇总成一份文本文件,方便不懂
-// 技术的用户自己导出发过来排查问题。
+// 诊断导出:collector 日志(~/Library/Logs/lyrimuse.log)+ App 侧 os.Logger 日志 + 关键状态(权限 / 常驻服务 /
+// 各功能是否已配置)打成一个 zip,给用户附到 issue 里。它是用户遇到问题时唯一会发过来的东西,要覆盖网络 / 逻辑 /
+// UI / 交互 / 系统兼容几个层面。
 //
-// 安全上的硬约束:绝不能把 ConfigStore 里任何 token/secret 的原始值写进这份文件——这份
-// 文件很可能被贴进公开的 GitHub issue。这条约束由**两道**独立的机制守着,缺一不可:
+// 硬约束:绝不能把 ConfigStore 里任何 token / secret 的原始值写进导出 —— 它设计给贴进公开的 GitHub issue。
+// 由两道独立的机制守着,缺一不可:
 //
-//  1. 结构化那一段(== State ==)只复用 ConfigStore 已有的 isXConfigured/xMissingHint()
-//     这批只读布尔判断,不直接触碰 savedSnapshot 里的字段本身。
-//  2. 附在报告末尾的日志正文统一过 redacted() → LogRedactor 脱敏。
-//
-// 第 2 条是补的,补之前这条约束实际上是**破的**:第 1 条只管结构化字段,而
-// 报告末尾把 ~/Library/Logs/lyrimuse.log 的最后 200 行原样附上,凭据从日志正文里漏出去。
-// 实测当时本机那 200 行内就有 3 处 Last.fm API Key 原文 —— 来源是 collector 打印 Go
-// *url.Error 的原文,而它的 Error() 会带出完整 URL,api_key 就在 query string 里。
-// 详见 LogRedactor 的注释。往这份报告里加任何新的日志段落,都必须一并套上 redacted()。
-//
-// 这份导出要能真的靠它排查问题,不只是"至少别泄密":它是用户遇到 bug 时发过来的唯一
-// 入口,要覆盖网络/逻辑/UI/交互/系统兼容几个层面。下面几条是拿一份真实导出(3254 行)
-// 核对出来的具体缺陷与对应处理:
-//   - App Log 里"snapshot failed"一条重复了 921 次(占 24 小时窗口的 30%)——已经在
-//     LocalPlaybackSource.poll() 里改成只在状态变化时打,这份文件里的 collapseRepeatedLines
-//     是给"改不到源头"的重复日志(比如例行的网络审计成功调用)兜底用的第二道防线。
-//   - Collector Log 固定"最后 200 行"在网络审计日志接入之后被例行轮询快速填满,实测
-//     一份导出里这 200 行只覆盖了 45 分钟——改成按时间窗口取。
-//   - App 侧日志用 os.Logger,自带 UTC(+0000);Collector 侧也用 UTC(log.LUTC)。段落
-//     标题写清楚是 UTC,省得读的人自己心算。
+//  1. 结构化那一段(== State ==)只复用 ConfigStore 已有的 isXConfigured / xMissingHint() 这批只读布尔判断,
+//     不直接触碰 savedSnapshot 里的字段本身。
+//  2. 所有日志正文统一过 redacted() → LogRedactor。往导出里加任何新的日志段落,都必须一并套上 redacted();
+//     日志正文里可能带完整 URL(collector 打印 Go *url.Error 时 api_key 就在 query string 里),见 LogRedactor。
 enum DiagnosticsExporter {
     static func suggestedFilename() -> String {
         let formatter = DateFormatter()
@@ -425,9 +408,10 @@ enum DiagnosticsExporter {
     /// 抽象本身就不对症:一首歌的歌词是哪一次解析定下来的,可能是几周前的事,而缓存永久
     /// 保留、日志会轮转。实测本机 first-resolve 决策的年龄 p90 是 7.2 天。
     ///
-    /// 为什么是脱敏后的完整日志,而不是让用户直接把 ~/Library/Logs/lyrimuse.log 发出来:
-    /// LogRedactor 只作用在这条导出路径上,原始文件一点脱敏都没过(本文件头注记着实测——
-    /// 当时最后 200 行里就有 3 处 Last.fm API Key 原文)。
+    /// 为什么导出时还要再脱敏一遍,而不是让用户直接把 ~/Library/Logs/lyrimuse.log 发出来:collector
+    /// 写日志时已经过一道凭据脱敏(logscrub.go 的 secretScrubber),这里再用 LogRedactor 按当前配置里的
+    /// 凭据原文和正则兜一遍,两道是纵深关系,别因为源头有了就删掉这一道。导出还带上 App 侧日志和运行状态,
+    /// 原始文件里没有这些。两道都只去凭据,曲名和本机路径原样保留。
     ///
     /// 为什么是 zip 而不是一个大 txt:3MB 文本压完约 270KB,解压出来 report.txt 照样直接读、
     /// 日志照样直接 grep,而 3MB 的 txt 两头都不讨好。

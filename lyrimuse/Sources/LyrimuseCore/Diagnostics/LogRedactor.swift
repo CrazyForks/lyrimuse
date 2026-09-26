@@ -1,19 +1,11 @@
 import Foundation
 
-/// 诊断包里日志正文的脱敏。
+/// 诊断包里日志正文的脱敏。诊断导出设计给贴进**公开** GitHub issue,任何 token / secret 的原文都不能进去。
 ///
-/// 背景:`DiagnosticsExporter` 开头写着一条硬约束——绝不能把任何
-/// token/secret 的原文写进诊断文件,因为它就是设计给用户贴进**公开** GitHub issue 的。
-/// 结构化那一段确实守住了(只写 `isXConfigured` 这类只读布尔),但报告末尾直接把
-/// `~/Library/Logs/lyrimuse.log` 的最后 200 行原样附上,整个绕开了这条约束。
+/// 日志正文里会出现凭据:Go `*url.Error` 的 `Error()` 带完整 URL,Last.fm 的 api_key 就在 query string 里。
+/// collector 写日志时已经脱敏过一道(logscrub.go),这里是导出出口上的第二道,两道都要留。
 ///
-/// 实测:`lastfm.go` 里 `log.Printf("lastfmRecent: request failed: %v", err)` 打印的是
-/// Go `*url.Error` 的原文,而它的 `Error()` 会把**完整 URL** 带出来 —— api_key 恰好在
-/// query string 里。当时本机日志的最后 200 行内就有 3 处 Last.fm API Key 原文。
-///
-/// 修在**出口**而不是逐个 `log.Printf` 调用点,是因为出口只有这一个、而调用点会一直新增:
-/// 任何以后新写的日志行都自动被这里兜住,不用每加一处就想一次"这行会不会带凭据"。
-/// (逐个改调用点那条路是打地鼠,而且 collector 是 Go、App 是 Swift,两边都要各改一遍。)
+/// 修在**出口**而不是逐个 `log.Printf` 调用点:出口只有这一个,调用点会一直新增,新写的日志行自动被这里兜住。
 ///
 /// 两层是**纵深**关系,都要跑:
 ///  1. `redact(_:secrets:)` —— 拿当前配置里的密钥原文去做字面替换。不依赖任何格式假设,
