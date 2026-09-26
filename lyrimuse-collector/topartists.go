@@ -254,7 +254,9 @@ func mergeAliasedArtistsResolved(entries []lastfmChartEntry, resolve artistIdent
 	return mergeAliasedArtistsNamed(entries, resolve, artistMergeNameKey, artistMergeDisplayName)
 }
 
-func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentityFn, nameKey, displayName func(string) string) []lastfmChartEntry {
+// artistMergeGroups 是归并的分组那一半:返回 find(条目下标 → 所在桶的根下标)和每条的身份。
+// mergeAliasedArtistsNamed 按它出榜,artist-tracks 按它把歌曲的署名归到榜上的歌手,两边同一把尺子。
+func artistMergeGroups(entries []lastfmChartEntry, resolve artistIdentityFn, nameKey func(string) string) (func(int) int, []mbArtistIdentity) {
 	n := len(entries)
 	nameKeys := make([]string, n)
 	ids := make([]mbArtistIdentity, n)
@@ -315,6 +317,12 @@ func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentity
 			union(idxs[0], idxs[k])
 		}
 	}
+	return find, ids
+}
+
+func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentityFn, nameKey, displayName func(string) string) []lastfmChartEntry {
+	n := len(entries)
+	find, ids := artistMergeGroups(entries, resolve, nameKey)
 
 	// 每一桶的显示名从**桶里真实出现过的成员名字**里挑,挑"合credit 段数最少"的那个:
 	// 同一个人常常同时以"本名"和"某首合唱的完整 credit 串"两种形态出现在榜单里

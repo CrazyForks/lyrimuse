@@ -141,6 +141,11 @@ func main() {
 		runTopArtistsCLI(os.Args[2:])
 		return
 	}
+	// `collector artist-tracks -period P <歌手名>...`:歌手榜展开行里每位歌手听得最多的歌(见 artisttracks.go)。
+	if len(os.Args) > 1 && os.Args[1] == "artist-tracks" {
+		runArtistTracksCLI(os.Args[2:])
+		return
+	}
 	// `collector regenerate-jyutping [-apply]`:按当前算法+词典重算存量粤拼(见
 	// regeneratejyutpingcli.go)。maybeGenerateJyutpingRoma 只补空值、从不覆盖,所以
 	// 算法/词典改了之后要靠这个命令回头刷存量。跟 dedupe-entries 同形态:默认预演。

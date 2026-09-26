@@ -73,7 +73,12 @@ type lastfmChartEntry struct {
 var lastfmReadClient = http.DefaultClient
 
 func lastfmAPIGet(ctx context.Context, params neturl.Values, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	return lastfmAPIGetTimeout(ctx, params, out, 8*time.Second)
+}
+
+// lastfmAPIGetTimeout 同 lastfmAPIGet,超时自定。超时从进本地出站闸排队那一刻算起(排队也占这段时间)。
+func lastfmAPIGetTimeout(ctx context.Context, params neturl.Values, out any, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	params.Set("format", "json")
 	u := "https://ws.audioscrobbler.com/2.0/?" + params.Encode()
