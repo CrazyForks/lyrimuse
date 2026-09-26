@@ -497,6 +497,7 @@ struct LastfmStatsSection: View {
                     Button {
                         recentRefreshing = true
                         stats.refreshBaseline(force: true)
+                        LastfmLovedTracks.shared.refreshIfNeeded(force: true)
                     } label: {
                         Image(systemName: "arrow.clockwise").font(.system(size: 11))
                     }
@@ -591,6 +592,7 @@ struct LastfmStatsSection: View {
         // refreshBaseline 没有完成回调,靠观察它的两个出口关掉转圈:成功会更新
         // recentUpdatedAt,失败会置 baselineFailed,两者必居其一(见 recentRefreshing 注释)。
         .onChange(of: stats.recentUpdatedAt) { _, _ in recentRefreshing = false }
+        .onAppear { LastfmLovedTracks.shared.refreshIfNeeded() }
         .onChange(of: stats.baselineFailed) { _, failed in if failed { recentRefreshing = false } }
     }
 
@@ -669,6 +671,7 @@ struct LastfmStatsSection: View {
             // 是还没查到——不给占位的话,翻到新页这里会空一截,看着像坏了。已确定
             // 没有次数的曲目连占位都不给:给了的话,这类曲目会永远挂着占位,
             // 变成一个说谎的"正在加载"。
+            RecentLoveHeart(artist: t.artist, title: t.title)
             PlayCountBadge(
                 artist: t.artist, title: t.title, count: entry.count,
                 unavailable: stats.isPlayCountUnavailable(artist: t.artist, title: t.title),
@@ -1398,6 +1401,7 @@ private struct LiveScrobbleRow: View {
                     // 老歌重逢的小情绪点:"第 208 次听" —— 点一下看这 208 次是哪几种写法凑的。
                     // unavailable 传 true:实时行没有次数时什么都不画,不给 `···` 占位(原样)。
                     // expectedTotal 传 nil:这个数含还没落库的这一次,跟明细合计对不上是正常的。
+                    RecentLoveHeart(artist: live.artist, title: live.title)
                     PlayCountBadge(
                         artist: live.artist, title: live.title,
                         count: absorbedRecent?.count ?? stats.nowPlayingCount,
@@ -1437,6 +1441,7 @@ private struct LiveScrobbleRow: View {
                         NSWorkspace.shared.open(url)
                     }
                 }
+                .environment(\.recentRowHovered, hovered)
                 .onHover { hovered = $0 }
             } else {
                 Color.clear.frame(height: 0)
@@ -1503,6 +1508,7 @@ private struct RowHoverHighlight: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.recentRowHovered, hovered)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(hovered && enabled ? Color.secondary.opacity(0.10) : .clear)
@@ -1510,6 +1516,55 @@ private struct RowHoverHighlight: ViewModifier {
             .onHover { hovered = $0 }
     }
 }
+
+private struct RecentRowHoveredKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 鼠标在不在这一行上。行里的控件据此决定悬停时才露出来的那部分(没喜欢的行只在悬停时给空心)。
+    var recentRowHovered: Bool {
+        get { self[RecentRowHoveredKey.self] }
+        set { self[RecentRowHoveredKey.self] = newValue }
+    }
+}
+
+/// 「最近记录」每行的 Last.fm 喜欢:已喜欢常驻实心心,点它取消;没喜欢的只在鼠标悬停这一行时给一颗
+/// 空心,点它喜欢。没有写权限(缺 session key)时只显示已喜欢、不给点。列宽固定,两种行的「第 N 次听」
+/// 才落在同一列。
+private struct RecentLoveHeart: View {
+    let artist: String
+    let title: String
+    @ObservedObject private var store = LastfmLovedTracks.shared
+    @Environment(\.recentRowHovered) private var rowHovered
+
+    var body: some View {
+        let loved = store.isLoved(artist: artist, title: title) == true
+        let canWrite = store.canWrite
+        Group {
+            if loved || (rowHovered && canWrite) {
+                Button {
+                    store.toggle(artist: artist, title: title)
+                } label: {
+                    Image(systemName: loved ? "heart.fill" : "heart")
+                        .font(.system(size: 11))
+                        .foregroundStyle(loved ? AnyShapeStyle(lastfmBrandRed) : AnyShapeStyle(.secondary))
+                        .frame(width: recentLoveColumnWidth, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canWrite)
+                .help(loved ? L10n.t("已在 Last.fm 上喜欢") : L10n.t("在 Last.fm 上喜欢"))
+                .accessibilityLabel(loved ? L10n.t("已在 Last.fm 上喜欢") : L10n.t("在 Last.fm 上喜欢"))
+            } else {
+                Color.clear.frame(width: recentLoveColumnWidth, height: 16)
+            }
+        }
+    }
+}
+
+/// 喜欢那一列的宽度,历史行和实时行共用。
+private let recentLoveColumnWidth: CGFloat = 16
 
 extension View {
     func rowHoverHighlight(enabled: Bool = true) -> some View {

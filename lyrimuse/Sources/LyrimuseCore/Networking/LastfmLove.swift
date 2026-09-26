@@ -57,6 +57,61 @@ public enum LastfmLove {
         return nil
     }
 
+    /// 「最近记录」一行跟喜欢列表对得上的键:歌手 + 歌名,忽略大小写和首尾空白(Last.fm 按曲目实体
+    /// 认喜欢,实体名不分大小写)。空歌手或空歌名返回 nil。
+    public static func lovedKey(artist: String, title: String) -> String? {
+        let a = artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !a.isEmpty, !t.isEmpty else { return nil }
+        return a + "\n" + t
+    }
+
+    /// 读 `user.getLovedTracks` 的一页:这一页的曲目和总页数。nil = 没读到(API 错误 / 结构不对)。
+    /// 只有一首时 `track` 是对象而不是数组,两种都认;歌手在 `artist.name`。
+    public static func parseLovedTracksPage(_ json: [String: Any]) -> (targets: [Target], totalPages: Int)? {
+        guard json["error"] == nil, let loved = json["lovedtracks"] as? [String: Any] else { return nil }
+        let rows: [[String: Any]]
+        if let array = loved["track"] as? [[String: Any]] {
+            rows = array
+        } else if let single = loved["track"] as? [String: Any] {
+            rows = [single]
+        } else {
+            rows = []
+        }
+        let targets = rows.compactMap { row -> Target? in
+            guard let title = row["name"] as? String,
+                  let artist = (row["artist"] as? [String: Any])?["name"] as? String,
+                  lovedKey(artist: artist, title: title) != nil else { return nil }
+            return Target(artist: artist, title: title)
+        }
+        let attr = loved["@attr"] as? [String: Any]
+        let pages = (attr?["totalPages"] as? String).flatMap { Int($0) } ?? (attr?["totalPages"] as? Int) ?? 1
+        return (targets, max(1, pages))
+    }
+
+    /// 本机改过的一首:改成了什么、什么时候改的。
+    public struct LovedOverride: Equatable, Sendable {
+        public let loved: Bool
+        public let at: Date
+
+        public init(loved: Bool, at: Date) {
+            self.loved = loved
+            self.at = at
+        }
+    }
+
+    /// 拉回来的喜欢列表跟本机改过的状态合并:`window` 之内本机为准(拉取可能先于写落地发出,Last.fm 读接口
+    /// 也可能还没跟上刚才那次写),过了窗口的本机记录丢掉、以服务端为准。返回合并后的键和还留着的本机记录。
+    public static func mergeLoved(fetched: Set<String>, overrides: [String: LovedOverride],
+                                  now: Date, window: TimeInterval) -> (keys: Set<String>, overrides: [String: LovedOverride]) {
+        let kept = overrides.filter { now.timeIntervalSince($0.value.at) < window }
+        var keys = fetched
+        for (key, o) in kept {
+            if o.loved { keys.insert(key) } else { keys.remove(key) }
+        }
+        return (keys, kept)
+    }
+
     /// track.love / track.unlove 的响应算不算写成功:成功是空对象,失败带 `error` 码
     /// (Last.fm 多以 HTTP 200 + {"error":N} 报错,不能只看状态码)。
     public static func writeSucceeded(_ json: [String: Any]) -> Bool {

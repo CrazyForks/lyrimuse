@@ -1617,9 +1617,12 @@ func runSourceContractTests() {
                             "Last.fm 喜欢: 写请求签名复用 LastfmAuthFlow.signParams")
                 expectEqual(love.contains("LastfmLove.parseUserLoved(json)"), true,
                             "Last.fm 喜欢: 状态读 track.getInfo 的 userloved")
-                expectEqual(love.contains("await LastfmRateLimiter.shared.acquire(priority: .interactive)")
+                expectEqual(love.contains("priority: LastfmRateLimiter.Priority = .interactive")
+                            && love.contains("await LastfmRateLimiter.shared.acquire(priority: priority)")
                             && love.contains("NetworkAuditLog.record("), true,
-                            "Last.fm 喜欢: 请求过全局限速队列并记审计日志")
+                            "Last.fm 喜欢: 请求过全局限速队列(默认交互档)并记审计日志")
+                expectEqual(love.contains("send(req, operation: \"user.getLovedTracks\", priority: .background)"), true,
+                            "Last.fm 喜欢列表: 整份列表走后台档,不跟点心抢队头")
                 expectEqual(love.contains("guard consumers > 0"), true,
                             "Last.fm 喜欢: 没有展示面挂着时不读状态")
             } else {

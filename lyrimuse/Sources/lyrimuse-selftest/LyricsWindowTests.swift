@@ -185,6 +185,41 @@ func runLyricsWindowTests() {
         expectEqual(L.writeSucceeded([:]), true, "Last.fm 喜欢: 写成功是空对象")
         expectEqual(L.writeSucceeded(["error": 9, "message": "Invalid session key"]), false,
                     "Last.fm 喜欢: HTTP 200 带 error 也是失败")
+
+        // 喜欢列表(最近记录每行的心)。
+        expectEqual(L.lovedKey(artist: " Taylor Swift ", title: "Love Story"),
+                    L.lovedKey(artist: "taylor swift", title: "LOVE STORY"), "喜欢列表: 大小写 / 首尾空白不算差异")
+        expectEqual(L.lovedKey(artist: "A", title: "Song") != L.lovedKey(artist: "A", title: "Song (Live)"), true,
+                    "喜欢列表: 版本后缀不同就是另一首")
+        expectEqual(L.lovedKey(artist: "", title: "Song"), nil, "喜欢列表: 空歌手没有键")
+        let page = L.parseLovedTracksPage(["lovedtracks": [
+            "track": [["name": "Love Story", "artist": ["name": "Taylor Swift"]],
+                      ["name": "", "artist": ["name": "X"]]],
+            "@attr": ["totalPages": "3", "total": "2001"]]])
+        expectEqual(page?.targets, [L.Target(artist: "Taylor Swift", title: "Love Story")],
+                    "喜欢列表: 歌手读 artist.name,空歌名丢掉")
+        expectEqual(page?.totalPages, 3, "喜欢列表: 总页数读 @attr.totalPages 字符串")
+        expectEqual(L.parseLovedTracksPage(["lovedtracks": [
+            "track": ["name": "Only", "artist": ["name": "One"]], "@attr": ["totalPages": "1"]]])?.targets,
+                    [L.Target(artist: "One", title: "Only")], "喜欢列表: 只有一首时 track 是对象也认")
+        expectEqual(L.parseLovedTracksPage(["lovedtracks": ["track": [], "@attr": ["totalPages": "0", "total": "0"]]])?.targets.isEmpty,
+                    true, "喜欢列表: 一首都没有 → 空列表(不是没读到)")
+        expectEqual(L.parseLovedTracksPage(["lovedtracks": ["track": [], "@attr": ["totalPages": "0"]]])?.totalPages, 1,
+                    "喜欢列表: 总页数至少 1")
+        expectEqual(L.parseLovedTracksPage(["error": 6, "message": "User not found"]) == nil, true,
+                    "喜欢列表: API 错误 → 没读到")
+        // 合并:拉取先于写落地发出 / 读接口还没跟上时,窗口内以本机为准。
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let m1 = L.mergeLoved(fetched: ["a\nx"], overrides: ["b\ny": .init(loved: true, at: t0)],
+                              now: t0.addingTimeInterval(5), window: 600)
+        expectEqual(m1.keys, ["a\nx", "b\ny"], "喜欢列表合并: 刚点的喜欢不被旧列表盖掉")
+        let m2 = L.mergeLoved(fetched: ["a\nx"], overrides: ["a\nx": .init(loved: false, at: t0)],
+                              now: t0.addingTimeInterval(5), window: 600)
+        expectEqual(m2.keys.isEmpty, true, "喜欢列表合并: 刚取消的不被旧列表加回来")
+        let m3 = L.mergeLoved(fetched: [], overrides: ["b\ny": .init(loved: true, at: t0)],
+                              now: t0.addingTimeInterval(601), window: 600)
+        expectEqual(m3.keys.isEmpty && m3.overrides.isEmpty, true, "喜欢列表合并: 过了窗口以服务端为准、本机记录丢掉")
+        expectEqual(m1.overrides.count, 1, "喜欢列表合并: 窗口内的本机记录留着")
     }
 
     // MARK: - 迷你顶部显示项

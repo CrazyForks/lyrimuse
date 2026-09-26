@@ -76,9 +76,21 @@ final class LastfmLoveModel: ObservableObject {
         writeChain = Task { [weak self] in
             await previous?.value
             let ok = await LastfmLoveAPI.setLoved(newValue, target: target, creds: creds)
+            if ok { LastfmLovedTracks.shared.apply(newValue, target: target) }
             guard let self, !ok, self.generation == gen, self.target == target else { return }
             self.loved = !newValue
         }
+    }
+
+    /// 别处(最近记录的心)改了某一首的喜欢状态:正好是当前这首就跟着改,这一首不再回读。
+    /// 按 `LastfmLove.lovedKey` 比(大小写不同的写法是 Last.fm 上同一个实体)。
+    func noteChanged(_ value: Bool, target changed: Target) {
+        guard let target,
+              let key = LastfmLove.lovedKey(artist: target.artist, title: target.title),
+              key == LastfmLove.lovedKey(artist: changed.artist, title: changed.title) else { return }
+        loved = value
+        loadedTarget = target
+        generation &+= 1
     }
 
     private func recomputeTarget() {
@@ -117,7 +129,7 @@ final class LastfmLoveModel: ObservableObject {
     }
 
     /// 写接口要 session key + secret(读接口只要 api_key + 用户名)。四样缺一样就当没连。
-    private static func credentials() -> LastfmLoveAPI.Credentials? {
+    static func credentials() -> LastfmLoveAPI.Credentials? {
         let c = ConfigStore.shared
         let user = c.lastfmScrobbleUsername.isEmpty ? c.lastfmUser : c.lastfmScrobbleUsername
         guard !c.lastfmScrobbleAPIKey.isEmpty, !c.lastfmScrobbleSecret.isEmpty,
@@ -160,6 +172,39 @@ enum LastfmLoveAPI {
         return LastfmLove.parseUserLoved(json)
     }
 
+    /// `user.getLovedTracks` 全部翻完(每页 1000 首,最多 `maxLovedPages` 页)。任何一页没读到返回 nil,
+    /// 不拿半份列表去判「没喜欢」。
+    static func fetchLovedTracks(apiKey: String, user: String) async -> [LastfmLoveModel.Target]? {
+        var all: [LastfmLoveModel.Target] = []
+        var page = 1
+        var totalPages = 1
+        while page <= totalPages && page <= maxLovedPages {
+            let pairs: [(name: String, value: String)] = [
+                ("method", "user.getLovedTracks"),
+                ("user", user),
+                ("limit", "1000"),
+                ("page", String(page)),
+                ("api_key", apiKey),
+                ("format", "json"),
+            ]
+            var comps = URLComponents(url: apiRoot, resolvingAgainstBaseURL: false)!
+            comps.percentEncodedQuery = LastfmQuery.queryString(pairs)
+            guard let url = comps.url else { return nil }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 15
+            // 后台档:整份列表可能要翻好几页,别跟点心、开菜单这些交互请求抢队头。
+            guard let json = await send(req, operation: "user.getLovedTracks", priority: .background),
+                  let parsed = LastfmLove.parseLovedTracksPage(json) else { return nil }
+            all += parsed.targets
+            totalPages = parsed.totalPages
+            page += 1
+        }
+        return all
+    }
+
+    /// 喜欢列表最多翻几页(2 万首)。防 totalPages 异常时一直翻下去。
+    private static let maxLovedPages = 20
+
     /// 写成功返回 true。
     static func setLoved(_ loved: Bool, target: LastfmLoveModel.Target, creds: Credentials) async -> Bool {
         let method = loved ? "track.love" : "track.unlove"
@@ -186,8 +231,9 @@ enum LastfmLoveAPI {
         return true
     }
 
-    private static func send(_ req: URLRequest, operation: String) async -> [String: Any]? {
-        await LastfmRateLimiter.shared.acquire(priority: .interactive)
+    private static func send(_ req: URLRequest, operation: String,
+                             priority: LastfmRateLimiter.Priority = .interactive) async -> [String: Any]? {
+        await LastfmRateLimiter.shared.acquire(priority: priority)
         let start = Date()
         let host = req.url?.host ?? "ws.audioscrobbler.com"
         do {
