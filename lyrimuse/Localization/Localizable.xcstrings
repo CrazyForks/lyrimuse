@@ -35791,6 +35791,52 @@
           }
         }
       }
+    },
+    "复用其他专辑的同一首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reused from the same recording on another album"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复用其他专辑的同一首"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沿用其他專輯的同一首"
+          }
+        }
+      }
+    },
+    "复用同一首的另一种歌手写法" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reused from the same song under another artist spelling"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复用同一首的另一种歌手写法"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沿用同一首的另一種歌手寫法"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

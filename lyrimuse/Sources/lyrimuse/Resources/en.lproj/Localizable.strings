@@ -496,6 +496,8 @@
 "备份文件夹" = "Backup Folder";
 "备份文件夹…" = "Backup Folder…";
 "备份里的歌词文件会铺回歌词文件夹：同名的覆盖，缺的补上；备份之后新解析出来的歌不会被删掉。铺好之后会马上收进缓存，不用重启" = "The lyrics files in the backup are written back into the lyrics folder: same-named files are overwritten, missing ones are added. Songs resolved after the backup was made are not removed. They go straight back into the cache, no restart needed.";
+"复用其他专辑的同一首" = "Reused from the same recording on another album";
+"复用同一首的另一种歌手写法" = "Reused from the same song under another artist spelling";
 "外观" = "Appearance";
 "多" = "More";
 "多行" = "Full";

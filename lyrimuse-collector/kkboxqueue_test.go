@@ -110,6 +110,10 @@ func TestKKBOXUpcomingSequential(t *testing.T) {
 	if got[0].artist != "Taylor Swift, Ed Sheeran, Future" || got[0].album != "reputation" || got[0].duration != 244.827 {
 		t.Errorf("第一首: %+v", got[0])
 	}
+	// 每首只按一种写法预解析(另一种真播到时整份搬过去,见 kkboxalias.go)。
+	if len(got) != 3 {
+		t.Errorf("每首一种写法: %+v", got)
+	}
 }
 
 func TestKKBOXUpcomingShuffle(t *testing.T) {
@@ -200,8 +204,11 @@ func TestKKBOXUpcomingRefusesWhenUnsure(t *testing.T) {
 	if _, ok := kkboxUpcoming("Taylor Swift", "Another Song", 5); ok {
 		t.Error("当前这首对不上播放器报的(上下文停在上一次):退回")
 	}
-	if _, ok := kkboxUpcoming("Taylor Swift (泰勒絲)", "Love Story", 5); ok {
-		t.Error("歌手名拼法对不上:照这个拼法预解析是白解析,退回")
+	if _, ok := kkboxUpcoming("Someone Else", "Love Story", 5); ok {
+		t.Error("歌手名哪种写法都对不上(同名的另一首):照这个拼法预解析是白解析,退回")
+	}
+	if _, ok := kkboxUpcoming("Taylor Swift (泰勒絲)", "Love Story", 5); !ok {
+		t.Error("播放器报的是 artist.name 那种写法(详情里的):认")
 	}
 	withTestKKBOX(t, "kkbox:song-list:LIST==:0:0?track=T4", false)
 	if _, ok := kkboxUpcoming("Taylor Swift", "Speak Now", 5); ok {
@@ -288,7 +295,7 @@ func TestKKBOXUpcomingRetriesUntilContextLands(t *testing.T) {
 		t.Errorf("一直对不上: ok=%v retries=%d", ok, retries)
 	}
 	retries = 0
-	if _, ok := kkboxUpcoming("Taylor Swift (泰勒絲)", "willow", 5); ok || retries != 0 {
+	if _, ok := kkboxUpcoming("Someone Else", "willow", 5); ok || retries != 0 {
 		t.Errorf("歌手名对不上不该重读: ok=%v retries=%d", ok, retries)
 	}
 }
@@ -365,5 +372,166 @@ func TestLDBScan(t *testing.T) {
 	}
 	if want := map[string]string{"p:a": "new", "p:b": "keep"}; !reflect.DeepEqual(vals, want) {
 		t.Errorf("got %v want %v", vals, want)
+	}
+}
+
+// 同一个曲目 id,歌单列表里的 roles 是「田馥甄」,详情里是「田馥甄 (Hebe)」(= artist.name),播放器报的是详情那份。
+// 当前这首报的是 artist.name 那种写法也认;下一首 artist.name 是「Various Artists」、roles 是真歌手,只有一种写法。
+func TestKKBOXUpcomingPlaylistArtistSpellings(t *testing.T) {
+	withTestKKBOX(t, "kkbox:online-playlist:PL2:3?track=H1", false)
+	cache := kkboxCacheDirOverride
+	testChromiumCacheEntry(t, cache, "iiii_0", "https://api-webapps.kkbox.com.tw/v2/playlists/PL2?terr=tw",
+		`{"data":{"id":"PL2","tracks":[
+		{"id":"H1","name":"要去什麼地方","artist":{"name":"田馥甄 (Hebe)"},"artist_roles":{"main_artists":[{"name":"田馥甄"}],"featured_artists":[]},"album":{"name":"要去什麼地方"}},
+		{"id":"H2","name":"無你的所在","artist":{"name":"Various Artists"},"artist_roles":{"main_artists":[{"name":"李承隆 Tzo"}],"featured_artists":[]},"album":{"name":"原聲帶"}},
+		{"id":"H3","name":"大船","artist":{"name":"田馥甄 (Hebe)"},"artist_roles":{"main_artists":[{"name":"田馥甄"}],"featured_artists":[]},"album":{"name":"要去什麼地方"}},
+		{"id":"H4","name":"小幸運","artist":{"name":"田馥甄 (Hebe)"},"artist_roles":{"main_artists":[{"name":"田馥甄"}],"featured_artists":[]},"album":{"name":"我的少女時代"}}]}}`)
+	// 大船播过,单首详情在缓存里:照详情,不猜第二种写法。
+	testChromiumCacheEntry(t, cache, "jjjj_0", "https://api-webapps.kkbox.com.tw/v2/tracks/H3?terr=tw",
+		`{"data":{"id":"H3","name":"大船","artist":{"name":"田馥甄 (Hebe)"},"artist_roles":{"main_artists":[{"name":"田馥甄 (Hebe)"}],"featured_artists":[]},"album":{"name":"要去什麼地方"}}}`)
+	got, ok := kkboxUpcoming("田馥甄 (Hebe)", "要去什麼地方", 5)
+	if !ok {
+		t.Fatal("播放器报的是 artist.name 那种写法:不该整份退回")
+	}
+	var spelled []string
+	for _, x := range got {
+		spelled = append(spelled, x.artist+"|"+x.title)
+	}
+	// 小幸運不在当前这张专辑、也没有详情:按列表里的写法。
+	want := []string{"李承隆 Tzo|無你的所在", "田馥甄 (Hebe)|大船", "田馥甄|小幸運"}
+	if !reflect.DeepEqual(spelled, want) {
+		t.Errorf("got %v want %v", spelled, want)
+	}
+}
+
+func TestKKBOXArtistSpellings(t *testing.T) {
+	a := func(n string) kkboxArtist { return kkboxArtist{Name: n} }
+	track := func(name string, main, feat []kkboxArtist) kkboxTrack {
+		tr := kkboxTrack{Artist: &kkboxArtist{Name: name}}
+		tr.ArtistRoles = &struct {
+			Main     []kkboxArtist `json:"main_artists"`
+			Featured []kkboxArtist `json:"featured_artists"`
+		}{Main: main, Featured: feat}
+		return tr
+	}
+	cases := []struct {
+		name        string
+		t           kkboxTrack
+		fromDetails bool
+		want        []string
+	}{
+		{"括号别名", track("Taylor Swift (泰勒絲)", []kkboxArtist{a("Taylor Swift")}, []kkboxArtist{a("Ed Sheeran")}), false,
+			[]string{"Taylor Swift, Ed Sheeran", "Taylor Swift (泰勒絲), Ed Sheeran"}},
+		{"只换第一位主唱", track("五月天 (Mayday)", []kkboxArtist{a("五月天"), a("孫燕姿")}, nil), false,
+			[]string{"五月天, 孫燕姿", "五月天 (Mayday), 孫燕姿"}},
+		{"两边一样", track("周杰倫", []kkboxArtist{a("周杰倫")}, nil), false, []string{"周杰倫"}},
+		{"artist.name 是合辑", track("Various Artists", []kkboxArtist{a("李承隆 Tzo")}, nil), false, []string{"李承隆 Tzo"}},
+		{"不是括号别名", track("田馥甄Hebe", []kkboxArtist{a("田馥甄")}, nil), false, []string{"田馥甄"}},
+		{"详情不猜", track("田馥甄 (Hebe)", []kkboxArtist{a("田馥甄")}, nil), true, []string{"田馥甄"}},
+	}
+	for _, c := range cases {
+		if got, _ := kkboxArtistSpellings(c.t, "Album Artist", "Album", c.fromDetails); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+	if got, key := kkboxArtistSpellings(kkboxTrack{}, "Album Artist", "Album", false); !reflect.DeepEqual(got, []string{"Album Artist"}) || key != "" {
+		t.Errorf("没有歌手的曲目退回专辑歌手: %v", got)
+	}
+}
+
+// 同一张专辑里写法一致:缓存里这张专辑别的曲目有详情,两种写法的那首就照详情那一种;别的专辑照列表里的写法。
+func TestKKBOXUpcomingAlbumFormFromCachedDetails(t *testing.T) {
+	withTestKKBOX(t, "kkbox:song-list:LIST==:0:0?track=T1", false)
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "kkkk_0", "https://api-webapps.kkbox.com.tw/v2/tracks/?ids=Z1,Z2&terr=tw",
+		`{"data":[{"id":"Z1","name":"Delicate","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift (泰勒絲)"}],"featured_artists":[]},"album":{"name":"reputation"}},
+		{"id":"Z2","name":"the 1","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}],"featured_artists":[]},"album":{"name":"folklore"}}]}`)
+	got, ok := kkboxUpcoming("Taylor Swift", "Love Story", 5)
+	if !ok {
+		t.Fatal("读得到后面几首")
+	}
+	var spelled []string
+	for _, x := range got {
+		spelled = append(spelled, x.artist+"|"+x.title)
+	}
+	want := []string{"Taylor Swift (泰勒絲), Ed Sheeran, Future|End Game", "Taylor Swift|willow", "Taylor Swift|Speak Now"}
+	if !reflect.DeepEqual(spelled, want) {
+		t.Errorf("reputation 照详情带别名,其余两张没有证据照列表:got %v want %v", spelled, want)
+	}
+}
+
+// 此刻在放的这首报的写法就是这张专辑的写法:同专辑后面的曲目只留那一种。
+func TestKKBOXUpcomingAlbumFormFromPlayer(t *testing.T) {
+	withTestKKBOX(t, "kkbox:online-playlist:PL3:0?track=S1", false)
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "llll_0", "https://api-webapps.kkbox.com.tw/v2/playlists/PL3?terr=tw",
+		`{"data":{"id":"PL3","tracks":[
+		{"id":"S1","name":"The Fate of Ophelia","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}]},"album":{"name":"The Life of a Showgirl"}},
+		{"id":"S2","name":"Opalite","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}]},"album":{"name":"The Life of a Showgirl"}},
+		{"id":"S3","name":"Lover","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}]},"album":{"name":"Lover"}}]}}`)
+	got, ok := kkboxUpcoming("Taylor Swift (泰勒絲)", "The Fate of Ophelia", 5)
+	if !ok {
+		t.Fatal("读得到后面几首")
+	}
+	var spelled []string
+	for _, x := range got {
+		spelled = append(spelled, x.artist+"|"+x.title)
+	}
+	want := []string{"Taylor Swift (泰勒絲)|Opalite", "Taylor Swift|Lover"}
+	if !reflect.DeepEqual(spelled, want) {
+		t.Errorf("got %v want %v", spelled, want)
+	}
+}
+
+// 详情文件解析一次就记住(按路径 + 修改时间),同一个文件不重复解析;文件变了重新解析。
+func TestKKBOXDetailMemo(t *testing.T) {
+	withTestKKBOX(t, "kkbox:song-list:LIST==:0:0?track=T1", false)
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "mmmm_0", "https://api-webapps.kkbox.com.tw/v2/tracks/?ids=Z1&terr=tw",
+		`{"data":[{"id":"Z1","name":"Delicate","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift (泰勒絲)"}]},"album":{"name":"reputation"}}]}`)
+	c := scanKKBOXCache(kkboxCacheDirOverride)
+	if forms := c.albumForms(); !forms[kkboxAlbumFormKey("Taylor Swift", "reputation")] {
+		t.Fatalf("详情里带别名: %v", forms)
+	}
+	var entry kkboxCacheEntry
+	for _, e := range c {
+		if filepath.Base(e.file) == "mmmm_0" {
+			entry = e
+		}
+	}
+	kkboxDetailMemoMu.Lock()
+	memo, ok := kkboxDetailMemo[entry.file]
+	kkboxDetailMemoMu.Unlock()
+	if !ok || len(memo.tracks) != 1 {
+		t.Fatalf("解析过的要记住: %+v", memo)
+	}
+	// 换了内容(新的修改时间):重新解析。
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "mmmm_0", "https://api-webapps.kkbox.com.tw/v2/tracks/?ids=Z1&terr=tw",
+		`{"data":[{"id":"Z1","name":"Delicate","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}]},"album":{"name":"reputation"}}]}`)
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(entry.file, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if forms := scanKKBOXCache(kkboxCacheDirOverride).albumForms(); forms[kkboxAlbumFormKey("Taylor Swift", "reputation")] {
+		t.Errorf("文件变了要重新解析: %v", forms)
+	}
+	// 文件被淘汰:记录跟着清掉。
+	if err := os.Remove(entry.file); err != nil {
+		t.Fatal(err)
+	}
+	scanKKBOXCache(kkboxCacheDirOverride).albumForms()
+	kkboxDetailMemoMu.Lock()
+	_, stale := kkboxDetailMemo[entry.file]
+	kkboxDetailMemoMu.Unlock()
+	if stale {
+		t.Error("不在缓存目录里的文件要从记录里清掉")
+	}
+}
+
+// 同一张专辑的详情里两种写法都见过(没实测到过):不下结论,照列表里的写法。
+func TestKKBOXAlbumFormsMixedAlbum(t *testing.T) {
+	withTestKKBOX(t, "kkbox:song-list:LIST==:0:0?track=T1", false)
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "nnnn_0", "https://api-webapps.kkbox.com.tw/v2/tracks/?ids=Z1,Z2&terr=tw",
+		`{"data":[{"id":"Z1","name":"Delicate","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift (泰勒絲)"}]},"album":{"name":"reputation"}},
+		{"id":"Z2","name":"Gorgeous","artist":{"name":"Taylor Swift (泰勒絲)"},"artist_roles":{"main_artists":[{"name":"Taylor Swift"}]},"album":{"name":"reputation"}}]}`)
+	if forms := scanKKBOXCache(kkboxCacheDirOverride).albumForms(); hasKey(forms, kkboxAlbumFormKey("Taylor Swift", "reputation")) {
+		t.Errorf("混用的专辑不下结论: %v", forms)
 	}
 }

@@ -661,6 +661,20 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		}
 		return e.fields()
 	}
+	// KKBOX 报的是另一种歌手写法、预取按列表里那种解析过了:整份搬过来,不再解析一遍(见 kkboxalias.go)。
+	if sib, found := kkboxAliasSiblingLocked(key, bundleID); found {
+		e := kkboxAliasCopyLocked(key, sib)
+		enrichMu.Unlock()
+		if enrichNotify != nil {
+			select {
+			case enrichNotify <- struct{}{}:
+			default:
+			}
+		}
+		commitEnrichSave(key)
+		exportLyricsFilesFor(key)
+		return e.fields()
+	}
 	// 从没见过这首歌:首次解析,不阻塞 poll 循环。
 	// 去重要连**在途**的一起查(不只是 enrichInflight[key] 这一个精确键)——理由见
 	// looseInflightKey,少这一道就会在十几秒的窗口里长出繁简/空格重复。

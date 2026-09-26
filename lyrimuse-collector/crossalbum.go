@@ -113,7 +113,7 @@ func adoptCrossAlbumSiblingLyrics(key string, e *enrichEntry) bool {
 	if src.LyricsDecisionApplied != nil {
 		// 搬过来要改 path / reused_from,指纹一变就对不上兄弟的旁路文件 —— 先把明细补回来(decisionstore.go)。
 		d := *withDecisionDetails(sib, src.LyricsDecisionApplied)
-		d.Path = "cross-album-reuse"
+		d.Path = lyricsDecisionPathCrossAlbumReuse
 		d.ReusedFrom = sib
 		e.LyricsDecisionApplied = &d
 	}

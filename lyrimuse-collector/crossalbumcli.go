@@ -201,7 +201,7 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 			if src.LyricsDecisionApplied != nil {
 				// 同 crossalbum.go:改指纹之前先把明细从旁路文件补回来。
 				d := *withDecisionDetails(g.members[best].key, src.LyricsDecisionApplied)
-				d.Path = "cross-album-reuse"
+				d.Path = lyricsDecisionPathCrossAlbumReuse
 				d.ReusedFrom = g.members[best].key
 				dst.LyricsDecisionApplied = &d
 			}

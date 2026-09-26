@@ -84,8 +84,8 @@ type lyricsDecision struct {
 	// 手动搜索 CLI 在 buildLyricsDecision **之后**填(跟 SourcesSkipped 同一个位置、
 	// 同一个理由:不给这个函数再加参数)。
 	QueriesTried []lyricQueryRecord `json:"queries_tried,omitempty"`
-	// ReusedFrom:这份歌词不是这条自己检索来的,是从**另一张专辑下的同一段录音**复用过来的,
-	// 值是那条的完整 key。非空时 Path 恒为 "cross-album-reuse"。
+	// ReusedFrom:这份歌词不是这条自己检索来的,是从另一条复用过来的,值是那条的完整 key。非空时 Path 是
+	// "cross-album-reuse"(另一张专辑下的同一段录音)或 "artist-alias-reuse"(KKBOX 的另一种歌手写法)。
 	//
 	// 需要它是因为复用之后这条的 Winner/Candidates 说的是别人那一轮的事:光看
 	// lyrics_source=kugou 会以为这条自己问过酷狗,而它可能一次都没问成功过。排查"这首歌
@@ -153,6 +153,9 @@ const (
 	lyricsDecisionPathRescore       = "rescore"             // 规则换版重选
 	lyricsDecisionPathManualRematch = "manual-rematch"      // 用户点「重新自动匹配」那一次
 	lyricsDecisionPathPeripheral    = "peripheral-backfill" // 补外围字段那一轮(条目原本没歌词时顺带收下)
+	// 不是这条自己检索的(没有 buildLyricsDecision 那一轮),是从另一条搬来的:reused_from 记来源。
+	lyricsDecisionPathCrossAlbumReuse  = "cross-album-reuse"  // 另一张专辑下的同一段录音
+	lyricsDecisionPathArtistAliasReuse = "artist-alias-reuse" // KKBOX 同一首歌的另一种歌手写法(kkboxalias.go)
 )
 
 // lyricsDecisionPaths 是上面那六条的清单,给测试用(见 lyricsdecisionpath_test.go)。
@@ -164,6 +167,8 @@ func lyricsDecisionPaths() []string {
 		lyricsDecisionPathRescore,
 		lyricsDecisionPathManualRematch,
 		lyricsDecisionPathPeripheral,
+		lyricsDecisionPathCrossAlbumReuse,
+		lyricsDecisionPathArtistAliasReuse,
 	}
 }
 

@@ -31,8 +31,15 @@ import (
 // 按 Apple 目录的「Taylor Swift」解析了一批,KKBOX 报的却是「Taylor Swift (泰勒絲)」,一条都没用上)。KKBOX 前端
 // (ArtistNameHelper)的规则:有 artist_roles 就是 main_artists + featured_artists 用 ", " 连起来,没有才用
 // artist.name。同一个歌手的 roles 写法因曲而异(「Taylor Swift」「Taylor Swift (泰勒絲)」「周杰倫」都有),所以
-// 每首歌都得拿到它自己的 roles:歌单 / 歌曲集接口里的曲目自带;专辑接口里的曲目只有 id 和歌名,KKBOX 开播专辑时另拉一次
-// 批量详情(`/v2/tracks/?ids=…`),播放器报的就是那里的 roles —— 专辑歌手是「周杰倫 (Jay Chou)」,详情里是「周杰倫」。
+// 每首歌都得拿到它自己的 roles。播放器报的是**曲目详情**(`/v2/tracks/<id>`、批量 `/v2/tracks/?ids=…`)里的 roles;
+// 专辑接口里的曲目只有 id 和歌名,KKBOX 开播专辑时另拉一次批量详情 —— 专辑歌手是「周杰倫 (Jay Chou)」,详情里是「周杰倫」。
+// 歌单 / 歌曲集 / 自动续播接口里的曲目自带 roles,但**同一个曲目 id 在列表里和详情里可能不是一个写法**:列表里是
+// 「田馥甄」「Taylor Swift」,详情里是「田馥甄 (Hebe)」「Taylor Swift (泰勒絲)」,正好是 artist.name 的写法;另一些
+// 曲目两边都是「Taylor Swift」。**同一张专辑里写法一致,同一位歌手跨专辑不一致**(实测 34 组「歌手 + 专辑」无一混用,
+// Taylor Swift 在 Showgirl 那张全带别名、其余专辑全不带)。没播过的曲目详情多半不在缓存里,所以列表里 roles 的第一位
+// 主唱正是 artist.name 去掉括号别名时(kkboxArtistSpellings),先按专辑找证据:缓存里同一张专辑别的曲目的详情
+// (kkboxCache.albumForms)、此刻在放的这首播放器报的写法(kkboxQueue.adoptObserved);都没有就按列表里的写法预解析。
+// 猜错了不白解析:真播到时报的是另一种写法,trackEnrichment 把这一条整份搬过去(kkboxalias.go)。
 //
 // 只读:LevelDB 不开库、不抢锁(同 leveldbread.go),缓存文件读不动就当没有。Local Storage 的键名里带着账号(邮箱),
 // 日志一律不打键名,也不打缓存地址(查询串里有设备 id)。
@@ -138,35 +145,48 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 	if !ok && ctx.kind == "song-list" {
 		list, ok = cache.relatedTrackList(ctx.id)
 	}
-	var all []upcomingTrack
-	var ids []string
+	var q kkboxQueue
 	pos := -1
 	if ok {
-		all, ids = list.upcoming(cache.trackDetails(list.idsWithoutArtist()))
-		pos = kkboxCurrentPosition(all, ids, ctx.track, artist, title)
+		q = list.upcoming(cache.trackDetails(list.ids()), cache.albumForms())
+		pos = kkboxCurrentPosition(q, ctx.track, artist, title)
 	}
 	if pos < 0 {
 		// 换了列表、上下文还没落盘(见 kkboxCurrentPosition):KKBOX 打开新列表时刚拉过它的曲目表,按写入时间
 		// 找最近几份里有这首的那份。
-		all, pos = cache.newestListWith(artist, title)
+		q, pos = cache.newestListWith(artist, title)
 	}
 	if pos < 0 {
 		// 新列表的曲目表可能也还没写进缓存:值得再读一次。
 		return nil, false, "neither the saved " + ctx.kind + " nor a recently cached track list has the current track"
 	}
-	cur := all[pos]
-	if loosenEnrichKey(cur.artist) != loosenEnrichKey(artist) {
-		// 歌手名拼法跟 KKBOX 报的对不上,照这个拼法预解析就是白解析(见文件头注)。重读也不会变。
-		kkboxUpcomingNote("artist:"+ctx.id, "kkbox upcoming: the track list names the artist %q but the player reports %q; falling back to album prefetch", cur.artist, artist)
+	if !q.spelledAs(pos, artist) {
+		// 歌手名哪种写法都跟 KKBOX 报的对不上:多半是同名的另一首,照这个拼法预解析就是白解析(见文件头注)。重读也不会变。
+		kkboxUpcomingNote("artist:"+ctx.id, "kkbox upcoming: the track list names the artist %q but the player reports %q; falling back to album prefetch", q.tracks[pos].artist, artist)
 		return nil, false, ""
 	}
+	q.adoptObserved(pos, artist)
 	if pb.shuffle {
-		return shuffleCandidates(len(all), pos, func(i int) (upcomingTrack, bool) { return all[i], true }), true, ""
+		picked := shuffleCandidates(len(q.tracks), pos, func(i int) (upcomingTrack, bool) { return q.tracks[i], true })
+		var idx []int
+		for _, t := range picked {
+			for i := range q.tracks {
+				if q.tracks[i] == t {
+					idx = append(idx, i)
+					break
+				}
+			}
+		}
+		return q.picked(idx), true, ""
 	}
-	if pos+1 >= len(all) {
+	if pos+1 >= len(q.tracks) {
 		return nil, false, ""
 	}
-	return all[pos+1 : min(pos+1+n, len(all))], true, ""
+	var idx []int
+	for i := pos + 1; i < min(pos+1+n, len(q.tracks)); i++ {
+		idx = append(idx, i)
+	}
+	return q.picked(idx), true, ""
 }
 
 // kkboxCurrentPosition 找播放器报的这首在曲目表里的位置;找不到返回 -1。
@@ -175,20 +195,19 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 // (实测换歌后 1.2 秒还是上一首、3.7 秒已是这一首,也有等 12 秒还停在上一首的)。列表本身换得少,所以 id 指的那首歌名对不上时,
 // 在同一份列表里按歌名找;同名的不止一首时要歌手也对上的那首,都对不上就取第一首(交给调用方的歌手校验去拒)。
 // 列表里压根没有这首 = 换了列表、上下文还没落盘,调用方隔一会儿重读。
-func kkboxCurrentPosition(all []upcomingTrack, ids []string, trackID, artist, title string) int {
+func kkboxCurrentPosition(q kkboxQueue, trackID, artist, title string) int {
 	wantTitle := loosenEnrichKey(title)
-	for i, id := range ids {
-		if id == trackID && loosenEnrichKey(all[i].title) == wantTitle {
+	for i, id := range q.ids {
+		if id == trackID && loosenEnrichKey(q.tracks[i].title) == wantTitle {
 			return i
 		}
 	}
-	wantArtist := loosenEnrichKey(artist)
 	first := -1
-	for i, t := range all {
+	for i, t := range q.tracks {
 		if loosenEnrichKey(t.title) != wantTitle {
 			continue
 		}
-		if loosenEnrichKey(t.artist) == wantArtist {
+		if q.spelledAs(i, artist) {
 			return i
 		}
 		if first < 0 {
@@ -379,6 +398,44 @@ func kkboxArtistName(t kkboxTrack, fallback string) string {
 	return strings.Join(names, ", ")
 }
 
+// kkboxArtistSpellings:这首歌播放器可能报的歌手写法,第一个是 kkboxArtistName。列表里的 roles 第一位主唱正是
+// artist.name 去掉括号别名(「田馥甄」对「田馥甄 (Hebe)」)时,详情里可能是 artist.name 那种写法,补上第二个(见文件头注),
+// 并返回判这张专辑用哪种写法的键(kkboxAlbumFormKey);只有一种写法时键为空。第二种只拿来认当前这首、按专辑证据改选,
+// 不另外预解析。详情本身(fromDetails)就是播放器报的那一份,不猜。
+func kkboxArtistSpellings(t kkboxTrack, fallback, album string, fromDetails bool) ([]string, string) {
+	primary := kkboxArtistName(t, fallback)
+	if fromDetails || t.Artist == nil || t.ArtistRoles == nil || len(t.ArtistRoles.Main) == 0 {
+		return []string{primary}, ""
+	}
+	first := t.ArtistRoles.Main[0].Name
+	if first == "" || t.Artist.Name == first || !strings.HasPrefix(t.Artist.Name, first+" (") {
+		return []string{primary}, ""
+	}
+	alt := t
+	roles := *t.ArtistRoles
+	roles.Main = append([]kkboxArtist{{Name: t.Artist.Name}}, t.ArtistRoles.Main[1:]...)
+	alt.ArtistRoles = &roles
+	return []string{primary, kkboxArtistName(alt, fallback)}, kkboxAlbumFormKey(first, album)
+}
+
+// kkboxAlbumFormKey:「这张专辑的第一位主唱带不带括号别名」按这个键记。stem 是不带别名的写法。
+func kkboxAlbumFormKey(stem, album string) string {
+	return loosenEnrichKey(stem) + "\x00" + loosenEnrichKey(album)
+}
+
+// kkboxDetailForm:一条详情里第一位主唱是不是带 artist.name 的括号别名;不是这种形态的 ok=false。
+func kkboxDetailForm(t kkboxTrack) (key string, alias, ok bool) {
+	if t.Artist == nil || t.ArtistRoles == nil || len(t.ArtistRoles.Main) == 0 || t.Album == nil {
+		return "", false, false
+	}
+	an, first := t.Artist.Name, t.ArtistRoles.Main[0].Name
+	i := strings.Index(an, " (")
+	if i <= 0 || (first != an && first != an[:i]) {
+		return "", false, false
+	}
+	return kkboxAlbumFormKey(an[:i], t.Album.Name), first == an, true
+}
+
 // parseKKBOXTrackList 解一份曲目表接口响应;没有曲目算没拿到。
 func parseKKBOXTrackList(body []byte) (kkboxTrackList, bool) {
 	var r kkboxTrackList
@@ -388,42 +445,101 @@ func parseKKBOXTrackList(body []byte) (kkboxTrackList, bool) {
 	return r, true
 }
 
-// idsWithoutArtist:自己不带歌手、要去批量详情里找的那些曲目。
-func (l kkboxTrackList) idsWithoutArtist() []string {
-	var ids []string
+// ids:列表里全部曲目的 id,拿去曲目详情里找(详情是播放器报的那一份,见文件头注)。
+func (l kkboxTrackList) ids() []string {
+	ids := make([]string, 0, len(l.Data.Tracks))
 	for _, t := range l.Data.Tracks {
-		if !t.hasOwnArtist() {
-			ids = append(ids, t.ID)
-		}
+		ids = append(ids, t.ID)
 	}
 	return ids
 }
 
-// upcoming 换成预解析用的曲目表,ids 与之一一对应。自己不带歌手的曲目用 details(批量详情)里的那条;详情里也没有的
-// 退回专辑歌手 —— 跟 KKBOX 报的未必一致,当前这首对不上时由调用方退回同专辑预取。
-func (l kkboxTrackList) upcoming(details map[string]kkboxTrack) ([]upcomingTrack, []string) {
+// kkboxQueue 是换成预解析用的曲目表:tracks 的歌手是第一种写法,ids / spellings / formKeys 与之一一对应。
+// 两种写法的 spellings 是 [列表里的写法, artist.name 那种写法],formKeys 是判这张专辑用哪种的键。
+type kkboxQueue struct {
+	tracks    []upcomingTrack
+	ids       []string
+	spellings [][]string
+	formKeys  []string
+}
+
+// upcoming 换成预解析用的曲目表。详情里有这首就用详情那条(播放器报的就是它);没有就用列表里自带的,自己也不带歌手的
+// 退回专辑歌手 —— 跟 KKBOX 报的未必一致,当前这首对不上时由调用方退回同专辑预取。两种写法的,forms(专辑 → 带不带别名)
+// 里有这张专辑就只留那一种。
+func (l kkboxTrackList) upcoming(details map[string]kkboxTrack, forms map[string]bool) kkboxQueue {
 	albumArtist := ""
 	if l.Data.Artist != nil {
 		albumArtist = l.Data.Artist.Name
 	}
-	tracks := make([]upcomingTrack, 0, len(l.Data.Tracks))
-	ids := make([]string, 0, len(l.Data.Tracks))
+	q := kkboxQueue{
+		tracks:    make([]upcomingTrack, 0, len(l.Data.Tracks)),
+		ids:       make([]string, 0, len(l.Data.Tracks)),
+		spellings: make([][]string, 0, len(l.Data.Tracks)),
+		formKeys:  make([]string, 0, len(l.Data.Tracks)),
+	}
 	for _, t := range l.Data.Tracks {
-		if !t.hasOwnArtist() {
-			if d, ok := details[t.ID]; ok && d.hasOwnArtist() {
-				t = d
-			}
+		fromDetails := false
+		if d, ok := details[t.ID]; ok && d.hasOwnArtist() {
+			t, fromDetails = d, true
 		}
 		album := l.Data.Name
 		if t.Album != nil && t.Album.Name != "" {
 			album = t.Album.Name
 		}
-		tracks = append(tracks, upcomingTrack{
-			artist: kkboxArtistName(t, albumArtist), title: t.Name, album: album, duration: t.DurationMs / 1000,
-		})
-		ids = append(ids, t.ID)
+		names, formKey := kkboxArtistSpellings(t, albumArtist, album, fromDetails)
+		q.tracks = append(q.tracks, upcomingTrack{artist: names[0], title: t.Name, album: album, duration: t.DurationMs / 1000})
+		q.ids = append(q.ids, t.ID)
+		q.spellings = append(q.spellings, names)
+		q.formKeys = append(q.formKeys, formKey)
 	}
-	return tracks, ids
+	for k, alias := range forms {
+		q.settleForm(k, alias)
+	}
+	return q
+}
+
+// settleForm:这张专辑用哪种写法已经有证据,两种写法的那几首只留这一种。
+func (q *kkboxQueue) settleForm(key string, alias bool) {
+	for i, k := range q.formKeys {
+		if k != key || len(q.spellings[i]) < 2 {
+			continue
+		}
+		pick := q.spellings[i][0]
+		if alias {
+			pick = q.spellings[i][1]
+		}
+		q.spellings[i] = []string{pick}
+		q.tracks[i].artist = pick
+		q.formKeys[i] = ""
+	}
+}
+
+// adoptObserved:此刻在放的第 pos 首还是两种写法时,播放器报的那种就是这张专辑的写法。
+func (q *kkboxQueue) adoptObserved(pos int, artist string) {
+	if len(q.spellings[pos]) < 2 {
+		return
+	}
+	q.settleForm(q.formKeys[pos], loosenEnrichKey(q.spellings[pos][1]) == loosenEnrichKey(artist))
+}
+
+// spelledAs:第 i 首的某种写法跟播放器报的对得上。
+func (q kkboxQueue) spelledAs(i int, artist string) bool {
+	want := loosenEnrichKey(artist)
+	for _, n := range q.spellings[i] {
+		if loosenEnrichKey(n) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// picked 把选出来的这几首交出去,每首一种写法(有专辑证据的已经按证据改过,见 settleForm)。
+func (q kkboxQueue) picked(idx []int) []upcomingTrack {
+	out := make([]upcomingTrack, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, q.tracks[i])
+	}
+	return out
 }
 
 // ---- Chromium 磁盘缓存 ----
@@ -589,7 +705,7 @@ func isKKBOXTrackListPath(path string) bool {
 }
 
 // newestListWith 从最近写入的几份曲目表里找有这首(歌名 + 歌手,见 kkboxCurrentPosition)的那份。
-func (c kkboxCache) newestListWith(artist, title string) ([]upcomingTrack, int) {
+func (c kkboxCache) newestListWith(artist, title string) (kkboxQueue, int) {
 	tried := 0
 	for _, e := range c {
 		if tried >= kkboxRecentListLimit {
@@ -607,12 +723,12 @@ func (c kkboxCache) newestListWith(artist, title string) ([]upcomingTrack, int) 
 		if !ok {
 			continue
 		}
-		all, ids := l.upcoming(c.trackDetails(l.idsWithoutArtist()))
-		if pos := kkboxCurrentPosition(all, ids, "", artist, title); pos >= 0 {
-			return all, pos
+		q := l.upcoming(c.trackDetails(l.ids()), c.albumForms())
+		if pos := kkboxCurrentPosition(q, "", artist, title); pos >= 0 {
+			return q, pos
 		}
 	}
-	return nil, -1
+	return kkboxQueue{}, -1
 }
 
 // relatedTrackList 在自动续播的曲目表里找 data.id 是 id 的那份。地址里是开播那首歌、不是上下文 id,只能逐份解开看;
@@ -633,8 +749,8 @@ func (c kkboxCache) relatedTrackList(id string) (kkboxTrackList, bool) {
 	return kkboxTrackList{}, false
 }
 
-// trackDetails 从批量详情里取这些曲目,id → 详情。一张专辑可能分几批拉,同一首取最新的那份;地址里的 ids 跟要找的
-// 一首都不沾的不解开。
+// trackDetails 从曲目详情里取这些曲目,id → 详情:批量的 `/v2/tracks/?ids=…` 与单首的 `/v2/tracks/<id>`(开播时拉的)。
+// 一张专辑可能分几批拉,同一首取最新的那份;地址跟要找的一首都不沾的不解开。
 func (c kkboxCache) trackDetails(ids []string) map[string]kkboxTrack {
 	if len(ids) == 0 {
 		return nil
@@ -645,7 +761,26 @@ func (c kkboxCache) trackDetails(ids []string) map[string]kkboxTrack {
 	}
 	out := map[string]kkboxTrack{}
 	for _, e := range c {
-		if e.url.Path != kkboxBatchTracksPath || len(out) == len(want) {
+		if len(out) == len(want) {
+			break
+		}
+		if single, ok := strings.CutPrefix(e.url.Path, kkboxBatchTracksPath); ok && single != "" {
+			if !want[single] || hasKey(out, single) {
+				continue
+			}
+			body, ok := e.body()
+			if !ok {
+				continue
+			}
+			var r struct {
+				Data kkboxTrack `json:"data"`
+			}
+			if json.Unmarshal(body, &r) == nil && r.Data.ID == single {
+				out[single] = r.Data
+			}
+			continue
+		}
+		if e.url.Path != kkboxBatchTracksPath {
 			continue
 		}
 		wanted := false
@@ -680,4 +815,79 @@ func (c kkboxCache) trackDetails(ids []string) map[string]kkboxTrack {
 func hasKey[K comparable, V any](m map[K]V, k K) bool {
 	_, ok := m[k]
 	return ok
+}
+
+// kkboxDetailMemo:解析过的曲目详情文件,按路径 + 修改时间记。Chromium 的缓存条目写下之后不再改,一个文件只解析一次。
+var (
+	kkboxDetailMemoMu sync.Mutex
+	kkboxDetailMemo   = map[string]kkboxDetailMemoEntry{}
+)
+
+type kkboxDetailMemoEntry struct {
+	mod    time.Time
+	tracks []kkboxTrack
+}
+
+// detailTracks:一条曲目详情(单首或批量)里的曲目;不是详情接口或解不开返回空。
+func (e kkboxCacheEntry) detailTracks() []kkboxTrack {
+	if !strings.HasPrefix(e.url.Path, kkboxBatchTracksPath) {
+		return nil
+	}
+	kkboxDetailMemoMu.Lock()
+	m, ok := kkboxDetailMemo[e.file]
+	kkboxDetailMemoMu.Unlock()
+	if ok && m.mod.Equal(e.mod) {
+		return m.tracks
+	}
+	var tracks []kkboxTrack
+	if body, ok := e.body(); ok {
+		var many struct {
+			Data []kkboxTrack `json:"data"`
+		}
+		var one struct {
+			Data kkboxTrack `json:"data"`
+		}
+		if json.Unmarshal(body, &many) == nil {
+			tracks = many.Data
+		} else if json.Unmarshal(body, &one) == nil && one.Data.ID != "" {
+			tracks = []kkboxTrack{one.Data}
+		}
+	}
+	kkboxDetailMemoMu.Lock()
+	kkboxDetailMemo[e.file] = kkboxDetailMemoEntry{mod: e.mod, tracks: tracks}
+	kkboxDetailMemoMu.Unlock()
+	return tracks
+}
+
+// albumForms:缓存里全部曲目详情给出的「这张专辑的第一位主唱带不带括号别名」。同一张专辑两种都见过(没实测到过)就不下结论。
+// 顺带把已经不在缓存目录里的文件从 kkboxDetailMemo 里清掉(Chromium 会淘汰旧条目)。
+func (c kkboxCache) albumForms() map[string]bool {
+	out := map[string]bool{}
+	mixed := map[string]bool{}
+	present := make(map[string]bool, len(c))
+	for _, e := range c {
+		present[e.file] = true
+	}
+	kkboxDetailMemoMu.Lock()
+	for f := range kkboxDetailMemo {
+		if !present[f] {
+			delete(kkboxDetailMemo, f)
+		}
+	}
+	kkboxDetailMemoMu.Unlock()
+	for _, e := range c {
+		for _, t := range e.detailTracks() {
+			key, alias, ok := kkboxDetailForm(t)
+			if !ok || mixed[key] {
+				continue
+			}
+			if prev, seen := out[key]; seen && prev != alias {
+				mixed[key] = true
+				delete(out, key)
+				continue
+			}
+			out[key] = alias
+		}
+	}
+	return out
 }

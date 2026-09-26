@@ -68,6 +68,10 @@ struct LyricsDecisionSheet: View {
         // 补全封面 / 链接 / 主色那一轮(collector 的 backfillPeripheralFields):条目原本没词时收下这一轮的歌词,
         // 否则只是一份评估存档。
         case "peripheral-backfill": return L10n.t("补全曲目信息")
+        // 这条的歌词不是自己检索的,是从另一条搬来的(reused_from 记着来源 key):同一段录音在另一张专辑下,
+        // 或 KKBOX 同一首歌的另一种歌手写法(collector 的 kkboxalias.go)。
+        case "cross-album-reuse": return L10n.t("复用其他专辑的同一首")
+        case "artist-alias-reuse": return L10n.t("复用同一首的另一种歌手写法")
         // 兜底显示原始值:collector 那边新增一条路径、这边忘了补译名时,至少还看得出是哪条
         // (而不是空白)。但那就是漏了 —— 这张表跟 collector 里 buildLyricsDecision 的 path
         // 取值必须成对改,的 manual-rematch 就是这么漏出来一个英文串的。
