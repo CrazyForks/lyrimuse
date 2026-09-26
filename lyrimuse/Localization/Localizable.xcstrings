@@ -11862,29 +11862,6 @@
         }
       }
     },
-    "打开配置文件夹" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Config Folder"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开配置文件夹"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打開設定檔案夾"
-          }
-        }
-      }
-    },
     "把「Lyrimuse」拷到剪贴板，粘进申请页的应用名称" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -27764,23 +27741,6 @@
         }
       }
     },
-    "%@，纯文本可直接编辑；外观与快捷键不在里面（它们在 UserDefaults）" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ — plain text, editable directly. Appearance and shortcuts are NOT in here (they live in UserDefaults)."
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@，純文字可直接編輯；外觀與快速鍵不在裡面（它們在 UserDefaults）"
-          }
-        }
-      }
-    },
     "上移" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -28875,52 +28835,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "GPL-3.0"
-          }
-        }
-      }
-    },
-    "不含账号与密钥" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No account tokens or secrets"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不含账号与密钥"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不含帳號與金鑰"
-          }
-        }
-      }
-    },
-    "含账号凭据，不要发给别人；要连外观、快捷键一起搬走，用「备份与迁移」" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Contains account credentials — don't share it. To bring appearance and shortcuts along, use Backup & Migrate."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "含账号凭据，不要发给别人；要连外观、快捷键一起搬走，用「备份与迁移」"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "含帳號憑證，不要傳給別人；要連外觀、快速鍵一起搬走，請用「備份與遷移」"
           }
         }
       }
@@ -36005,6 +35919,167 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "這段時間的歌曲榜裡沒有這位歌手的歌"
+          }
+        }
+      }
+    },
+    "反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attach this when reporting a problem: logs, crash reports and app state in one file, with account credentials removed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回報問題時請附上：打包記錄檔、當機報告與執行狀態，已移除帳號憑證"
+          }
+        }
+      }
+    },
+    "生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Creates a .zip file. It keeps recently played track names and local file paths, so review it before posting publicly"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會產生一個 .zip 檔案，其中保留最近播放的曲目名稱與本機檔案路徑，公開發佈前可以先解壓縮檢查"
+          }
+        }
+      }
+    },
+    "运行日志" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activity Log"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行日志"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "執行記錄檔"
+          }
+        }
+      }
+    },
+    "%@ · 供自行排查；反馈问题请用上方的「导出诊断」，信息更完整" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · For your own troubleshooting. To report a problem, use Export Diagnostics above; it includes more"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 供自行排查；反馈问题请用上方的「导出诊断」，信息更完整"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 供自行排查；回報問題請用上方的「匯出診斷」，資訊更完整"
+          }
+        }
+      }
+    },
+    "歌词引擎的原始日志，文件较大时会自动归档为 .old；App 界面的日志写入系统日志，可在「控制台」中按 me.yudaotor.lyrimuse 筛选" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The lyrics engine's raw log; it is archived as .old once it grows large. The app's interface logs go to the system log; filter by me.yudaotor.lyrimuse in Console"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歌词引擎的原始日志，文件较大时会自动归档为 .old；App 界面的日志写入系统日志，可在「控制台」中按 me.yudaotor.lyrimuse 筛选"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歌詞引擎的原始記錄檔，檔案較大時會自動封存為 .old；App 介面的記錄寫入系統記錄，可在「主控台」中以 me.yudaotor.lyrimuse 過濾"
+          }
+        }
+      }
+    },
+    "%@ · 纯文本，可直接编辑；外观与快捷键另存于 App 偏好设置，不在此处" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Plain text you can edit directly. Appearance and shortcuts are stored in the app’s preferences, not here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 纯文本，可直接编辑；外观与快捷键另存于 App 偏好设置，不在此处"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 純文字，可直接編輯；外觀與快速鍵另存於 App 偏好設定，不在這裡"
+          }
+        }
+      }
+    },
+    "含账号凭据，请勿分享给他人；需要连同外观与快捷键整体迁移时，请使用「备份与迁移」" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contains account credentials, so don’t share it. To move everything including appearance and shortcuts, use Backup & Migrate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含账号凭据，请勿分享给他人；需要连同外观与快捷键整体迁移时，请使用「备份与迁移」"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "含帳號憑證，請勿分享給他人；需要連同外觀與快速鍵整體遷移時，請使用「備份與遷移」"
           }
         }
       }

@@ -375,7 +375,8 @@ public enum SettingsSearchCatalog {
         about("版权说明", kw: ["版权", "歌词版权"], group: "许可与版权"),
         about("第三方许可", sub: "开源组件与词典", kw: ["许可证", "开源", "license"], group: "许可与版权"),
         about("开源许可证", sub: "GPL-3.0", kw: ["GPL", "许可证", "license"], group: "许可与版权"),
-        about("导出诊断", sub: "不含账号与密钥", kw: ["诊断", "日志", "排查"], group: "诊断与数据"),
+        about("导出诊断", sub: "反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据", kw: ["诊断", "日志", "排查", "反馈"], group: "诊断与数据"),
+        about("运行日志", kw: ["日志", "log", "排查", "访达"], group: "诊断与数据"),
         about("配置文件夹", kw: ["config", "配置", "文件夹", "路径"], group: "诊断与数据"),
 
         // ---- 账号 ----

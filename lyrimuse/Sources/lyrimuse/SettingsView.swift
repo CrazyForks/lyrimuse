@@ -6375,20 +6375,43 @@ private struct AboutSettingsTab: View {
             // collector 日志一直写得比较完整,但 App 自己的日志全在系统统一日志里,普通人不会用
             // Console.app 去查。这里一键把两边日志+关键状态(权限/常驻服务/各功能是否已配置,不含任何
             // token 原始值)汇总成一份文本存到桌面,方便贴进 issue 或者发给开发者。
+            // 导出只去掉账号凭据,曲目名和本机路径照样在里面(家目录只在崩溃报告那段改写成 ~),
+            // 所以 help 要说清这一点,副标题不能写成「已脱敏」。
             SettingsRow(
                 icon: "doc.text.magnifyingglass",
                 title: L10n.t("导出诊断"),
-                subtitle: L10n.t("不含账号与密钥")
+                subtitle: L10n.t("反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据"),
+                help: L10n.t("生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看")
             ) {
                 Button(L10n.t("导出…")) {
                     DiagnosticsExporter.exportInteractively()
                 }
             }
             CardDivider()
+            // 原始日志只在访达里选中,不在 App 里做查看界面(见 15 章「不做设置页实时日志视图」)。
+            // 这一行给自己排查的人;反馈问题要的是导出诊断(多了 App 侧日志、崩溃报告和运行状态),副标题把人引过去。
+            // App 自己的日志走系统统一日志,不在这个文件里。
+            SettingsRow(
+                icon: "doc.plaintext",
+                title: L10n.t("运行日志"),
+                subtitle: String(format: L10n.t("%@ · 供自行排查；反馈问题请用上方的「导出诊断」，信息更完整"),
+                                 "~/Library/Logs/" + LyrimuseIdentity.current.logFileName),
+                help: L10n.t("歌词引擎的原始日志，文件较大时会自动归档为 .old；App 界面的日志写入系统日志，可在「控制台」中按 me.yudaotor.lyrimuse 筛选")
+            ) {
+                Button(L10n.t("在访达中显示")) {
+                    let url = LogFiles.collector
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } else {
+                        NSWorkspace.shared.open(url.deletingLastPathComponent())
+                    }
+                }
+            }
+            CardDivider()
             // 这一行**不是备份手段** —— 它是给拿 dotfiles/chezmoi 管机器的人直接看活配置的入口,
-            // 跟"备份/恢复"没有因果关系,所以不放进「备份与迁移」那张卡。放过去的直接后果是:它的
-            // 按钮会跟备份行菜单里那个一字不差地都叫「在访达中显示」,却打开**两个不同目录**(备份
-            // 目录 vs 这个活配置目录),两个都没有二次确认 —— 用户把活配置当备份去拷/删就出事。
+            // 跟"备份/恢复"没有因果关系,所以不放进「备份与迁移」那张卡。放过去的直接后果是:两个
+            // 同叫「在访达中显示」的按钮挨在一起,却打开**两个不同目录**(备份目录 vs 这个活配置目录),
+            // 两个都没有二次确认 —— 用户把活配置当备份去拷/删就出事。
             // 跟「导出诊断信息」放一起更合适:都是"给要自己动手的人看内部状态"。
             //
             // 副标题里"外观和快捷键不在里面"这句**必须常显**,不能收进 help 气泡:它们存在
@@ -6398,11 +6421,11 @@ private struct AboutSettingsTab: View {
                 icon: "folder",
                 title: L10n.t("配置文件夹"),
                 // 路径按变体显示(正式 ~/.config/lyrimuse,Dev ~/.config/lyrimuse-dev),别让 Dev 的用户对着一个错的路径找文件。
-                subtitle: String(format: L10n.t("%@，纯文本可直接编辑；外观与快捷键不在里面（它们在 UserDefaults）"),
+                subtitle: String(format: L10n.t("%@ · 纯文本，可直接编辑；外观与快捷键另存于 App 偏好设置，不在此处"),
                                  "~/.config/" + LyrimuseIdentity.configDirName),
-                help: L10n.t("含账号凭据，不要发给别人；要连外观、快捷键一起搬走，用「备份与迁移」")
+                help: L10n.t("含账号凭据，请勿分享给他人；需要连同外观与快捷键整体迁移时，请使用「备份与迁移」")
             ) {
-                Button(L10n.t("打开配置文件夹")) {
+                Button(L10n.t("在访达中显示")) {
                     NSWorkspace.shared.activateFileViewerSelecting([ConfigPortability.configFolderURL])
                 }
             }
