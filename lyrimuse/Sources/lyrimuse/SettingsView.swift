@@ -1886,9 +1886,10 @@ private struct LyricsSettingsTab: View {
                     // 必须 `.fixedSize()`,否则这个数字会竖着一个字一个字往下叠:旁边的 Picker
                     // 早就用 `.fixedSize()` 护住了自己的宽度(见上面那行),HStack 空间紧张时只会挤
                     // 没有保护的那个,数字被压到比单字符还窄,SwiftUI 只能逐字换行。
+                    // 用正常文字颜色:整段灰色读起来像这一项被禁用了。只在值为 0(没偏移)时淡一档。
                     Text("\(AppSettings.signedSeconds(ms: scopedOffsetMs))\(L10n.t("秒"))")
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(scopedOffsetMs == 0 ? Color.secondary : Color.primary)
                         .fixedSize()
                     // 数值必须摆在 Stepper 外面 —— SettingsRow 给尾部控件统一套了
                     // .labelsHidden(),而 Stepper 是把数值画在 label 里的,放进去会被

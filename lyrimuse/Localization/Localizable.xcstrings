@@ -4738,61 +4738,6 @@
         }
       }
     },
-    "以下两项只对「灵动岛歌词」生效；桌面悬浮歌词、菜单栏歌词和歌词窗口不受影响" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The two options below apply only to Notch Lyrics; the desktop overlay, menu bar lyrics and the Lyrics window are unaffected"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以下兩項只對「動態島歌詞」生效；桌面浮動歌詞、選單列歌詞和歌詞視窗不受影響"
-          }
-        }
-      }
-    },
-    "以下两项只对「桌面悬浮歌词」生效；灵动岛、菜单栏歌词和歌词窗口不受影响" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The two options below apply only to the Desktop Overlay; the Notch, menu bar lyrics and the Lyrics window are unaffected"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以下兩項只對「桌面浮動歌詞」生效；動態島、選單列歌詞和歌詞視窗不受影響"
-          }
-        }
-      }
-    },
-    "以下两项对「桌面悬浮歌词」和「灵动岛歌词」同时生效；菜单栏歌词和歌词窗口不受影响" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "These apply to both the desktop floating lyrics and the notch lyrics; the menu bar lyrics and the lyrics window are unaffected."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以下两项对「桌面悬浮歌词」和「灵动岛歌词」同时生效；菜单栏歌词和歌词窗口不受影响"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "以下兩項對「桌面浮動歌詞」和「動態島歌詞」同時生效；選單列歌詞和歌詞視窗不受影響"
-          }
-        }
-      }
-    },
     "企业微信" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8250,29 +8195,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在飛書群組裡：設定 → 群機器人 → 新增機器人 → 自訂機器人，建立後拷貝 Webhook 網址。想多一層驗證可以開啟「簽章驗證」，把金鑰填入下面的「簽章金鑰」"
-          }
-        }
-      }
-    },
-    "填好这两项就会自动推送到网页" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fill in both fields and pushing to the web starts automatically"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "填好这两项就会自动推送到网页"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "填好這兩項就會自動推播到網頁"
           }
         }
       }
@@ -12994,29 +12916,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "資料來源"
-          }
-        }
-      }
-    },
-    "数据源留空时自动判定：两个账号都配了优先用 Last.fm，只配了一个就用那个" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "With no source chosen: Last.fm if both accounts are set up, otherwise whichever one is"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "数据源留空时自动判定：两个账号都配了优先用 Last.fm，只配了一个就用那个"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "資料來源留空時自動判定：兩個帳號都設定了就優先用 Last.fm，只設定了一個就用那個"
           }
         }
       }
@@ -29590,23 +29489,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "底部置中"
-          }
-        }
-      }
-    },
-    "当初只有 1~3 个歌词源应答就定下了这份歌词。想换一份就逐条点「重新自动匹配」" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Chosen when only 1–3 lyric sources answered. To swap one, use “Re-match automatically” on that row"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "當初只有 1～3 個歌詞來源回應就決定了這份歌詞。想換一份就逐筆點「重新自動比對」"
           }
         }
       }

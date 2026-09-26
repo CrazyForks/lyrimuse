@@ -150,7 +150,7 @@ func runPlayerIdentityTests() {
         typealias T = TrustedPlayers
         let trusted = ["com.foobar.mac": "Foobar2000", "com.some.player": ""]
 
-        // 内置五个:跟信任列表无关,永远认(空名单也认)
+        // 内置播放器:跟信任列表无关,永远认(空名单也认)
         for player in PlaybackPlayer.allCases where player != .auto {
             expectEqual(T.isAccepted(player.bundleIdentifier, trusted: [:]), true,
                         "信任列表: 内置播放器 \(player) 不依赖名单")
@@ -984,7 +984,7 @@ func runPlayerIdentityTests() {
         expectEqual(offer(bundle: ""), false, "发现新播放器: 空 bundle id 不提议")
         expectEqual(offer(bundle: "  "), false, "发现新播放器: 只有空白的 bundle id 不提议")
         expectEqual(offer(age: -5), true, "发现新播放器: 时钟回拨当新鲜,宁可多提示")
-        // 内置五个播放器一律不提议(走真实的 isAccepted,名单传空)
+        // 内置播放器一律不提议(走真实的 isAccepted,名单传空)
         for player in PlaybackPlayer.allCases where player != .auto {
             expectEqual(A.shouldOffer(bundleID: player.bundleIdentifier, artist: "PRINCE",
                                       album: "Dirty Mind", observedAt: now, isAutoDetect: true,

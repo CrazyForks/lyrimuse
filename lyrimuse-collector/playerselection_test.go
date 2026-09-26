@@ -74,7 +74,7 @@ func TestIsTrackedMultiSelect(t *testing.T) {
 		t.Error("多选 {qq,kugou} 时,没选中的 spotify 不该被认")
 	}
 
-	// 多选 {qq_music, auto}：auto 是超集,内置五个播放器全认（不局限于 qq 一个）,
+	// 多选 {qq_music, auto}：auto 是超集,内置播放器全认（不局限于 qq 一个）,
 	// 陌生 App 仍然不认(除非进了信任列表,这里没配)。
 	featuresRef().Players = map[string]bool{playerQQMusic: true, playerAuto: true}
 	if !newPoller(spotifyBundleID).isTracked() {

@@ -185,7 +185,7 @@ func getSpotifyState(ctx context.Context) (map[string]any, bool) {
 //   - 其它情况(单选或多选了 QQ音乐/网易云/Spotify/酷狗/汽水音乐中的若干个,同样没有
 //     auto)→ getMultiSelectedState,核对 media-control 报的系统级 Now Playing 焦点
 //     是不是落在选中的这个子集里,是的话才认(跟 getAutoDetectedState 同一套"系统只有
-//     一个焦点"的道理,只是准入名单从"内置五个+信任列表"收窄成"用户这次选中的这几个")。
+//     一个焦点"的道理,只是准入名单从"内置播放器+信任列表"收窄成"用户这次选中的这几个")。
 //
 // 后两条路上还压着一条**不分配置**的规则:认出在播的是 Apple Music 或 Spotify 时,曲目与
 // 位置整份换成它自己的 AppleScript 那份(refineAppleMusicState / refineSpotifyState)。
@@ -443,7 +443,7 @@ func isKnownPlayerBundleID(bundleID string) bool {
 // mediaType 这条路走不通,顺手记下别再试:酷狗压根不报这个字段,Arc 也不报(不是报 Video,
 // 是没有这个键),只有 Apple Music 有。
 //
-// 内置五个播放器不走这条 —— 它们各有既有守卫(Spotify 广告走 isAdBreak),不在范围内。
+// 内置播放器不走这条 —— 它们各有既有守卫(Spotify 广告走 isAdBreak),不在范围内。
 func trustedPlaybackNotASong(bundleID, artist, album string) bool {
 	// 内置播放器只拦一种:playerArtistArrivesLate 的(KKBOX)开播先发一帧没有歌手的,那一帧当作还没准备好。
 	// 它当信任播放器时本来就被下面那条挡着,内置化不能把它放进来。专辑名对内置播放器不作要求。

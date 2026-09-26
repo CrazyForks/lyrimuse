@@ -234,9 +234,6 @@
 "从现在起，手动选定的歌不再自动锁定" = "From now on, manually picked songs are no longer locked automatically";
 "从自动备份恢复" = "Restore from Auto Backup";
 "从资料库删除" = "Delete from Library";
-"以下两项只对「桌面悬浮歌词」生效；灵动岛、菜单栏歌词和歌词窗口不受影响" = "The two options below apply only to the Desktop Overlay; the Notch, menu bar lyrics and the Lyrics window are unaffected";
-"以下两项只对「灵动岛歌词」生效；桌面悬浮歌词、菜单栏歌词和歌词窗口不受影响" = "The two options below apply only to Notch Lyrics; the desktop overlay, menu bar lyrics and the Lyrics window are unaffected";
-"以下两项对「桌面悬浮歌词」和「灵动岛歌词」同时生效；菜单栏歌词和歌词窗口不受影响" = "These apply to both the desktop floating lyrics and the notch lyrics; the menu bar lyrics and the lyrics window are unaffected.";
 "以下播放器尚未安装，可提前选择，安装后自动生效" = "These players aren't installed yet. Select one now and it takes effect once installed.";
 "企业微信" = "WeCom";
 "会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题" = "Saves the current text, background, and stroke colors as a theme you can reapply anytime";
@@ -491,7 +488,6 @@
 "在飞书群里：设置 → 群机器人 → 添加机器人 → 自定义机器人，创建后复制 Webhook 地址。想加一层校验可以开启「签名校验」，把密钥填进下面的「签名密钥」" = "In your Feishu group: Settings → Group Bots → Add Bot → Custom Bot, then copy the webhook URL after creating it. For an extra layer of verification, enable “Signature Verification” and enter the secret in the “Signature Secret” field below";
 "域名解析失败（DNS），请求根本没发出去——常见于 VPN / 公司网络接管了 DNS；浏览器能开网页不代表这里能通" = "DNS lookup failed, so no request was ever sent. Common when a VPN or corporate network takes over DNS; a browser loading pages doesn't mean this can get through.";
 "域名解析失败（DNS）：%@" = "DNS lookup failed: %@";
-"填好这两项就会自动推送到网页" = "Fill in both fields and pushing to the web starts automatically";
 "声波" = "Waveform";
 "备份与迁移" = "Backup & Migrate";
 "备份到「%@」，还没存过" = "Backing up to “%@” — nothing saved yet";
@@ -674,7 +670,6 @@
 "开：短于 30 秒的曲目也 scrobble，听过一半就记。\n关：不记（Last.fm 官方规则）。" = "On: tracks under 30 seconds are scrobbled too, once half-played.\nOff: they aren't (Last.fm's rule).";
 "引号" = "Quote";
 "当初为什么选了这份歌词：当时的候选、得分与拒绝原因" = "Why these lyrics were chosen: the candidates, scores and rejections at decision time";
-"当初只有 1~3 个歌词源应答就定下了这份歌词。想换一份就逐条点「重新自动匹配」" = "Chosen when only 1–3 lyric sources answered. To swap one, use “Re-match automatically” on that row";
 "当前使用" = "In use";
 "当前启用的其余源没有应答：%@" = "Other enabled sources did not answer: %@";
 "当前歌词的出处" = "Where the current lyrics came from";
@@ -808,7 +803,6 @@
 "放不下的句子会横向滚动，鼠标悬停也能看到完整的这一行" = "Lines too long to fit scroll horizontally; hover to see the full line";
 "放弃坏文件并重建" = "Discard and Rebuild";
 "数据源" = "Data Source";
-"数据源留空时自动判定：两个账号都配了优先用 Last.fm，只配了一个就用那个" = "With no source chosen: Last.fm if both accounts are set up, otherwise whichever one is";
 "整份配置都在这里，纯文本可直接编辑；里面含账号凭据，不要发给别人" = "Everything lives here in plain text you can edit directly. It holds your account credentials, so don't send it to anyone";
 "整行时间轴" = "Line timing";
 "文件里包含账号登录凭证和密钥，妥善保管，不要发给别人" = "This file contains your account credentials and keys. Keep it safe and don't send it to anyone";

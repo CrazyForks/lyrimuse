@@ -752,7 +752,7 @@ public enum MediaControlClient {
     }
 
     private static func fetchAutoDetectedSnapshot() -> MediaControlSnapshot? {
-        // 闸门 = 内置五个播放器 + 用户显式信任的未知播放器(见 TrustedPlayers)。
+        // 闸门 = 内置播放器 + 用户显式信任的未知播放器(见 TrustedPlayers)。
         // 跟 collector 的 isAcceptedPlayerBundleID 是同一套语义,两侧必须同时改。
         //
         // 三条 nil 出口都先过一次 `appleMusicSnapshotAfterFocusLost`:
@@ -787,7 +787,7 @@ public enum MediaControlClient {
     /// 那道守卫"album 为空"正是触发广告复核的唯一入口,先补上等于把广告检测整个绕过去
     /// (广告的 album 也是空的)。顺序反了不会报错,只会让广告悄悄进来。
     ///
-    /// 只补内置五个播放器之外、走信任列表进来的那条路 —— 探针缓存本来也只在 YouTube Music
+    /// 只补内置播放器之外、走信任列表进来的那条路 —— 探针缓存本来也只在 YouTube Music
     /// 的标签页上才会有值(key 还带着曲目身份),但把调用点限制在这一支,读代码时不用去
     /// 推理"Apple Music 会不会被它改到"。
     private static func snapshotWithProbedAlbum(_ snapshot: MediaControlSnapshot)

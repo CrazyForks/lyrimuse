@@ -28,7 +28,7 @@ public enum UnknownPlayerAlert {
     ///  3. 歌手名**和**专辑名都非空 —— 跟 TrustedPlayers.notASong 同判据(**同样 trim 后判空**)。
     ///     少了这条会让用户去点一个必定没反应的按钮:YouTube 视频就是 artist 有(频道名)、
     ///     album 恒空这个形状,信任之后照样被那道守卫两侧都丢掉,零变化;
-    ///  4. 还没被接受 —— 内置五个 + 已信任的都不提。
+    ///  4. 还没被接受 —— 内置播放器 + 已信任的都不提。
     public static func shouldOffer(
         bundleID: String, artist: String, album: String, observedAt: Date,
         isAutoDetect: Bool, now: Date, isAccepted: (String) -> Bool

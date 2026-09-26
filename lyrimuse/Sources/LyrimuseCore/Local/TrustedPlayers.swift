@@ -4,7 +4,7 @@ import Foundation
 ///
 /// ## 为什么是"信任列表"而不是"一律接受"
 ///
-/// 「自动识别」原来只认写死的五个播放器。那道白名单不只挡显示,**也挡打卡**
+/// 「自动识别」原来只认写死的内置播放器。那道白名单不只挡显示,**也挡打卡**
 /// (collector 的 `poller.isTracked`):一律接受等于让 YouTube 视频、播客、网课被当成
 /// 收听写进用户的 Last.fm / ListenBrainz **永久历史**,还会往"设计上永不清理"的歌词
 /// 缓存里灌垃圾条目、白烧全部歌词源的查询。
@@ -62,7 +62,7 @@ public enum TrustedPlayers {
         return false
     }
 
-    /// 「自动识别」下真正的成员判断:内置五个 + 用户信任的。跟 collector 的
+    /// 「自动识别」下真正的成员判断:内置播放器 + 用户信任的。跟 collector 的
     /// `isAcceptedPlayerBundleID` 是同一套语义,两侧必须同时改。
     public static func isAccepted(_ bundleID: String?) -> Bool {
         isAccepted(bundleID, trusted: current)

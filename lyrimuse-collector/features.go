@@ -249,7 +249,7 @@ type featureFlagsFile struct {
 	LaunchLyrimuseOnPlayers []string `json:"launch_lyrimuse_on_players,omitempty"`
 	// TrustedPlayers:用户显式信任的"未知播放器"—— bundle id → 界面显示名。
 	//
-	// 「自动识别」原来只认写死的五个播放器,别的 App 在报 Now Playing 一律当"没有可关心
+	// 「自动识别」原来只认写死的内置播放器,别的 App 在报 Now Playing 一律当"没有可关心
 	// 的播放"。这道白名单不只挡显示,**也挡打卡**(poller.go 的 isTracked):放开它等于
 	// 让 YouTube 视频、播客、网课被当成收听写进用户的 Last.fm/ListenBrainz 永久历史,
 	// 还会往"设计上永不清理"的歌词缓存里灌垃圾条目、白烧全部歌词源的查询。而想靠内容
