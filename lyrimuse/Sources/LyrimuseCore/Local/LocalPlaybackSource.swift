@@ -1027,6 +1027,30 @@ public final class LocalPlaybackSource: ObservableObject {
         bundleID != PlaybackPlayer.kugou.bundleIdentifier
     }
 
+    /// 这个播放器播放中会持续重发准的锚点,外推只是两次重发之间的补间:KKBOX 约每 1.06s 一次、逐次一致,
+    /// 开播第一个却晚约 0.18s。按 cleanExtrapolated 那档 0.4s 的伺服门槛,这 0.18s 整首纠不回来,所以这类播放器
+    /// 偏差过了 `republishedAnchorSnapSecs` 就对齐读数(读数盖了读到的时刻,见 `MediaControlClient.stampsCaptureTime`);
+    /// 暂停那一拍的快照还带着播放时最后那个锚点、真正的暂停锚点晚约 0.2s 才到,见 `pauseAnchorIsStale`。
+    /// 与 collector 的 followsRepublishedAnchors 同一份名单,两边一起改(见 02 章决策 61)。纯函数,selftest 直接覆盖。
+    public nonisolated static func followsRepublishedAnchors(bundleID: String?) -> Bool {
+        bundleID == PlaybackPlayer.kkbox.bundleIdentifier
+    }
+
+    /// 跟随重发锚点的播放器,偏差 EMA 过了这个值就对齐读数(collector 同名常量 followsAnchorSnapSecs)。
+    public nonisolated static let republishedAnchorSnapSecs: Double = 0.1
+
+    /// 播放翻暂停那一拍的冻结值是不是陈旧的:跟随重发锚点的播放器,最近到达的锚点还是播放中发的(播放时最后那个,
+    /// 比暂停早最多一秒),真正的暂停锚点要再过约 0.2s 才到 —— 照它冻结,屏上先往回跳半秒多、再跳回来。
+    /// 这时先按暂停事件冻住的屏上位置停着,等锚点变了再换(见 posHeldPause)。屏上位置没被暂停事件冻住时
+    /// (没看到事件,外推还在往前走)不停:那个值比暂停晚。纯函数,selftest 直接覆盖。
+    public nonisolated static func pauseAnchorIsStale(bundleID: String?, frozenByEvent: Bool,
+                                                      latestAnchorPublishedWhilePaused: Bool) -> Bool {
+        followsRepublishedAnchors(bundleID: bundleID) && frozenByEvent && !latestAnchorPublishedWhilePaused
+    }
+
+    /// 暂停那一拍按屏上位置停住时记下的(那个陈旧锚点的 elapsed, 停住的位置);锚点一变或恢复播放就清掉。
+    private var posHeldPause: (anchorElapsed: Double, ms: Int)?
+
     /// 这个播放器此刻该预置的锚点滞后量;没学到(或学到的太小)时为 0。
     private func anchorLag(forBundleID bundleID: String?) -> Double {
         guard Self.learnsAnchorLag(bundleID: bundleID),
@@ -1758,8 +1782,9 @@ public final class LocalPlaybackSource: ObservableObject {
         // 不然校正只改了内部累加器、UI 用的锚点还在按旧基准外推,校正根本到不了屏幕。
         let (newEMA, snap) = Self.servoDecision(errEMA: posErrEMA, error: reported - predicted, tier: tier)
         posErrEMA = newEMA
-        if snap {
-            trackPosSeconds = tier == .precise ? reported : predicted + newEMA
+        let followsAnchors = Self.followsRepublishedAnchors(bundleID: lastSnapshot?.bundleIdentifier)
+        if snap || (followsAnchors && abs(newEMA) > Self.republishedAnchorSnapSecs) {
+            trackPosSeconds = tier == .precise || followsAnchors ? reported : predicted + newEMA
             posErrEMA = 0
             return (trackPosSeconds, true)
         }
@@ -2844,6 +2869,7 @@ public final class LocalPlaybackSource: ObservableObject {
     private func applyPosition(snapshot: MediaControlSnapshot, key: String, trackChanged: Bool, previousKey: String,
                                isSpotifyNative: Bool, isAdBreak: Bool, now: Date) {
         let playing = snapshot.playing == true
+        if playing || trackChanged { posHeldPause = nil }
         // 网页探针的每首额度换歌就重开,不管这一拍在不在播、有没有时长。别挪进下面 `if playing, let duration` 那支:
         // 页面内换歌的头一拍常常还没有时长,跳过这一步,探针就还记着上一次探过的 key,A → B → A 切回来时一次都不探。
         if trackChanged { env.browserProbeTrackChanged(previousKey, key) }
@@ -3075,6 +3101,12 @@ public final class LocalPlaybackSource: ObservableObject {
                 pauseShownMs = anchor.extrapolatedPositionMs(now: now)
                 pauseAnchorWasFrozenByEvent = anchor.rate == 0
                 self.anchor = nil
+                if let shown = pauseShownMs, let stale = snapshot.anchorElapsedTime,
+                   Self.pauseAnchorIsStale(bundleID: snapshot.bundleIdentifier, frozenByEvent: pauseAnchorWasFrozenByEvent,
+                                           latestAnchorPublishedWhilePaused: env.latestAnchorPublishedWhilePaused()) {
+                    posHeldPause = (stale, shown)
+                    logger.notice("pause hold: snapshot still carries the last playing anchor \(stale, format: .fixed(precision: 3)), keeping the shown position \(Double(shown) / 1000, format: .fixed(precision: 3)) until the pause anchor lands")
+                }
             }
             // 暂停态里换了曲目(暂停中点了另一首):没有走 resolvePositionSeconds,自然
             // 切歌偏置的归零要在这里补上——新曲的冻结位置是新锚点的值,跟旧偏置无关。
@@ -3116,6 +3148,10 @@ public final class LocalPlaybackSource: ObservableObject {
                    reported: reported, target: target, previous: prev, elapsedSinceSeek: now.timeIntervalSince(at)
                ) {
                 return pausedPositionMs ?? Int(target * 1000)
+            }
+            if let held = posHeldPause {
+                if let anchorNow = snapshot.anchorElapsedTime, abs(anchorNow - held.anchorElapsed) < 0.001 { return held.ms }
+                posHeldPause = nil
             }
             return Int(reported * 1000)
         }()

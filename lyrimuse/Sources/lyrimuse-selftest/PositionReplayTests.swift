@@ -17,6 +17,8 @@ private final class ReplayRig {
     var browserReopened: [String] = []
     /// 网页探针收到的「换歌」通知(新 key),见 BrowserPositionProbe.trackChanged。
     var browserTrackChanges: [String] = []
+    /// 最近到达的锚点是不是在暂停中发布的(线上由 stream watcher 记,见 MediaControlClient.latestAnchorPublishedWhilePaused)。
+    var anchorPublishedWhilePaused = false
     var route: AudioOutputRoute.Current?
     private(set) var source: LocalPlaybackSource!
 
@@ -39,7 +41,8 @@ private final class ReplayRig {
             browserProbeReopenAfterResume: { [unowned self] in self.browserReopened.append($0) },
             spotifyProbeTrackChanged: { _, _ in },
             spotifyProbeConsume: { _, _, _ in nil },
-            spotifyProbeRequestConfirmation: { _ in })
+            spotifyProbeRequestConfirmation: { _ in },
+            latestAnchorPublishedWhilePaused: { [unowned self] in self.anchorPublishedWhilePaused })
         source = LocalPlaybackSource.makeForPositionReplay(environment: env)
     }
 
@@ -95,6 +98,52 @@ func runPositionReplayTests() {
     replayKugouStartCorrectionPublished()
     replaySodaAnchorLag()
     replayBrowserProbeReopensOnEveryTrackChange()
+    replayKKBOXFollowsRepublishedAnchor()
+    replayKKBOXPauseHoldsUntilPauseAnchor()
+}
+
+private let kkboxID = PlaybackPlayer.kkbox.bundleIdentifier
+
+/// KKBOX 开播第一个锚点晚 0.18s(真实位置 = 读数 + 0.18),之后每秒重发的锚点都准:几拍之内对齐读数,
+/// 而不是按 cleanExtrapolated 那档 0.4s 的门槛整首慢 0.18s。读数盖了读到的时刻(capturedAt)。
+@MainActor
+private func replayKKBOXFollowsRepublishedAnchor() {
+    let rig = ReplayRig("kkbox-follow")
+    defer { rig.tearDown() }
+    rig.tick(mediaControl(kkboxID, "屬於我們的故事", anchor: 0.19, elapsed: 0.19, duration: 280, capturedAt: at(0)), at: at(0))
+    for t in stride(from: 2.0, through: 12.0, by: 2) {
+        let truth = 0.37 + t
+        rig.tick(mediaControl(kkboxID, "屬於我們的故事", anchor: truth - 0.3, elapsed: truth, duration: 280, capturedAt: at(t)), at: at(t))
+    }
+    expectEqual(near(rig.shown(at: at(12)), 12.37, 0.01), true,
+                "回放·KKBOX: 开播锚点晚 0.18s,几拍之内对齐每秒重发的准锚点(\(rig.shown(at: at(12)).map { String(format: "%.3f", $0) } ?? "nil"))")
+}
+
+/// KKBOX 暂停:暂停事件先到、冻住外推;这一拍快照里还是播放时最后那个锚点(旧一秒),真正的暂停锚点 0.2s 后才到。
+/// 屏上先停在事件冻住的位置,锚点换了再换 —— 不先往回跳半秒多再跳回来。酷狗照旧按快照冻结值(对照)。
+@MainActor
+private func replayKKBOXPauseHoldsUntilPauseAnchor() {
+    for (bundle, holds) in [(kkboxID, true), (PlaybackPlayer.kugou.bundleIdentifier, false)] {
+        let rig = ReplayRig("pause-hold-\(holds)")
+        defer { rig.tearDown() }
+        for t in stride(from: 0.0, through: 20.0, by: 2) {
+            rig.tick(mediaControl(bundle, "甲乙丙丁", anchor: 60 + t, elapsed: 60 + t, duration: 280, capturedAt: at(t)), at: at(t))
+        }
+        rig.source.replayPlayerStateEvent(at: at(21.0), freeze: true)
+        rig.anchorPublishedWhilePaused = false
+        rig.tick(mediaControl(bundle, "甲乙丙丁", anchor: 80.3, elapsed: 80.3, duration: 280, playing: false, capturedAt: at(21.05)), at: at(21.05))
+        let held = rig.source.pausedPositionMs.map { Double($0) / 1000 }
+        if holds {
+            expectEqual(near(held, 81.0, 0.02), true,
+                        "回放·KKBOX 暂停: 快照还是旧锚点时停在事件冻住的位置(\(held.map { String(format: "%.3f", $0) } ?? "nil"))")
+        } else {
+            expectEqual(near(held, 80.3, 0.001), true, "回放·酷狗暂停: 照旧按快照冻结值(对照)")
+        }
+        rig.anchorPublishedWhilePaused = true
+        rig.tick(mediaControl(bundle, "甲乙丙丁", anchor: 80.85, elapsed: 80.85, duration: 280, playing: false, capturedAt: at(23)), at: at(23))
+        let settled = rig.source.pausedPositionMs.map { Double($0) / 1000 }
+        expectEqual(near(settled, 80.85, 0.001), true, "回放·暂停锚点到了换成它(\(bundle))")
+    }
 }
 
 /// 页面内换歌(YouTube Music 在同一个标签页里切到下一首):新曲头一拍常常还没有时长。

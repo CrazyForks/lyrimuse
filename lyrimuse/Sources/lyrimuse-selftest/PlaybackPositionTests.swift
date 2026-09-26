@@ -1417,6 +1417,21 @@ func runPlaybackPositionTests() {
         expectEqual(T.isMusicVideoType("MUSIC_VIDEO_TYPE_ATV"), false, "MV 类型: 歌曲版不算")
         expectEqual(T.isMusicVideoType(nil), false, "MV 类型: 读不到不算")
 
+        // 跟随重发锚点(KKBOX)的两条判据。
+        let L2 = LocalPlaybackSource.self
+        let kk = PlaybackPlayer.kkbox.bundleIdentifier
+        expectEqual(L2.followsRepublishedAnchors(bundleID: kk), true, "重发锚点: KKBOX 跟随")
+        expectEqual(L2.followsRepublishedAnchors(bundleID: PlaybackPlayer.kugou.bundleIdentifier), false, "重发锚点: 酷狗不跟随")
+        expectEqual(MediaControlClient.stampsCaptureTime(bundleID: kk), true, "重发锚点: KKBOX 读数盖读到的时刻")
+        expectEqual(L2.pauseAnchorIsStale(bundleID: kk, frozenByEvent: true, latestAnchorPublishedWhilePaused: false), true,
+                    "暂停旧锚点: 最近的锚点是播放中发的")
+        expectEqual(L2.pauseAnchorIsStale(bundleID: kk, frozenByEvent: true, latestAnchorPublishedWhilePaused: true), false,
+                    "暂停旧锚点: 暂停锚点已经到了")
+        expectEqual(L2.pauseAnchorIsStale(bundleID: kk, frozenByEvent: false, latestAnchorPublishedWhilePaused: false), false,
+                    "暂停旧锚点: 屏上位置没被事件冻住时不停(那个值比暂停晚)")
+        expectEqual(L2.pauseAnchorIsStale(bundleID: PlaybackPlayer.kugou.bundleIdentifier, frozenByEvent: true,
+                                          latestAnchorPublishedWhilePaused: false), false, "暂停旧锚点: 只管 KKBOX")
+
         // 专辑位写「MV」用的那一位:Apple Music 的 JXA 快照带 isMusicVideo,按曲目记住。
         let decode = { (json: String) in try? JSONDecoder().decode(MediaControlSnapshot.self, from: Data(json.utf8)) }
         expectEqual(decode(#"{"title":"黑白","artist":"方大同","album":"","isMusicVideo":true}"#)?.isMusicVideo, true,

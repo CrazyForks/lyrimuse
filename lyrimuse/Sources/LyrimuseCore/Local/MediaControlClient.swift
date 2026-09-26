@@ -1481,6 +1481,14 @@ public enum MediaControlClient {
         pausedAnchorPublishedAt = whilePaused ? at : nil
     }
 
+    /// 最近到达的那个锚点是不是在暂停中发布的(stream watcher 没看到过锚点时为 false)。暂停那一拍拿它认
+    /// 「快照里的冻结值还是播放时的旧锚点」,见 `LocalPlaybackSource.pauseAnchorIsStale`。
+    public nonisolated static func latestAnchorPublishedWhilePaused() -> Bool {
+        pausedAnchorLock.lock()
+        defer { pausedAnchorLock.unlock() }
+        return pausedAnchorKey != nil
+    }
+
     /// stream watcher 报告:这一行报了 `playing:true`。落在暂停锚点的窗口里就记成它的起播时刻(后到的覆盖先到的)。
     nonisolated static func notePlaybackStarted(at: Date) {
         pausedAnchorLock.lock()
@@ -1812,9 +1820,11 @@ public enum MediaControlClient {
     }
 
     /// 哪些播放器的 media-control 读数带上读到的时刻(见上面那句)。酷狗;Safari 的媒体进程
-    /// (它的外推与页面 `currentTime` 逐拍差 0.001s,读数本身就是真值,晚处理多少就差多少)。
+    /// (它的外推与页面 `currentTime` 逐拍差 0.001s,读数本身就是真值,晚处理多少就差多少);
+    /// 跟随重发锚点的播放器(KKBOX,见 `LocalPlaybackSource.followsRepublishedAnchors`:位置要对齐这份读数,读数得准)。
     public static func stampsCaptureTime(bundleID: String?) -> Bool {
         correctsFromResetAnchor(bundleID: bundleID) || bundleID == safariMediaProcessBundleID
+            || LocalPlaybackSource.followsRepublishedAnchors(bundleID: bundleID)
     }
     public static let safariMediaProcessBundleID = "com.apple.WebKit.GPU"
 

@@ -690,6 +690,15 @@ func naturalAdvanceCorrection(reported, overrun float64) (seed, bias float64, ok
 	return overrun, bias, true
 }
 
+// followsAnchorSnapSecs:跟随重发锚点的播放器,读数与外推差出这么多就对齐读数(见 followsRepublishedAnchors)。
+const followsAnchorSnapSecs = 0.1
+
+// followsRepublishedAnchors:这个播放器播放中会持续重发准的锚点,外推只是两次重发之间的补间(KKBOX 约每 1.06s 一次,
+// 开播第一个晚约 0.18s,之后逐次一致;见 02 章决策 61)。与 App 侧 LocalPlaybackSource.followsRepublishedAnchors 同一份名单,两边一起改。
+func followsRepublishedAnchors(bundle string) bool {
+	return bundle == kkboxBundleID
+}
+
 func (p *poller) updatePosition(now time.Time) (reanchor bool, loopRestart bool) {
 	key := p.cur.key()
 	if key == "" { // nothing playing
@@ -832,6 +841,14 @@ func (p *poller) updatePosition(now time.Time) (reanchor bool, loopRestart bool)
 	default: // steady play → advance by real elapsed wall time
 		p.trackPos += gap * rate
 		reanchor = false
+		// KKBOX 播放中约每秒重发一次准的锚点,开播第一个却晚约 0.18s:读数跟外推差出 followsAnchorSnapSecs 就对齐读数,
+		// 不然开播头一拍读到那个锚点,整首都慢这一截。与 App 侧 LocalPlaybackSource.followsRepublishedAnchors 同一条规则。
+		if followsRepublishedAnchors(p.cur.Bundle) {
+			if reading := seedFromMC(); math.Abs(reading-p.trackPos) > followsAnchorSnapSecs {
+				p.trackPos = reading
+				reanchor = true
+			}
+		}
 	}
 	// 单曲循环重新起播判定,见上面常量注释——用 prevTrackPos/p.trackPos 的连续性判断,
 	// 不看是哪个分支算出来的。命中时从余数重新起播(而不是硬归零),减少跨越边界这一轮的

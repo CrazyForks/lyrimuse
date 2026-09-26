@@ -22,6 +22,8 @@ public struct PlaybackPositionEnvironment {
     public var spotifyProbeTrackChanged: (_ key: String, _ isSpotifyNative: Bool) -> Void
     public var spotifyProbeConsume: (_ key: String, _ rate: Double, _ now: Date) -> Double?
     public var spotifyProbeRequestConfirmation: (_ key: String) -> Void
+    /// 最近到达的锚点是不是在暂停中发布的(见 `MediaControlClient.latestAnchorPublishedWhilePaused`)。
+    public var latestAnchorPublishedWhilePaused: () -> Bool
 
     public init(
         defaults: UserDefaults,
@@ -34,7 +36,8 @@ public struct PlaybackPositionEnvironment {
         browserProbeReopenAfterResume: @escaping (String) -> Void,
         spotifyProbeTrackChanged: @escaping (String, Bool) -> Void,
         spotifyProbeConsume: @escaping (String, Double, Date) -> Double?,
-        spotifyProbeRequestConfirmation: @escaping (String) -> Void
+        spotifyProbeRequestConfirmation: @escaping (String) -> Void,
+        latestAnchorPublishedWhilePaused: @escaping () -> Bool
     ) {
         self.defaults = defaults
         self.readPositionBias = readPositionBias
@@ -47,6 +50,7 @@ public struct PlaybackPositionEnvironment {
         self.spotifyProbeTrackChanged = spotifyProbeTrackChanged
         self.spotifyProbeConsume = spotifyProbeConsume
         self.spotifyProbeRequestConfirmation = spotifyProbeRequestConfirmation
+        self.latestAnchorPublishedWhilePaused = latestAnchorPublishedWhilePaused
     }
 
     public static var live: PlaybackPositionEnvironment {
@@ -61,6 +65,7 @@ public struct PlaybackPositionEnvironment {
             browserProbeReopenAfterResume: { BrowserPositionProbe.shared.reopenAfterResume(key: $0) },
             spotifyProbeTrackChanged: { SpotifyPositionProbe.shared.trackChanged(to: $0, isSpotifyNative: $1) },
             spotifyProbeConsume: { SpotifyPositionProbe.shared.consumeCorrection(forKey: $0, rate: $1, now: $2) },
-            spotifyProbeRequestConfirmation: { SpotifyPositionProbe.shared.requestConfirmation(forKey: $0) })
+            spotifyProbeRequestConfirmation: { SpotifyPositionProbe.shared.requestConfirmation(forKey: $0) },
+            latestAnchorPublishedWhilePaused: { MediaControlClient.latestAnchorPublishedWhilePaused() })
     }
 }
