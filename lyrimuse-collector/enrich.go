@@ -4287,8 +4287,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 			resultsCh <- lyricSourceResult{source: "soda"}
 			return
 		}
-		// 不搜索:曲目 id 只来自汽水客户端的播放队列缓存,所以没用汽水放过这首时
-		// 一个请求都不发、安静空手而归(见 soda.go 头注)。取词走无签名的 seo_track。
+		// 曲目 id 先取汽水客户端的播放队列缓存,拿不到再按歌手 + 歌名搜索(见 soda.go 头注)。取词走无签名的 seo_track。
 		r, noLyrics := sodaLyric(ctx, artist, title, album, durationSecs)
 		resultsCh <- lyricSourceResult{source: "soda", lyr: r.lyrics, yrc: r.yrc, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, trackFoundNoLyrics: noLyrics, identityFromLocalClient: r.fromLocalClient}
 	}()
