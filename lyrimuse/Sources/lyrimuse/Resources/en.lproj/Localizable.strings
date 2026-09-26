@@ -188,8 +188,8 @@
 "两边都是现场版，但这个候选的专辑名指向另一场不同命名的演出（比如另一次巡演）——时间轴是那场演出的，套在这次播放的录音上会对不上" = "Both are live versions, but this candidate’s album name points to a differently named performance (e.g. a different tour) — its timing track belongs to that show and won’t line up with this recording.";
 "两首探测曲都没有响应，这个源目前可能不可用" = "Neither probe track got a response — this source may currently be unavailable";
 "中文" = "Chinese";
-"主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和罗马音显示当前句，「下一句」显示接下来那句、主行不再提前切。副行不滚动，装不下时尾部渐隐。" = "Adds a second line under the lyric without changing the item's height (10pt / 9pt; Font Size has no effect). Translation and Romanization show the current line; Next Line shows the upcoming one and the main line no longer switches early. The second line never scrolls — its tail fades when it doesn't fit.";
-"主歌词下方多显示一行，行高不变。译文和罗马音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览" = "Adds one more line under the main lyric without changing the row height. Translation and Romanization show the current line; Next Line shows the upcoming one. With Next Line, the expanded area no longer repeats the next-line preview";
+"主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和读音显示当前句，「下一句」显示接下来那句；开着副行时主行不再提前切到下一句。副行不滚动，装不下时尾部渐隐。" = "Adds a second line under the lyric without changing the item's height (10pt / 9pt; Font Size has no effect). Translation and Romanization show the current line; Next Line shows the upcoming one. With a second line on, the main line no longer switches early. The second line never scrolls — its tail fades when it doesn't fit.";
+"主歌词下方多显示一行，行高不变。译文和读音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览" = "Adds one more line under the main lyric without changing the row height. Translation and Romanization show the current line; Next Line shows the upcoming one. With Next Line, the expanded area no longer repeats the next-line preview";
 "主行的笔画粗细；副行和展开时的下一句预览比它细一档" = "Stroke weight of the main line; the secondary line and the expanded next-line preview are one step lighter";
 "主题" = "Theme";
 "主题名称" = "Theme Name";
@@ -263,7 +263,6 @@
 "停止搜索" = "Stop Searching";
 "停止补搜" = "Stop Searching";
 "光盘" = "Disc";
-"全局时间轴偏移" = "Global Timing Offset";
 "全屏时收起歌词" = "Hide Lyrics in Full Screen";
 "全角/半角" = "Full-width/half-width";
 "全选 %@ 首" = "Select All (%@)";
@@ -345,7 +344,7 @@
 "删除选中的 %@ 条" = "Delete %@ Songs";
 "别名轮：无可用候选" = "Alias round: no usable candidate";
 "别名轮：补查未应答的源" = "Alias round: sources that did not answer";
-"别名轮：补罗马音" = "Alias round: missing romanization";
+"别名轮：补读音" = "Alias round: missing romanization";
 "到第 %@ 次 scrobble" = "Until scrobble #%@";
 "到该浏览器的开发者菜单里打开「允许 Apple 事件中的 JavaScript」。" = "Turn on “Allow JavaScript from Apple Events” in this browser’s Developer menu.";
 "刷新" = "Refresh";
@@ -418,13 +417,12 @@
 "只对判定为韩语的歌词生效，例如 안녕하세요 → annyeonghaseyo" = "Applies only to lyrics judged Korean, e.g. 안녕하세요 → annyeonghaseyo";
 "只对悬浮歌词生效" = "Applies to the desktop overlay only";
 "只对灵动岛生效" = "Applies to the notch only";
-"只影响桌面悬浮歌词和歌词窗口；灵动岛受空间所限不支持，菜单栏只能显示一行。" = "Only affects Desktop Floating Lyrics and the Lyrics Window; Notch Lyrics has no room for it, and Menu Bar Lyrics shows a single line.";
 "只影响装得下的句子。\n固定：短句也占满设定宽度，位置不变。\n自适应：短句按自己的宽度占位，这一项随句变宽变窄，旁边的图标跟着挪。" = "Only affects lines that already fit.\nFixed: short lines still fill the set width, so the item never moves.\nAdaptive: short lines take only what they need; the item's width changes with each line and the icons beside it shift along.";
 "只影响装得下的短句：它在固定宽度那一格里靠哪边。放不下的句子会横向滚动，没有多余空间，对齐不起作用" = "Only affects lines that fit: which side of the fixed-width slot they sit on. Lines too long to fit scroll horizontally — there is no spare space, so alignment does nothing";
 "只影响装得下的短句：它在歌词行里靠哪边。「自动」按对唱声部走：谁唱靠谁那边、合唱居中，没有对唱信息就靠左。放不下的句子会横向滚动，没有多余空间，对齐不起作用" = "Only affects short lines that fit: where they sit in the lyric row. Automatic follows the duet part — each singer's lines sit on their side, choruses are centered, and lines without duet info stay left. Lines that don't fit scroll horizontally, so alignment has no effect on them";
 "只恢复当前预览的尺寸" = "Only the size shown in the preview";
 "只接管文字颜色；背景色和描边色始终按下面设置的来" = "Only the text color follows the artwork; the background and outline colors always use what you set below";
-"只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的罗马音在播放时实时生成，不计入" = "Counts only romanization stored in the cache and exported alongside the lyrics files. For other songs it is generated on the fly while playing and is not counted.";
+"只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的读音在播放时实时生成，不计入" = "Counts only romanization stored in the cache and exported alongside the lyrics files. For other songs it is generated on the fly while playing and is not counted.";
 "只有勾选的播放器会 scrobble 到 Last.fm；默认全部勾选。" = "Only checked players scrobble to Last.fm; all checked by default.";
 "只比对歌词文字，不含时间戳、逐字与译文；这条候选仍可能带别的来源没有的逐字轨或译文" = "Compares lyric text only, ignoring timestamps, word timing and translations. This candidate may still carry word timing or a translation the other source lacks";
 "只统计能翻成当前译文语言的语言；译文语言自己和同一语系的语言不计，所以数字可能比「系统设置」里的少。语言包由 macOS 管理，翻译在本机完成" = "Counts only languages that can be translated into the current translation language; the target language itself and languages in the same family are excluded, so the number can be lower than in System Settings. Language packs are managed by macOS and translation runs on this Mac";
@@ -612,9 +610,9 @@
 "已断开的屏幕" = "Disconnected display";
 "已是最新版本" = "Up to date";
 "已显示灵动岛歌词" = "Notch lyrics shown";
-"已显示罗马音" = "Romanization shown";
 "已显示菜单栏歌词" = "Menu bar lyrics shown";
 "已显示译文" = "Translation shown";
+"已显示读音" = "Romanization shown";
 "已更新到 %@" = "Updated to %@";
 "已校准" = "Calibrated";
 "已校准 %d 首歌的歌词时间轴" = "%d songs with calibrated timing";
@@ -622,7 +620,7 @@
 "已校正 %d 首歌在电台上的时间轴" = "%d songs with calibrated radio timing";
 "已添加" = "Added";
 "已经在放了还没反应？看看选的播放器对不对" = "Already playing and nothing shows? Check the player you picked";
-"已缓存罗马音" = "Cached Romanization";
+"已缓存读音" = "Cached Romanization";
 "已自动跳过广告" = "Ad skipped automatically";
 "已补 %@ 条" = "%@ backfilled";
 "已被手动停止" = "Stopped manually";
@@ -647,9 +645,9 @@
 "已锁定 %@ 首之前手动选定的歌；从现在起选定的会直接锁定" = "Locked %@ songs you had picked manually; from now on, picks are locked right away";
 "已锁定位置" = "Position locked";
 "已隐藏灵动岛歌词" = "Notch lyrics hidden";
-"已隐藏罗马音" = "Romanization hidden";
 "已隐藏菜单栏歌词" = "Menu bar lyrics hidden";
 "已隐藏译文" = "Translation hidden";
+"已隐藏读音" = "Romanization hidden";
 "已静音" = "Muted";
 "布局" = "Layout";
 "带逐字（卡拉OK）时间轴，是歌词质量最直接的证据" = "Has word-by-word (karaoke) timing, the most direct evidence of quality";
@@ -799,7 +797,7 @@
 "播放控制" = "Controls";
 "播放时图标动起来，暂停即静止" = "Icons come alive while playing, still when paused";
 "播放热力图" = "Listening Heatmap";
-"播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/罗马音不受影响" = "Playback uses the word-level timing, so editing Lyrics (LRC) has no effect. To hand-edit the main lyrics, use 「Search Online for Lyric Candidates」 to swap in a candidate without word-level timing; translation and romanization edits still apply.";
+"播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响" = "Playback uses the word-level timing, so editing Lyrics (LRC) has no effect. To hand-edit the main lyrics, use 「Search Online for Lyric Candidates」 to swap in a candidate without word-level timing; translation and romanization edits still apply.";
 "播放记录" = "Play history";
 "收听次数：%@" = "Plays: %@";
 "收听足迹" = "Listening Footprint";
@@ -809,7 +807,6 @@
 "放一首歌试试" = "Play a song to try it";
 "放不下的句子会横向滚动，鼠标悬停也能看到完整的这一行" = "Lines too long to fit scroll horizontally; hover to see the full line";
 "放弃坏文件并重建" = "Discard and Rebuild";
-"效果" = "Effects";
 "数据源" = "Data Source";
 "数据源留空时自动判定：两个账号都配了优先用 Last.fm，只配了一个就用那个" = "With no source chosen: Last.fm if both accounts are set up, otherwise whichever one is";
 "整份配置都在这里，纯文本可直接编辑；里面含账号凭据，不要发给别人" = "Everything lives here in plain text you can edit directly. It holds your account credentials, so don't send it to anyone";
@@ -839,7 +836,7 @@
 "日均 %1$@ · %2$@ 天" = "%1$@/day · %2$@ days";
 "日文、韩文、中文、粤语默认都会标注，可在设置里按语言关闭" = "Japanese, Korean, Chinese and Cantonese are all annotated by default; turn any of them off in Settings";
 "日文、韩文、粤语默认会标注，中文拼音可在设置里打开" = "Japanese, Korean and Cantonese are annotated by default; turn on Mandarin pinyin in Settings";
-"日文歌词自带罗马音，同水平候选间优先" = "Japanese lyrics with romanization; preferred among otherwise-equal candidates";
+"日文歌词自带读音，同水平候选间优先" = "Japanese lyrics with romanization; preferred among otherwise-equal candidates";
 "日语" = "Japanese";
 "日语、韩语标成罗马字，中文标成拼音" = "Japanese and Korean get romaji, Chinese gets pinyin";
 "日语、韩语标成罗马字，普通话标成拼音，粤语标成粤拼" = "Japanese and Korean get romaji, Mandarin gets pinyin, Cantonese gets Jyutping";
@@ -851,15 +848,16 @@
 "时长明显不符，且无其他源印证" = "Duration clearly off, not corroborated";
 "时间" = "Time";
 "时间轴" = "Timing";
+"时间轴偏移" = "Timing Offset";
 "时间轴整体偏移" = "Whole timeline offset";
 "昨天" = "Yesterday";
 "显示" = "Show";
 "显示 10 首" = "Show 10 songs";
 "显示/隐藏悬浮歌词" = "Show/Hide Floating Lyrics";
 "显示/隐藏灵动岛歌词" = "Show/Hide Notch Lyrics";
-"显示/隐藏罗马音" = "Show/Hide Romanization";
 "显示/隐藏菜单栏歌词" = "Show/Hide Menu Bar Lyrics";
 "显示/隐藏译文" = "Show/Hide Translation";
+"显示/隐藏读音" = "Show/Hide Romanization";
 "显示专辑" = "Show Album";
 "显示专辑简介" = "Show Album Notes";
 "显示在哪块屏幕" = "Show On";
@@ -876,10 +874,11 @@
 "显示歌词窗口" = "Show Lyrics Window";
 "显示灵动岛歌词" = "Show Notch Lyrics";
 "显示简介" = "Show Info";
-"显示罗马音" = "Show Romanization";
 "显示菜单栏歌词" = "Show Menu Bar Lyrics";
 "显示译文" = "Show Translation";
+"显示读音" = "Show Romanization";
 "显示音浪" = "Show Audio Wave";
+"普通话" = "Mandarin";
 "智能" = "Smart";
 "智能算法" = "Smart Matching";
 "暂停或广告插播时，灵动岛缩到贴着刘海的一小块，只剩左耳封面、右耳音浪——跟 iPhone 灵动岛的极简形态一样。关掉之后暂停时卡片保持原来的大小，歌名和歌词照常显示（位置停在暂停那一刻）。" = "While paused or during an ad break, the Dynamic Island shrinks to a small block hugging the notch, showing only cover art on the left ear and an audio wave on the right — like the iPhone's minimal Dynamic Island. Turn this off to keep the card at its normal size while paused, with the title and lyrics still shown (frozen at the moment of pausing).";
@@ -969,7 +968,7 @@
 "查询 %d 组" = "%d query sets";
 "查询词：%@" = "Query: %@";
 "标为纯音乐" = "Mark as Instrumental";
-"标注哪些语言" = "Annotate";
+"标注的语言" = "Languages";
 "标题反查：Apple 原产地商店" = "Title lookup: Apple home storefront";
 "标题反查：专辑曲目表" = "Title lookup: album track list";
 "标题反查：歌手泛搜" = "Title lookup: artist-wide search";
@@ -1040,7 +1039,7 @@
 "歌词窗口" = "Lyrics Window";
 "歌词窗口…" = "Lyrics Window…";
 "歌词窗口的文字颜色；「自动」会按背景亮度在浅色和深色之间切换" = "The lyrics window's text color. Auto switches between light and dark based on the background's brightness.";
-"歌词窗口的歌词字体（正文、译文、罗马音）" = "Lyrics font for the lyrics window (main text, translation, romanization)";
+"歌词窗口的歌词字体（正文、译文、读音）" = "Lyrics font for the lyrics window (main text, translation, romanization)";
 "歌词窗口的背景：跟随封面／纯色／渐变／毛玻璃" = "The lyrics window's background: follow artwork, solid, gradient, or frosted glass";
 "歌词管理" = "Lyrics Manager";
 "歌词管理…" = "Lyrics Manager…";
@@ -1088,9 +1087,9 @@
 "正在重新匹配…（%1$@/%2$@）" = "Re-matching… (%1$@/%2$@)";
 "正在验证…" = "Checking…";
 "正数=提前显示，负数=延后显示" = "Positive = show earlier, negative = show later";
-"正数＝歌词提前，负数＝歌词延后；常用来抵消蓝牙耳机的声音延迟" = "Positive shows lyrics earlier, negative later; usually to offset Bluetooth audio delay";
+"正数＝歌词提前，负数＝歌词延后" = "Positive shows lyrics earlier, negative later";
 "步长" = "Step";
-"每一项都按播放器单独勾选；选了「自动识别」时五个播放器都可勾" = "Each item is checked per player; with Auto-detect selected, all five players are available";
+"每一项都按播放器单独勾选；选了「自动识别」时所有播放器都可勾" = "Each item is checked per player; with Auto-detect selected, every player is available";
 "每周听歌小结" = "Weekly Listening Digest";
 "每按一次调整的幅度" = "Amount per press";
 "每日听歌报告" = "Daily Listening Report";
@@ -1231,11 +1230,14 @@
 "简体中文" = "简体中文";
 "简洁" = "Compact";
 "简洁：只显示当前句和下一句。\n多行：像完整尺寸那样整页滚动显示歌词。" = "Compact: only the current line and the next one.\nFull: a scrolling page of lyrics, like the full size.";
+"管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文" = "Applies to Desktop Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick translation in their own “Second Line” setting";
+"管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择读音" = "Applies to Desktop Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick romanization in their own “Second Line” setting";
 "管理" = "Library";
 "管理…" = "Manage…";
 "类型" = "Genre";
 "粗细" = "Weight";
 "粤拼" = "Jyutping";
+"粤语" = "Cantonese";
 "系统兜底翻译" = "System Fallback Translation";
 "系统字体" = "System Font";
 "系统的媒体信息通道在这台机器上用不了，播放状态会读不到。绕开它的只有一种配置：关掉「自动识别」、只勾 Apple Music；其余配置都要经这条通道读。" = "The system media info channel does not work on this Mac, so playback state may not be readable. Only one setup bypasses it: “Auto-detect” off with just Apple Music ticked. Every other setup reads through this channel.";
@@ -1285,7 +1287,6 @@
 "网页推送" = "Web Push";
 "网页播放器" = "Web Players";
 "网页播放器不会主动汇报精确进度，切歌后需要这个开关才能立刻校准。" = "Web players don't report precise position; this switch lets Lyrimuse recalibrate right after a track change.";
-"罗马音" = "Romanization";
 "置于最顶层" = "Always on Top";
 "翻译语言包" = "Translation Languages";
 "耳机" = "Headphones";
@@ -1314,8 +1315,8 @@
 "自定义颜色" = "Custom Color";
 "自己用 Cloudflare Worker + KV 搭建的 state-worker 服务（独立公开仓库 Yudaotor/nowplaying-workers）。不想自建也行：配好「ListenBrainz」也能让网页兜底显示「正在播放」，两者配一个就够。效果截图 + 完整从零搭建步骤见该仓库自己的 README" = "A state-worker service you host yourself on Cloudflare Workers + KV (separate public repo: Yudaotor/nowplaying-workers). Self-hosting is optional: connecting “ListenBrainz” also lets the web page fall back to showing “Now Playing”, and either one alone is enough. That repo's own README has screenshots and full setup steps";
 "自带可用的中文译文，同水平候选间优先" = "Comes with a usable translation in your language; preferred among otherwise-equal candidates";
-"自带罗马音" = "Has romanization";
 "自带译文" = "Has translation";
+"自带读音" = "Has romanization";
 "自由" = "Free";
 "自由：拖到任意位置。\n顶部居中 / 底部居中：贴着菜单栏下方 / Dock 上方水平居中，屏幕或 Dock 变化时自动对齐；此时窗口不可拖动。" = "Free: drag it anywhere.\nTop Center / Bottom Center: centered just below the menu bar / just above the Dock, re-aligned automatically when the screen or Dock changes; the window can't be dragged in these modes.";
 "自适应" = "Adaptive";
@@ -1344,6 +1345,7 @@
 "补提交没能完成，请稍后再试" = "Backfill didn't finish. Try again later.";
 "补搜中 %1$@/%2$@" = "Searching %1$@/%2$@";
 "补搜歌词" = "Find Missing Lyrics";
+"补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动" = "Searches again for songs with no lyrics or plain text only. Instrumentals and manually corrected songs are left alone.";
 "补搜缺失歌词" = "Missing lyrics refill";
 "补搜选中的 %@ 首" = "Find lyrics for %@ selected";
 "要先把网页端部署好并拿到访问令牌。部署步骤见项目 README 的「网页端」一节：https://github.com/Yudaotor/lyrimuse#网页端" = "Deploy the web app first and get an access token. Setup steps are in the project README: https://github.com/Yudaotor/lyrimuse";
@@ -1372,7 +1374,7 @@
 "评分规则更新后重选" = "Re-picked after a scoring rule update";
 "诊断与数据" = "Diagnostics & Data";
 "译文" = "Translation";
-"译文与罗马音" = "Translation & Romanization";
+"译文与读音" = "Translation & Romanization";
 "译文语言" = "Translation Language";
 "译文（机器翻译）" = "Translation (machine)";
 "译文（歌词源自带）" = "Translation (from the source)";
@@ -1396,6 +1398,8 @@
 "读不到这份备份：可能没开 iCloud Drive，或者这个文件夹不在同步" = "Can’t read this backup — iCloud Drive may be off, or this folder isn’t syncing";
 "读取播放状态、抓歌词和封面" = "Reads playback state and fetches lyrics and artwork";
 "读取本地记录文件失败" = "Couldn't read the lyrics cache";
+"读音" = "Romanization";
+"调整" = "Adjust";
 "调整宽度" = "Adjust Width";
 "账号" = "Account";
 "账号 Token" = "Account Token";
@@ -1409,7 +1413,7 @@
 "超薄" = "Ultra Thin";
 "超过就截断" = "Truncate If Too Long";
 "足迹" = "Footprint";
-"跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注罗马音。接下来几步帮你调成合适的样子，以后随时能在设置里改" = "Shows lyrics for whatever’s playing — on the desktop, around the notch, in the menu bar or in a lyrics window, with translations and romanization if you like. The next few steps set it up for you; you can change everything later in Settings.";
+"跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注读音。接下来几步帮你调成合适的样子，以后随时能在设置里改" = "Shows lyrics for whatever’s playing — on the desktop, around the notch, in the menu bar or in a lyrics window, with translations and romanization if you like. The next few steps set it up for you; you can change everything later in Settings.";
 "跟着演唱进度把已唱到的部分染成系统强调色。只在这首歌有逐字时间轴时生效；打开菜单反白期间暂不染色" = "Tints the sung portion with the system accent color, following the vocal timing. Only takes effect when this track has word-level timing; fill pauses while the menu is open and highlighted";
 "跟进算法升级" = "Follow Algorithm Upgrades";
 "跟随 %@ 启动" = "Launch when %@ opens";
@@ -1468,7 +1472,7 @@
 "这一轮没搜到逐字歌词，保留现有的「%@」（逐字）——换过去会丢掉逐字时间轴" = "No word-by-word lyrics this round, so “%@” (word-by-word) is kept — switching would lose the word timing";
 "这一轮没有一个能用的候选，保留现有的" = "No usable candidate this round; keeping the current one";
 "这一轮没有源应答" = "No source replied this round";
-"这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或罗马音" = "These switches apply to Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick translation or romanization in their own “Second Line” setting";
+"这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或读音" = "These switches apply to Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick translation or romanization in their own “Second Line” setting";
 "这个应用用不了" = "This app won’t work";
 "这个开关只影响「桌面悬浮歌词」：在当前句下方预览下一句。歌词窗口本来就显示整份歌词，灵动岛和菜单栏只有一行空间" = "This setting only affects Desktop Floating Lyrics: it previews the next line beneath the current one. The Lyrics Window already shows the full lyrics, and Notch and Menu Bar Lyrics only have room for a single line";
 "这个开关已经被关掉了——现在还能用，只是因为该浏览器还没重启；重启后就会失效" = "This switch has been turned off — it still works right now only because the browser hasn't restarted yet, and it will stop working after a restart";
@@ -1491,7 +1495,7 @@
 "这份歌词没有时间戳，无法跟随播放高亮或自动滚动" = "These lyrics have no timing, so they can't highlight or auto-scroll along with playback";
 "这份歌词没有时间戳，采纳后只能在「歌词窗口」里作为静态文字展示，不会逐字/逐行跟随播放高亮" = "These lyrics have no timing. Once adopted they only show as static text in the Lyrics Window, and won't highlight word by word or line by line as the song plays";
 "这会删除当前全部 %d 条本地记录，包括你手动编辑、联网搜索采纳过的内容，已导出到本地的歌词文件也会一并删除。清空之前会自动备份一份，能从这个菜单里的「从自动备份恢复」找回来。下次播放会重新走一遍匹配解析" = "This deletes all %d local records, including anything you edited by hand or picked from an online search, and the exported lyrics files go with them. A backup is taken automatically beforehand — you can get it back from “Restore from Auto Backup” in this menu. The next time a song plays it goes through matching and resolution again.";
-"这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的全局偏移和按播放器补偿也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源" = "This clears the timing offsets you tuned by hand for %d songs and cannot be undone. The lyrics themselves are untouched, and the global offset and per-player compensation in Settings are not cleared either. Afterwards these songs go back to having their lyrics source updated automatically.";
+"这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的「时间轴偏移」也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源" = "This clears the timing offsets you tuned by hand for %d songs and cannot be undone. The lyrics themselves are untouched, and Timing Offset in Settings is not cleared either. Afterwards these songs go back to having their lyrics source updated automatically.";
 "这会清掉你在电台上为 %d 首歌调出来的时间轴校正，无法撤销。这些校正只在放电台时生效，清掉不影响你正常播放这些歌时的歌词" = "This clears the radio timing calibrations you tuned for %d songs and cannot be undone. They only apply while a station is playing, so clearing them does not affect the lyrics when you play those songs normally.";
 "这会清除本机所有账号 token、密钥和个人设置，恢复到刚装完时的样子（下次启动会重新走一遍引导向导），且无法撤销。iCloud 里那份备份和已经导出的文件都不受影响；两样都没有的话，建议先备份一份" = "This erases every account token, key, and personal setting on this Mac, restoring Lyrimuse to a fresh install (the setup guide runs again on next launch). This can't be undone. The copy in iCloud and any files you exported are untouched; if you have neither, back up first";
 "这会覆盖当前所有设置，包括已连接的账号和播放数据发往的地址，并立即重启 Lyrimuse 使其生效" = "This overwrites every current setting, including connected accounts and where your playback data is sent, then restarts Lyrimuse right away";
@@ -1512,8 +1516,8 @@
 "这段时间的歌曲榜里没有这位歌手的歌" = "No songs by this artist in this period's track chart";
 "这里是一句歌词示例" = "A line of lyrics looks like this";
 "这里是下一句歌词示例" = "The next line looks like this";
-"这里是罗马音示例" = "Romanization looks like this";
 "这里是译文示例" = "The translation looks like this";
+"这里是读音示例" = "Romanization looks like this";
 "这里的设置对桌面悬浮歌词和灵动岛生效，先开启其中一种" = "These settings apply to Desktop Floating Lyrics and Notch Lyrics — turn one of them on first";
 "这里能看到已创建应用的 API Key，但看不到 Secret；丢了就用「前往申请」再建一个。" = "Shows your existing apps and their API Key, but not the Secret; if it's lost, use Get One to create a new app.";
 "这首是纯音乐" = "This one is instrumental";
@@ -1586,7 +1590,6 @@
 "采纳为静态文本" = "Adopt as Static Text";
 "重启歌词引擎" = "Restart Lyrics Engine";
 "重新打开授权页面" = "Reopen Authorization Page";
-"重新扫描的范围：没有歌词的，加上只有纯文本的；人工修正过的不动" = "Rescans songs with no lyrics or plain text only. Manually corrected songs are left alone.";
 "重新扫描（%@ 首）" = "Rescan (%@)";
 "重新搜索" = "Search Again";
 "重新检测" = "Check Again";
@@ -1614,8 +1617,8 @@
 "随播放律动" = "Move with the Music";
 "随机播放" = "Shuffle";
 "隐藏歌词" = "Hide Lyrics";
-"隐藏罗马音" = "Hide Romanization";
 "隐藏译文" = "Hide Translation";
+"隐藏读音" = "Hide Romanization";
 "需要先完全退出该浏览器，再点一次" = "Please fully quit this browser first, then try again";
 "需要先配置「%@」（%@）" = "Set up “%@” first — %@";
 "静音" = "Mute";
@@ -1663,7 +1666,7 @@
 "鼠标悬停在灵动岛上时能看到什么" = "What you see when hovering over the Dynamic Island";
 "鼠标移到悬浮歌词上时它会淡下去，移开恢复" = "The floating lyrics fade out while the pointer is over them and come back when it leaves.";
 "鼠标移到悬浮歌词上时它会淡下去，移开恢复；只对悬浮歌词生效" = "The floating lyrics fade out while the pointer is over them and come back when it leaves. Floating lyrics only.";
-"鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停、间奏、或那一格太窄时不接管。点键以外的地方仍是打开面板。" = "Hover over the menu bar lyrics to turn them into Previous / Play-Pause / Next; move away and the lyrics return. Doesn't take over while paused, between lines, or when the slot is too narrow. Clicking outside the three buttons still opens the panel.";
+"鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停后歌词收回成图标、或那一格太窄装不下三个键时不接管。点键以外的地方仍是打开面板。" = "Hover over the menu bar lyrics to turn them into Previous / Play-Pause / Next; move away and the lyrics return. Doesn't take over once the lyrics shrink back to the icon after pausing, or when the slot is too narrow for three buttons. Clicking outside the three buttons still opens the panel.";
 "（已调）" = " (adjusted)";
 "（未信任，选择后自动信任）" = " (not trusted — choosing it trusts it)";
 "（正在播放）" = " (now playing)";

@@ -727,9 +727,11 @@ private struct LyricsSettingsTab: View {
                     local.romanizationScripts = next
                 }
             ))
-            .toggleStyle(.checkbox)
+            .toggleStyle(SettingsCheckboxStyle())
             Text(title).font(.system(size: 12))
         }
+        // 框和语言名合成一个无障碍元素:框本身没有文字,分开的话旁白只念出「开关」。
+        .accessibilityElement(children: .combine)
         .help(help)
     }
     @ObservedObject private var features = FeatureSettingsStore.shared
@@ -751,11 +753,12 @@ private struct LyricsSettingsTab: View {
             switch self {
             case .fetch: return L10n.t("获取")
             case .translation: return L10n.t("译文")
-            // 叫「效果」不叫「显示」:侧边栏另有一个「歌词显示」分类(管三种展示面的开关和样式),
-            // 同一个词出现在两层,想调字体的人会先来这里扑空。这一段管的是歌词内容本身的呈现效果
-            // (卡拉OK/繁简/罗马音/双行)。rawValue 仍是 display,@AppStorage 存的是 rawValue,
-            // 改显示名不动持久化。
-            case .display: return L10n.t("效果")
+            // 叫「调整」:这一段只放改歌词内容本身的几项(繁简 / 罗马音 / 时间轴偏移),四个展示面看到
+            // 的是同一份结果。别叫「显示」——侧边栏另有一个「歌词显示」分类(管各展示面的开关和样式),
+            // 同一个词出现在两层,想调字体的人会先来这里扑空;也别叫「效果」——听起来像卡拉OK、动画
+            // 这类视觉效果,而那些都在「歌词显示」里。rawValue 仍是 display,@AppStorage 存的是
+            // rawValue,改显示名不动持久化。
+            case .display: return L10n.t("调整")
             case .manage: return L10n.t("管理")
             }
         }
@@ -1716,7 +1719,7 @@ private struct LyricsSettingsTab: View {
             SettingsRow(
                 icon: "text.bubble",
                 title: L10n.t("显示译文"),
-                help: L10n.t("只影响桌面悬浮歌词和歌词窗口；灵动岛受空间所限不支持，菜单栏只能显示一行。")
+                help: L10n.t("管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文")
             ) {
                 Toggle("", isOn: $settings.showTranslation)
             }
@@ -1762,7 +1765,7 @@ private struct LyricsSettingsTab: View {
         }
     }
 
-    // 「效果」这一段只放**改歌词内容本身**的三项:繁简 / 罗马音 / 时间轴偏移 —— 四个展示面
+    // 「调整」这一段只放**改歌词内容本身**的三项:繁简 / 罗马音 / 时间轴偏移 —— 四个展示面
     // 看到的是同一份结果。「卡拉OK效果」不在这里:它讲的是"某个面怎么画",按「歌词显示」那一页
     // "按形态分"的结构拆成悬浮歌词 / 灵动岛 / 菜单栏各一颗(`overlayLyricsKaraoke` /
     // `notchLyricsKaraoke` / `menuBarLyricsKaraoke`),歌词窗口始终逐字。「双行显示」同理,
@@ -1805,8 +1808,8 @@ private struct LyricsSettingsTab: View {
             }
             SettingsRow(
                 icon: "textformat.alt",
-                title: L10n.t("显示罗马音"),
-                help: L10n.t("只影响桌面悬浮歌词和歌词窗口；灵动岛受空间所限不支持，菜单栏只能显示一行。")
+                title: L10n.t("显示读音"),
+                help: L10n.t("管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择读音")
             ) {
                 Toggle("", isOn: $settings.showRomanization)
             }
@@ -1814,10 +1817,12 @@ private struct LyricsSettingsTab: View {
             // 才跟得上,听中文歌完全不需要拼音。总开关关着时这几行没有意义,收起来。
             if settings.showRomanization {
                 CardDivider()
-                // 这一项是"显示罗马音"的附属项,所以用子行(缩进 + 左边那条竖线)而不是主行:
+                // 这一项是"显示读音"的附属项,所以用子行(缩进 + 左边那条竖线)而不是主行:
                 // 两者都用 SettingsRow 的话长得一模一样,看不出谁属于谁。
+                // 四个选项一律写**语言名**(标题问的就是语言),标成什么方案(罗马字 / 拼音 / 粤拼)
+                // 放在各自的悬停说明里 —— 语言名和方案名混排,读的人得先分清哪几个是语言、哪几个是写法。
                 SettingsSubRow(
-                    title: L10n.t("标注哪些语言")
+                    title: L10n.t("标注的语言")
                 ) {
                     HStack(spacing: 12) {
                         romanizationToggle(
@@ -1827,10 +1832,10 @@ private struct LyricsSettingsTab: View {
                             L10n.t("韩语"), .korean,
                             help: L10n.t("只对判定为韩语的歌词生效，例如 안녕하세요 → annyeonghaseyo"))
                         romanizationToggle(
-                            L10n.t("拼音"), .chinese,
+                            L10n.t("普通话"), .chinese,
                             help: L10n.t("只对判定为普通话的歌词生效，例如 你好 → nǐ hǎo"))
                         romanizationToggle(
-                            L10n.t("粤拼"), .cantonese,
+                            L10n.t("粤语"), .cantonese,
                             help: L10n.t("只对判定为粤语的歌词生效，用的是粤拼（Jyutping）方案，例如 你好 → nei5 hou2"))
                     }
                 }
@@ -1861,10 +1866,12 @@ private struct LyricsSettingsTab: View {
             //
             // 「两档二选一、调回 0 就跟随全部」这些规则**界面上不写** —— 它们记在
             // LyricsOffsetStore.baseOffsetMs 的注释和 docs/features/08 里。别再往这一行加解释性文案。
+            // 标题不带「全局」:右边的下拉框能单选某个播放器,「全局」跟它自相矛盾。help 也不提
+            // 蓝牙耳机 —— 蓝牙延迟跟输出设备走,这里只能按播放器分,提了会让人以为切耳机时它会跟着变。
             SettingsRow(
                 icon: "timer",
-                title: L10n.t("全局时间轴偏移"),
-                help: L10n.t("正数＝歌词提前，负数＝歌词延后；常用来抵消蓝牙耳机的声音延迟")
+                title: L10n.t("时间轴偏移"),
+                help: L10n.t("正数＝歌词提前，负数＝歌词延后")
             ) {
                 HStack(spacing: 8) {
                     Picker("", selection: $offsetScope) {
@@ -3145,7 +3152,7 @@ private struct LyricSecondaryLineRow: View {
         SettingsRow(
             icon: "text.append",
             title: L10n.t("副行"),
-            help: L10n.t("主歌词下方多显示一行，行高不变。译文和罗马音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览")
+            help: L10n.t("主歌词下方多显示一行，行高不变。译文和读音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览")
         ) {
             Picker("", selection: $settings.notchSecondaryLine) {
                 ForEach(LyricSecondaryLine.allCases, id: \.self) { option in
@@ -5192,7 +5199,7 @@ private struct PlayerSettingsTab: View {
     }
 
     // 「与播放器联动」卡:三项联动各一行,尾部一排播放器图标芯片,点图标勾选 / 取消。
-    // 候选 = 选中集合里的具体播放器,选了「自动识别」时五个都可勾
+    // 候选 = 选中集合里的具体播放器,选了「自动识别」时所有播放器都可勾
     // (LyrimuseCore.PlayerLinkage.candidates)。按播放器逐个勾选,而不是拿一个布尔盯整个
     // 集合 —— 多选之下"跟哪个绑定"必须答得出来。
     private var linkageCandidates: [PlaybackPlayer] {
@@ -5204,7 +5211,7 @@ private struct PlayerSettingsTab: View {
         SettingsCard {
             SettingsCardHeader(
                 title: L10n.t("播放器联动"),
-                help: L10n.t("每一项都按播放器单独勾选；选了「自动识别」时五个播放器都可勾"))
+                help: L10n.t("每一项都按播放器单独勾选；选了「自动识别」时所有播放器都可勾"))
             CardDivider()
             PlayerLinkageRow(
                 icon: "arrow.up.forward.app",
@@ -5975,7 +5982,7 @@ private struct ShortcutsSettingsTab: View {
                 CardDivider()
                 // 别再给这一行加副标题(比如"总开关;具体给哪几种文字标注仍在「歌词显示」里
                 // 分别设置")—— 解释性文案在这一页是被明确否掉的,同「全局时间轴偏移」那一行。
-                SettingsRow(icon: "textformat.abc", title: L10n.t("显示/隐藏罗马音")) {
+                SettingsRow(icon: "textformat.abc", title: L10n.t("显示/隐藏读音")) {
                     ShortcutRecorderControl(name: .toggleRomanizationHotkey)
                 }
             }

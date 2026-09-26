@@ -396,6 +396,9 @@ enum SettingsRowMetrics {
     static let iconTextSpacing: CGFloat = 12
     static let horizontalPadding: CGFloat = 14
     static let verticalPadding: CGFloat = 11
+    /// SettingsRow 的尾部不超过这个高度时整块按中线对齐标题行;更高的(多行内容)只拿顶上这一截
+    /// 的中线去对。28 盖得住单行控件里最高的那几种(分段选择器、玻璃按钮、带步进器的下拉框)。
+    static let trailingAlignBand: CGFloat = 28
     // 图标列 + 图标与文字的间距 + 卡片左内边距 = 文字实际的左起点
     static var textLeadingInset: CGFloat { horizontalPadding + iconWidth + iconTextSpacing }
 }
@@ -485,7 +488,9 @@ struct SettingsRow<Trailing: View>: View {
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        HStack(alignment: .top, spacing: SettingsRowMetrics.iconTextSpacing) {
+        // 图标、标题那一行、尾部控件三者的**中线**对齐(见 settingsRowTitleLine)。按顶端对齐的话,
+        // 比一行字高的控件(分段选择器、开关、下拉框)会让标题看起来整体偏上。
+        HStack(alignment: .settingsRowTitleLine, spacing: SettingsRowMetrics.iconTextSpacing) {
             // 即使这一行没有图标也占住同宽的位置——同一张卡里有的行有图标、有的没有时,
             // 标题必须仍然对齐在同一条竖线上。
             Group {
@@ -499,7 +504,7 @@ struct SettingsRow<Trailing: View>: View {
                         .foregroundStyle(iconTint ?? Color.secondary)
                         // 锁定成拉丁语区:SF Symbols 里 textformat / textformat.alt /
                         // textformat.size 这类"字母造型"的符号带 CJK 本地化变体,中文界面下
-                        // 会被渲染成汉字「格式」——实机截图里"显示罗马音"那一行
+                        // 会被渲染成汉字「格式」——实机截图里"显示读音"那一行
                         // 的图标位就是一个「格式」二字,夹在一列线条图标中间像是漏了个标签。
                         // 图标列要的是图形而不是本地化文字,这里显式钉住拉丁变体(其余不带
                         // 变体的符号不受任何影响)。
@@ -507,8 +512,6 @@ struct SettingsRow<Trailing: View>: View {
                 }
             }
             .frame(width: SettingsRowMetrics.iconWidth, alignment: .center)
-            // 图标跟标题那一行齐平(而不是跟整块文字顶端齐平)。
-            .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -516,6 +519,8 @@ struct SettingsRow<Trailing: View>: View {
                         .font(.system(size: 13))
                     if let help { HelpButton(text: help) }
                 }
+                // 对齐基准取标题这一行,不取整块文字:有副标题时控件对着标题,副标题往下排。
+                .alignmentGuide(.settingsRowTitleLine) { d in d[VerticalAlignment.center] }
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -536,6 +541,11 @@ struct SettingsRow<Trailing: View>: View {
                 // 实机截图就是这个样子),跟参考设计差得很远。
                 .toggleStyle(.switch)
                 .settingsGlassButtons()
+                // 高过 SettingsRowMetrics.trailingAlignBand 的尾部(多行内容)只拿顶上那一截的中线去对,
+                // 不然标题会被拉到整块内容的正中间。
+                .alignmentGuide(.settingsRowTitleLine) { d in
+                    min(d.height, SettingsRowMetrics.trailingAlignBand) / 2
+                }
         }
         .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
         .padding(.vertical, SettingsRowMetrics.verticalPadding)
@@ -545,10 +555,50 @@ struct SettingsRow<Trailing: View>: View {
     }
 }
 
+extension VerticalAlignment {
+    private enum SettingsRowTitleLine: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    /// SettingsRow 里图标、标题那一行、尾部控件共用的对齐线(各自的中线)。
+    static let settingsRowTitleLine = VerticalAlignment(SettingsRowTitleLine.self)
+}
+
 // 没有尾部控件的纯说明/纯标题行。
 extension SettingsRow where Trailing == EmptyView {
     init(icon: String? = nil, iconTint: Color? = nil, iconImage: NSImage? = nil, title: String, subtitle: String? = nil, help: String? = nil) {
         self.init(icon: icon, iconTint: iconTint, iconImage: iconImage, title: title, subtitle: subtitle, help: help) { EmptyView() }
+    }
+}
+
+// MARK: - 复选框
+
+/// 卡片里的复选框。不用系统的 `.checkbox`:macOS 26 上它没勾选时只有一块很浅的灰底、没有边框,
+/// 放在白色卡片上几乎看不出来是个能点的框。这里没勾选时画一圈描边,勾选时是强调色底 + 白色对勾,
+/// 禁用时整体变淡。只画框本身,文字由调用方在旁边摆(行容器会 `.labelsHidden()`,见 romanizationToggle)。
+struct SettingsCheckboxStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        return ZStack {
+            if configuration.isOn {
+                shape.fill(Color.accentColor)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+            } else {
+                shape.fill(Color(nsColor: .controlBackgroundColor))
+                shape.strokeBorder(Color.secondary.opacity(0.55), lineWidth: 1)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .opacity(isEnabled ? 1 : 0.45)
+        .contentShape(Rectangle())
+        .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+        .accessibilityElement()
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(configuration.isOn ? L10n.t("已开启") : L10n.t("未开启"))
+        .accessibilityAction { if isEnabled { configuration.isOn.toggle() } }
     }
 }
 
@@ -597,7 +647,7 @@ struct SettingsNote<Content: View>: View {
 // 表达归属,不再重复一遍图标。
 struct SettingsSubRow<Trailing: View>: View {
     var title: String?
-    // 子行也能带一句说明。像"标注哪些语言"那样光有几个选项名、不说各自会标成什么的行,
+    // 子行也能带一句说明。像"标注的语言"那样光有几个选项名、不说各自会标成什么的行,
     // 就是需要这个。
     var subtitle: String?
     // 滑杆这类需要横向铺开的控件给一个宽度,纯下拉菜单不需要。

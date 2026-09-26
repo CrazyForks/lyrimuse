@@ -95,7 +95,7 @@ struct LyricsDecisionSheet: View {
         // 真实判据在 collector `enrich.go` 的 needsRomanizationRetry:这一轮拿回来的歌词
         // 是中日韩文字(dominantScript 判 Han/Kana/Hangul),而**没有任何一个源**给出
         // 罗马音字段、也没有源标出语种(标了的话本地能自己注音,不用再查)。
-        case "alias-roma": return L10n.t("别名轮：补罗马音")
+        case "alias-roma": return L10n.t("别名轮：补读音")
         case "alias-missing": return L10n.t("别名轮：补查未应答的源")
         case "primary-artist-variant": return L10n.t("仅用首位歌手")
         case "title-from-album": return L10n.t("标题反查：专辑曲目表")

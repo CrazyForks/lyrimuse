@@ -129,7 +129,7 @@ func runRomanizationTests() {
     // 非日文仍然走 Any-Latin —— 谚文/泰文/西里尔跟汉字没有交集,音译对它们本来就是对的。
     expectEqual(
         Romanizer.romanize("사랑해") != nil, true, "Romanizer: 韩文仍然照常音译")
-    // 日文歌里夹的纯英文行不该被分词器加一堆空格当成"罗马音"
+    // 日文歌里夹的纯英文行不该被分词器加一堆空格当成"读音"
     expectEqual(
         Romanizer.romanize("Baby I love you", japanese: true), nil,
         "Romanizer: 日文歌里的英文行没有罗马音可言")

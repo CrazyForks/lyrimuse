@@ -84,14 +84,14 @@ public enum Romanizer {
     ) -> String? {
         guard !text.isEmpty else { return nil }
         // 日文歌里夹的纯英文行不要送进分词器:它会按词边界重新加空格,产出一份跟原文只差
-        // 空格的"罗马音",纯属噪声。只有真的含假名/汉字的行才需要读音。
+        // 空格的"读音",纯属噪声。只有真的含假名/汉字的行才需要读音。
         if japanese, looksJapanese(text) || containsHan(text),
             let reading = japaneseReading(text, marks: marks), reading != text
         {
             return reading
         }
         // 输出等于输入(原文本来就是拉丁字母,音译是无操作)时返回 nil——不展示一份跟原文
-        // 一模一样的"罗马音",那对用户没有任何信息增量,徒增一行重复文字。
+        // 一模一样的"读音",那对用户没有任何信息增量,徒增一行重复文字。
         guard let transformed = text.applyingTransform(.toLatin, reverse: false),
             transformed != text
         else { return nil }

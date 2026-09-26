@@ -334,9 +334,9 @@ struct LyricsLibraryStatsPanel: View {
                 // 客户端现算兜底,缓存里没有的照样会在渲染时现算(见 Counts.bundledRomanization 头注)。
                 // ⓘ 只留两句:这个数在数什么、没被数的去哪了。
                 metricItem(
-                    label: L10n.t("已缓存罗马音"),
+                    label: L10n.t("已缓存读音"),
                     value: counts.bundledRomanization,
-                    help: L10n.t("只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的罗马音在播放时实时生成，不计入"))
+                    help: L10n.t("只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的读音在播放时实时生成，不计入"))
             }
             .padding(.top, 2)
         }
@@ -428,7 +428,7 @@ struct LyricsLibraryStatsPanel: View {
             icon: "text.magnifyingglass",
             title: L10n.t("补搜缺失歌词"),
             subtitle: Self.sweepReceipt(status),
-            help: L10n.t("重新扫描的范围：没有歌词的，加上只有纯文本的；人工修正过的不动")
+            help: L10n.t("补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动")
         ) {
             HStack(spacing: 10) {
                 if sweepRunning, let status {

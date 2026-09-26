@@ -15,7 +15,7 @@ public enum LyricsOffsetScope {
     ///
     /// - `builtInOrder`: 第 1 组内置播放器要按哪个顺序摆——默认是 `PlaybackPlayer.allCases`
     ///   的枚举声明顺序(纯 LyrimuseCore 类型,这个默认值不越层)。设置页
-    ///   "全局时间轴偏移"那一行的下拉调用点改传 `PlaybackPlayer.displayOrder`(按系统语言排,
+    ///   "时间轴偏移"那一行的下拉调用点改传 `PlaybackPlayer.displayOrder`(按系统语言排,
     ///   跟"选择播放器"图标网格用同一套顺序)——那个属性定义在 App 主
     ///   target 的 `FeatureSettingsStore.swift`(依赖 `AppSettings`/`L10n`),LyrimuseCore
     ///   不能反向依赖它,所以顺序作为参数从外面传进来,而不是这个函数自己在内部读。

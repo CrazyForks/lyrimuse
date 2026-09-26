@@ -68,7 +68,7 @@ final class OverlayQuickSettingsMenu: NSObject, NSMenuDelegate {
         menu.addItem(toggle(L10n.t("译文"), symbol: "text.bubble",
                             on: settings.showTranslation,
                             action: #selector(toggleShowTranslation)))
-        menu.addItem(toggle(L10n.t("罗马音"), symbol: "textformat.alt",
+        menu.addItem(toggle(L10n.t("读音"), symbol: "textformat.alt",
                             on: settings.showRomanization,
                             action: #selector(toggleShowRomanization)))
         menu.addItem(toggle(L10n.t("双行歌词"), symbol: "text.aligncenter",

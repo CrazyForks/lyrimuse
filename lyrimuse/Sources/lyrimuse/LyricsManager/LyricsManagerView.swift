@@ -1669,7 +1669,7 @@ struct LyricsManagerView: View {
             }
             Button(L10n.t("取消"), role: .cancel) {}
         } message: {
-            Text(String(format: L10n.t("这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的全局偏移和按播放器补偿也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源"), offsets.trackOffsetCount))
+            Text(String(format: L10n.t("这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的「时间轴偏移」也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源"), offsets.trackOffsetCount))
         }
         // 电台校准的清空确认。同样单独挂一层,理由见上面那条。
         .confirmationDialog(
@@ -2280,7 +2280,7 @@ struct LyricsManagerView: View {
                         let full = trBodyEdit.reassembled(body: newBody)
                         if full != editedTr { editedTr = full }
                     }
-                editorSection(title: L10n.t("罗马音"), icon: "textformat.abc", text: $editedRomaBody, minHeight: 70, monospaced: false, latinIcon: true)
+                editorSection(title: L10n.t("读音"), icon: "textformat.abc", text: $editedRomaBody, minHeight: 70, monospaced: false, latinIcon: true)
                     .onChange(of: editedRoma, initial: true) { _, raw in
                         if raw == romaBodyEdit.reassembled(body: editedRomaBody) { return }
                         romaBodyEdit = LyricsBodyEdit(lyrics: raw, title: summary.title, artist: summary.artist)
@@ -2617,7 +2617,7 @@ struct LyricsManagerView: View {
         Label(
             // 改文案:原来这句让"先点「移除逐字时间轴」",而那个按钮已经去掉
             // 了(见 actionsRow 里的注释)。现在指向仍然存在的那条路——换一份不带逐字的候选。
-            L10n.t("播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/罗马音不受影响"),
+            L10n.t("播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响"),
             systemImage: "info.circle"
         )
         .font(.caption)
@@ -3133,7 +3133,7 @@ private struct LyricsManagerRow: View {
                               help: summary.lyricsTrSource == LyricsTranslationSource.machineSentinel
                                   ? L10n.t("译文（机器翻译）") : L10n.t("译文（歌词源自带）"))
                         badge("textformat.abc", tint: .purple, on: summary.hasRomanization,
-                              help: L10n.t("罗马音"), forceLatinIcon: true)
+                              help: L10n.t("读音"), forceLatinIcon: true)
                     }
                 }
                 if summary.isSearching {

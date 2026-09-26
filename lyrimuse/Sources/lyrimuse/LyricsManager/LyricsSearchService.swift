@@ -84,7 +84,7 @@ final class LyricsSearchService {
             case "titleMatch": return L10n.t("标题吻合")
             case "consensus": return L10n.t("内容获印证")
             case "translation": return L10n.t("自带译文")
-            case "romanization": return L10n.t("自带罗马音")
+            case "romanization": return L10n.t("自带读音")
             case "rejectNotTimed": return L10n.t("不是带时间戳的歌词")
             case "rejectWrongLanguage": return L10n.t("语言不符")
             case "rejectCreditOnly": return L10n.t("仅含署名行，无正文")
@@ -117,7 +117,7 @@ final class LyricsSearchService {
             case "titleMatch": return L10n.t("完全同名 120 · 仅括号差异 60 · 中英双语同名 30")
             case "consensus": return L10n.t("歌词内容跟其它来源高度一致（2 家以上 250 · 1 家 150），串版本的拿不到")
             case "translation": return L10n.t("自带可用的中文译文，同水平候选间优先")
-            case "romanization": return L10n.t("日文歌词自带罗马音，同水平候选间优先")
+            case "romanization": return L10n.t("日文歌词自带读音，同水平候选间优先")
             case "versionTags": return L10n.t("括号里的 Live / Remix / Demo / Club Mix 等跟本地歌名对不上")
             case "sourceDurationOff":
                 return L10n.t("这个源自己声明的曲目时长跟本地差了 12% 以上，多半挂在另一次录音上")

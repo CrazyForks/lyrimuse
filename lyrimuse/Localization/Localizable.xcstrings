@@ -409,7 +409,7 @@
         }
       }
     },
-    "主歌词下方多显示一行，行高不变。译文和罗马音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览" : {
+    "主歌词下方多显示一行，行高不变。译文和读音显示的是当前句，下一句显示接下来那句；选「下一句」时展开区不再重复显示下一句预览" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -421,7 +421,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主歌詞下方多顯示一行，行高不變。譯文和羅馬拼音顯示的是目前這句，下一句顯示接下來那句；選「下一句」時展開區不再重複顯示下一句預覽"
+            "value" : "主歌詞下方多顯示一行，行高不變。譯文和讀音顯示的是目前這句，下一句顯示接下來那句；選「下一句」時展開區不再重複顯示下一句預覽"
           }
         }
       }
@@ -5092,25 +5092,25 @@
         }
       }
     },
-    "全局时间轴偏移" : {
+    "时间轴偏移" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Global Timing Offset"
+            "value" : "Timing Offset"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全局时间轴偏移"
+            "value" : "时间轴偏移"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全域時間軸偏移"
+            "value" : "時間軸偏移"
           }
         }
       }
@@ -10076,7 +10076,7 @@
         }
       }
     },
-    "已显示罗马音" : {
+    "已显示读音" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -10087,7 +10087,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已顯示羅馬拼音"
+            "value" : "已顯示讀音"
           }
         }
       }
@@ -10616,7 +10616,7 @@
         }
       }
     },
-    "已隐藏罗马音" : {
+    "已隐藏读音" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -10627,7 +10627,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已隱藏羅馬拼音"
+            "value" : "已隱藏讀音"
           }
         }
       }
@@ -12791,7 +12791,7 @@
         }
       }
     },
-    "播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/罗马音不受影响" : {
+    "播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -12803,13 +12803,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放用的是逐字时间轴,改「歌词(LRC)」不生效。要手改主歌词,先用「联网搜索候选歌词」换一份不带逐字的;译文/罗马音不受影响"
+            "value" : "播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "播放用的是逐字時間軸，改「歌詞(LRC)」不會生效。要手改主歌詞，先用「線上搜尋候選歌詞」換一份不帶逐字的；譯文/羅馬拼音不受影響"
+            "value" : "播放用的是逐字時間軸，改「歌詞(LRC)」不會生效。要手改主歌詞，先用「線上搜尋候選歌詞」換一份不帶逐字的；譯文/讀音不受影響"
           }
         }
       }
@@ -12952,25 +12952,25 @@
         }
       }
     },
-    "效果" : {
+    "调整" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Effects"
+            "value" : "Adjust"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "效果"
+            "value" : "调整"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "效果"
+            "value" : "調整"
           }
         }
       }
@@ -13428,7 +13428,7 @@
         }
       }
     },
-    "日文歌词自带罗马音，同水平候选间优先" : {
+    "日文歌词自带读音，同水平候选间优先" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -13440,13 +13440,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "日文歌词自带罗马音，同水平候选间优先"
+            "value" : "日文歌词自带读音，同水平候选间优先"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "日文歌詞內附羅馬拼音，在同等候選中優先"
+            "value" : "日文歌詞內附讀音，在同等候選中優先"
           }
         }
       }
@@ -13727,7 +13727,7 @@
         }
       }
     },
-    "显示/隐藏罗马音" : {
+    "显示/隐藏读音" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -13738,7 +13738,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "顯示/隱藏羅馬拼音"
+            "value" : "顯示/隱藏讀音"
           }
         }
       }
@@ -14067,7 +14067,7 @@
         }
       }
     },
-    "显示罗马音" : {
+    "显示读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -14079,13 +14079,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "显示罗马音"
+            "value" : "显示读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "顯示羅馬拼音"
+            "value" : "顯示讀音"
           }
         }
       }
@@ -15349,25 +15349,25 @@
         }
       }
     },
-    "标注哪些语言" : {
+    "标注的语言" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Annotate"
+            "value" : "Languages"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "标注哪些语言"
+            "value" : "标注的语言"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "標註哪些語言"
+            "value" : "標註的語言"
           }
         }
       }
@@ -16863,25 +16863,25 @@
         }
       }
     },
-    "正数＝歌词提前，负数＝歌词延后；常用来抵消蓝牙耳机的声音延迟" : {
+    "正数＝歌词提前，负数＝歌词延后" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Positive shows lyrics earlier, negative later; usually to offset Bluetooth audio delay"
+            "value" : "Positive shows lyrics earlier, negative later"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正数＝歌词提前，负数＝歌词延后；常用来抵消蓝牙耳机的声音延迟"
+            "value" : "正数＝歌词提前，负数＝歌词延后"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正數＝歌詞提前，負數＝歌詞延後；常用來抵銷藍牙耳機的聲音延遲"
+            "value" : "正數＝歌詞提前，負數＝歌詞延後"
           }
         }
       }
@@ -19443,7 +19443,7 @@
         }
       }
     },
-    "罗马音" : {
+    "读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -19455,13 +19455,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "罗马音"
+            "value" : "读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "羅馬拼音"
+            "value" : "讀音"
           }
         }
       }
@@ -19834,7 +19834,7 @@
         }
       }
     },
-    "自带罗马音" : {
+    "自带读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -19846,13 +19846,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自带罗马音"
+            "value" : "自带读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "內附羅馬拼音"
+            "value" : "內附讀音"
           }
         }
       }
@@ -22620,25 +22620,25 @@
         }
       }
     },
-    "这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的全局偏移和按播放器补偿也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源" : {
+    "这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的「时间轴偏移」也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This clears the timing offsets you tuned by hand for %d songs and cannot be undone. The lyrics themselves are untouched, and the global offset and per-player compensation in Settings are not cleared either. Afterwards these songs go back to having their lyrics source updated automatically."
+            "value" : "This clears the timing offsets you tuned by hand for %d songs and cannot be undone. The lyrics themselves are untouched, and Timing Offset in Settings is not cleared either. Afterwards these songs go back to having their lyrics source updated automatically."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值,无法撤销。歌词内容本身不受影响;设置里的全局偏移和按播放器补偿也不会被清掉。清掉之后,这些歌会重新交给后台自动更新歌词源"
+            "value" : "这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的「时间轴偏移」也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這會清掉你為 %d 首歌手動調出來的歌詞時間軸校正值，無法復原。歌詞內容本身不受影響；設定裡的全域偏移和按播放器補償也不會被清掉。清掉之後，這些歌會重新交給背景自動更新歌詞來源"
+            "value" : "這會清掉你為 %d 首歌手動調出來的歌詞時間軸校正值，無法復原。歌詞內容本身不受影響；設定裡的「時間軸偏移」也不會被清掉。清掉之後，這些歌會重新交給背景自動更新歌詞來源"
           }
         }
       }
@@ -22850,7 +22850,7 @@
         }
       }
     },
-    "这里是罗马音示例" : {
+    "这里是读音示例" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -22862,13 +22862,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这里是罗马音示例"
+            "value" : "这里是读音示例"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這裡是羅馬拼音範例"
+            "value" : "這裡是讀音範例"
           }
         }
       }
@@ -24292,7 +24292,7 @@
         }
       }
     },
-    "隐藏罗马音" : {
+    "隐藏读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -24304,13 +24304,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隐藏发音"
+            "value" : "隐藏读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隱藏羅馬拼音"
+            "value" : "隱藏讀音"
           }
         }
       }
@@ -24449,6 +24449,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "韓文"
+          }
+        }
+      }
+    },
+    "普通话" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandarin"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "普通话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "國語"
+          }
+        }
+      }
+    },
+    "粤语" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cantonese"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粤语"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粵語"
           }
         }
       }
@@ -26403,7 +26449,7 @@
         }
       }
     },
-    "译文与罗马音" : {
+    "译文与读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -26415,13 +26461,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "译文与罗马音"
+            "value" : "译文与读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "譯文與羅馬拼音"
+            "value" : "譯文與讀音"
           }
         }
       }
@@ -26449,7 +26495,7 @@
         }
       }
     },
-    "这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或罗马音" : {
+    "这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -26461,13 +26507,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或罗马音"
+            "value" : "这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或读音"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這兩個開關管浮動歌詞和歌詞視窗；動態島和選單列在各自的「副行」裡選擇譯文或羅馬拼音"
+            "value" : "這兩個開關管浮動歌詞和歌詞視窗；動態島和選單列在各自的「副行」裡選擇譯文或讀音"
           }
         }
       }
@@ -27068,7 +27114,7 @@
         }
       }
     },
-    "只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的罗马音在播放时实时生成，不计入" : {
+    "只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的读音在播放时实时生成，不计入" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -27080,13 +27126,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的罗马音在播放时实时生成，不计入"
+            "value" : "只数存进缓存、会随歌词文件一起导出的那些。其余歌曲的读音在播放时实时生成，不计入"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只數存進快取、會隨歌詞檔案一起匯出的那些。其餘歌曲的羅馬拼音在播放時即時產生，不計入"
+            "value" : "只數存進快取、會隨歌詞檔案一起匯出的那些。其餘歌曲的讀音在播放時即時產生，不計入"
           }
         }
       }
@@ -27227,19 +27273,25 @@
         }
       }
     },
-    "每一项都按播放器单独勾选；选了「自动识别」时五个播放器都可勾" : {
+    "每一项都按播放器单独勾选；选了「自动识别」时所有播放器都可勾" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Each item is checked per player; with Auto-detect selected, all five players are available"
+            "value" : "Each item is checked per player; with Auto-detect selected, every player is available"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每一项都按播放器单独勾选；选了「自动识别」时所有播放器都可勾"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "每一項都按播放器分別勾選；選了「自動識別」時五個播放器都可勾"
+            "value" : "每一項都按播放器分別勾選；選了「自動識別」時所有播放器都可勾"
           }
         }
       }
@@ -27928,7 +27980,7 @@
         }
       }
     },
-    "已缓存罗马音" : {
+    "已缓存读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -27940,24 +27992,30 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已快取羅馬拼音"
+            "value" : "已快取讀音"
           }
         }
       }
     },
-    "重新扫描的范围：没有歌词的，加上只有纯文本的；人工修正过的不动" : {
+    "补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rescans songs with no lyrics or plain text only. Manually corrected songs are left alone."
+            "value" : "Searches again for songs with no lyrics or plain text only. Instrumentals and manually corrected songs are left alone."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重新掃描的範圍：沒有歌詞的，加上只有純文字的；手動修正過的不動"
+            "value" : "補搜的範圍：沒有歌詞的，加上只有純文字的；純音樂和手動修正過的不動"
           }
         }
       }
@@ -28908,48 +28966,48 @@
         }
       }
     },
-    "主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和罗马音显示当前句，「下一句」显示接下来那句、主行不再提前切。副行不滚动，装不下时尾部渐隐。" : {
+    "主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和读音显示当前句，「下一句」显示接下来那句；开着副行时主行不再提前切到下一句。副行不滚动，装不下时尾部渐隐。" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Adds a second line under the lyric without changing the item's height (10pt / 9pt; Font Size has no effect). Translation and Romanization show the current line; Next Line shows the upcoming one and the main line no longer switches early. The second line never scrolls — its tail fades when it doesn't fit."
+            "value" : "Adds a second line under the lyric without changing the item's height (10pt / 9pt; Font Size has no effect). Translation and Romanization show the current line; Next Line shows the upcoming one. With a second line on, the main line no longer switches early. The second line never scrolls — its tail fades when it doesn't fit."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和罗马音显示当前句，「下一句」显示接下来那句、主行不再提前切。副行不滚动，装不下时尾部渐隐。"
+            "value" : "主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和读音显示当前句，「下一句」显示接下来那句；开着副行时主行不再提前切到下一句。副行不滚动，装不下时尾部渐隐。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "主歌詞下方多一行，高度不變（兩行 10pt / 9pt，「字級」不生效）。譯文和羅馬拼音顯示目前這句，「下一句」顯示接下來那句、主行不再提前切。副行不捲動，放不下時尾端漸隱。"
+            "value" : "主歌詞下方多一行，高度不變（兩行 10pt / 9pt，「字級」不生效）。譯文和讀音顯示目前這句，「下一句」顯示接下來那句；開著副行時主行不再提前切到下一句。副行不捲動，放不下時尾端漸隱。"
           }
         }
       }
     },
-    "鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停、间奏、或那一格太窄时不接管。点键以外的地方仍是打开面板。" : {
+    "鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停后歌词收回成图标、或那一格太窄装不下三个键时不接管。点键以外的地方仍是打开面板。" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hover over the menu bar lyrics to turn them into Previous / Play-Pause / Next; move away and the lyrics return. Doesn't take over while paused, between lines, or when the slot is too narrow. Clicking outside the three buttons still opens the panel."
+            "value" : "Hover over the menu bar lyrics to turn them into Previous / Play-Pause / Next; move away and the lyrics return. Doesn't take over once the lyrics shrink back to the icon after pausing, or when the slot is too narrow for three buttons. Clicking outside the three buttons still opens the panel."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停、间奏、或那一格太窄时不接管。点键以外的地方仍是打开面板。"
+            "value" : "鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停后歌词收回成图标、或那一格太窄装不下三个键时不接管。点键以外的地方仍是打开面板。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "滑鼠移到選單列歌詞上換成「上一曲 / 播放暫停 / 下一曲」三個鍵，移開變回。暫停、間奏、或那一格太窄時不接管。按鍵以外的地方仍是打開面板。"
+            "value" : "滑鼠移到選單列歌詞上換成「上一曲 / 播放暫停 / 下一曲」三個鍵，移開變回。暫停後歌詞收回成圖示、或那一格太窄放不下三個鍵時不接管。按鍵以外的地方仍是打開面板。"
           }
         }
       }
@@ -29069,25 +29127,48 @@
         }
       }
     },
-    "只影响桌面悬浮歌词和歌词窗口；灵动岛受空间所限不支持，菜单栏只能显示一行。" : {
+    "管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only affects Desktop Floating Lyrics and the Lyrics Window; Notch Lyrics has no room for it, and Menu Bar Lyrics shows a single line."
+            "value" : "Applies to Desktop Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick translation in their own “Second Line” setting"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只影响桌面悬浮歌词和歌词窗口；灵动岛受空间所限不支持，菜单栏只能显示一行。"
+            "value" : "管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只影響桌面浮動歌詞和歌詞視窗；動態島受空間所限不支援，選單列只能顯示一行。"
+            "value" : "管桌面浮動歌詞和歌詞視窗；動態島和選單列在各自的「副行」裡選擇譯文"
+          }
+        }
+      }
+    },
+    "管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择读音" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to Desktop Floating Lyrics and the Lyrics Window; the Notch and Menu Bar pick romanization in their own “Second Line” setting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管桌面悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择读音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管桌面浮動歌詞和歌詞視窗；動態島和選單列在各自的「副行」裡選擇讀音"
           }
         }
       }
@@ -31044,7 +31125,7 @@
         }
       }
     },
-    "别名轮：补罗马音" : {
+    "别名轮：补读音" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -31056,7 +31137,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "別名輪：補羅馬拼音"
+            "value" : "別名輪：補讀音"
           }
         }
       }
@@ -32844,7 +32925,7 @@
         }
       }
     },
-    "歌词窗口的歌词字体（正文、译文、罗马音）" : {
+    "歌词窗口的歌词字体（正文、译文、读音）" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -32856,7 +32937,7 @@
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歌詞視窗的歌詞字型（正文、譯文、羅馬拼音）"
+            "value" : "歌詞視窗的歌詞字型（正文、譯文、讀音）"
           }
         }
       }
@@ -34242,7 +34323,7 @@
         }
       }
     },
-    "跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注罗马音。接下来几步帮你调成合适的样子，以后随时能在设置里改" : {
+    "跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注读音。接下来几步帮你调成合适的样子，以后随时能在设置里改" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -34254,13 +34335,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注罗马音。接下来几步帮你调成合适的样子，以后随时能在设置里改"
+            "value" : "跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注读音。接下来几步帮你调成合适的样子，以后随时能在设置里改"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟著正在播放的歌顯示歌詞：桌面、動態島、選單列、歌詞視窗都能放，還能對照譯文、標注羅馬拼音。接下來幾步幫你調成合適的樣子，之後隨時能在設定裡改"
+            "value" : "跟著正在播放的歌顯示歌詞：桌面、動態島、選單列、歌詞視窗都能放，還能對照譯文、標注讀音。接下來幾步幫你調成合適的樣子，之後隨時能在設定裡改"
           }
         }
       }

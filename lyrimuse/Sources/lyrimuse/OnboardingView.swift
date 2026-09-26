@@ -397,7 +397,7 @@ struct OnboardingView: View {
                 .accessibilityHidden(true)
             Text(L10n.t("欢迎使用 Lyrimuse"))
                 .font(.title.bold())
-            Text(L10n.t("跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注罗马音。接下来几步帮你调成合适的样子，以后随时能在设置里改"))
+            Text(L10n.t("跟着正在播放的歌显示歌词：桌面、灵动岛、菜单栏、歌词窗口都能放，还能对照译文、标注读音。接下来几步帮你调成合适的样子，以后随时能在设置里改"))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             // 两个跟「这台 Mac 上怎么用它」有关的偏好:界面语言、开机启动。
@@ -797,7 +797,7 @@ struct OnboardingView: View {
     /// 「歌词怎么显示」页的下半部分:译文与罗马音。这是这个 App 对中日韩听众最核心的能力之一
     /// (设置里「歌词 → 译文/效果」整整两卡),介绍性质、不锁「下一步」。
     ///
-    /// 这里只放**两个总开关**,不放"标注哪些语言"那一排。那几个走的是
+    /// 这里只放**两个总开关**,不放"标注的语言"那一排。那几个走的是
     /// `romanizationScripts` 的**双写**(AppSettings 持久化 + LocalPlaybackSource 让当前这首
     /// 歌立刻重新解析,见 SettingsView.romanizationToggle 的头注),只写一边就会出"改了要等
     /// 下一首才生效"这种错位 —— 引导页照抄一份等于给那条约束开第二个漂移点。默认值
@@ -815,13 +815,13 @@ struct OnboardingView: View {
                     isOn: $settings.showTranslation)
                 toggleRow(
                     icon: "textformat.alt",
-                    title: L10n.t("显示罗马音"),
+                    title: L10n.t("显示读音"),
                     subtitle: settings.romanizationScripts.contains(.chinese)
                         ? L10n.t("日文、韩文、中文、粤语默认都会标注，可在设置里按语言关闭")
                         : L10n.t("日文、韩文、粤语默认会标注，中文拼音可在设置里打开"),
                     isOn: $settings.showRomanization)
             }
-            Text(L10n.t("这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或罗马音"))
+            Text(L10n.t("这两个开关管悬浮歌词和歌词窗口；灵动岛和菜单栏在各自的「副行」里选择译文或读音"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

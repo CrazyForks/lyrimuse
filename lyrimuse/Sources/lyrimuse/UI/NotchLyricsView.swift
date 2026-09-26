@@ -384,7 +384,7 @@ extension LyricSecondaryLine {
         case .off: return L10n.t("不显示")
         case .nextLine: return L10n.t("下一句")
         case .translation: return L10n.t("译文")
-        case .romanization: return L10n.t("罗马音")
+        case .romanization: return L10n.t("读音")
         }
     }
 }

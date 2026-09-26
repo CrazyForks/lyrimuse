@@ -980,7 +980,7 @@ struct LyricsSearchSheet: View {
                     characteristicBadge(L10n.t("译文"), "character.book.closed", .green)
                 }
                 if c.hasRomanization {
-                    characteristicBadge(L10n.t("罗马音"), "textformat.abc", .purple, latinIcon: true)
+                    characteristicBadge(L10n.t("读音"), "textformat.abc", .purple, latinIcon: true)
                 }
                 // 来源:用它在别处(歌词管理列表、设置里的来源勾选)一贯的身份色,一眼能对上号。
                 if showsSource {

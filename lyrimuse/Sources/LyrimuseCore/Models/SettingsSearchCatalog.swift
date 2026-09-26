@@ -106,7 +106,7 @@ public enum SettingsSearchCatalog {
         switch section {
         case "fetch": sectionTitle = "获取"
         case "translation": sectionTitle = "译文"
-        case "display": sectionTitle = "效果"
+        case "display": sectionTitle = "调整"
         default: sectionTitle = "管理"
         }
         return SettingsSearchEntry(destination: .tab("lyrics"), sectionKey: lyricsSectionKey, sectionValue: section,
@@ -192,11 +192,11 @@ public enum SettingsSearchCatalog {
         lyrics("translation", "译文语言", kw: ["翻译", "语言"]),
         lyrics("translation", "系统兜底翻译", kw: ["机翻", "Google", "MyMemory", "翻译"]),
         lyrics("translation", "翻译语言包", kw: ["下载", "语言包", "Apple 翻译"]),
-        // ---- 歌词 › 效果 ----
+        // ---- 歌词 › 调整 ----
         lyrics("display", "繁简转换", kw: ["繁体", "简体", "OpenCC"]),
-        lyrics("display", "显示罗马音", kw: ["罗马字", "注音", "拼音", "粤拼", "发音"]),
-        lyrics("display", "标注哪些语言", kw: ["日语", "韩语", "中文", "罗马音"]),
-        lyrics("display", "全局时间轴偏移", kw: ["歌词偏移", "提前", "延后", "校准", "同步"]),
+        lyrics("display", "显示读音", kw: ["罗马音", "罗马字", "注音", "拼音", "粤拼", "发音"]),
+        lyrics("display", "标注的语言", kw: ["日语", "韩语", "普通话", "粤语", "中文", "拼音", "粤拼", "读音", "罗马音"]),
+        lyrics("display", "时间轴偏移", kw: ["全局", "歌词偏移", "提前", "延后", "校准", "同步", "延迟"]),
         // ---- 歌词 › 管理 ----
         lyrics("manage", "歌词库", kw: ["歌词管理", "统计", "缓存"]),
         lyrics("manage", "补搜缺失歌词", kw: ["重新扫描", "重搜", "补空", "没有歌词", "暂无", "缺失"]),
@@ -263,7 +263,7 @@ public enum SettingsSearchCatalog {
         surface(.notch, "展开宽度", kw: ["展开态", "pt"]),
         surface(.notch, "显示歌词", kw: ["歌词行", "状态条"], group: "歌词行"),
         surface(.notch, "对齐方式", kw: ["居中", "左对齐", "右对齐"], group: "歌词行"),
-        surface(.notch, "副行", kw: ["下一句", "译文", "罗马音", "两行"], group: "歌词行"),
+        surface(.notch, "副行", kw: ["下一句", "译文", "读音", "罗马音", "两行"], group: "歌词行"),
         surface(.notch, "展开时预览下一句", kw: ["下一句", "预览"], group: "歌词行"),
         surface(.notch, "卡拉OK效果", kw: ["逐字", "染色", "karaoke"], group: "歌词行"),
         surface(.notch, "显示封面", kw: ["封面缩略图", "专辑图"], group: "歌词行"),
@@ -285,7 +285,7 @@ public enum SettingsSearchCatalog {
         surface(.menuBar, "菜单栏歌词", kw: ["开关", "跑马灯", "总开关"], inDrawer: false),
         surface(.menuBar, "宽度模式", kw: ["固定", "自适应", "宽度"], group: "布局"),
         surface(.menuBar, "对齐方式", kw: ["居中", "左对齐", "右对齐"], group: "布局"),
-        surface(.menuBar, "副行", kw: ["下一句", "译文", "罗马音", "双排", "两行"], group: "布局"),
+        surface(.menuBar, "副行", kw: ["下一句", "译文", "读音", "罗马音", "双排", "两行"], group: "布局"),
         surface(.menuBar, "歌词旁的图标", kw: ["进度图标", "图标"], group: "布局"),
         surface(.menuBar, "卡拉OK效果", kw: ["逐字", "染色", "karaoke"], group: "配色"),
         surface(.menuBar, "文字颜色", alt: ["未唱到的颜色"], kw: ["字色", "颜色", "跟随系统"], group: "配色"),
@@ -318,7 +318,7 @@ public enum SettingsSearchCatalog {
         lyricsWindow("文字颜色", sub: "歌词窗口的文字颜色；「自动」会按背景亮度在浅色和深色之间切换",
                      kw: ["颜色", "字体颜色", "文字", "浅色", "深色", "自定义", "自动"], group: "外观"),
         lyricsWindow("指定颜色", kw: ["文字颜色", "自定义", "颜色"], group: "外观"),
-        lyricsWindow("字体", sub: "歌词窗口的歌词字体（正文、译文、罗马音）",
+        lyricsWindow("字体", sub: "歌词窗口的歌词字体（正文、译文、读音）",
                      kw: ["字体", "字型", "font", "歌词窗口"], group: "外观"),
         lyricsWindow("歌名", sub: "迷你尺寸顶部显示歌名／歌手／专辑",
                      kw: ["顶部信息", "标题", "迷你"], group: "顶部信息"),
@@ -340,7 +340,7 @@ public enum SettingsSearchCatalog {
         shortcut("显示/隐藏菜单栏歌词", kw: ["菜单栏", "开关"]),
         shortcut("锁定/解锁位置", kw: ["锁定", "位置"]),
         shortcut("显示/隐藏译文", kw: ["译文", "翻译"]),
-        shortcut("显示/隐藏罗马音", kw: ["罗马音", "发音", "拼音", "粤拼"]),
+        shortcut("显示/隐藏读音", kw: ["罗马音", "发音", "拼音", "粤拼"]),
         shortcut("打开歌词管理", kw: ["歌词管理", "窗口"]),
         shortcut("打开歌词窗口", kw: ["歌词窗口", "窗口"]),
         shortcut("搜索歌词", kw: ["手动搜索", "换歌词"]),

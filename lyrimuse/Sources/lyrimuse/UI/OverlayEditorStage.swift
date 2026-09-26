@@ -221,7 +221,7 @@ struct OverlayEditorStage: View {
     private static var previewLine: OverlayPreviewLine {
         OverlayPreviewLine(
             line: SyncedLyricLine(
-                romanization: L10n.t("这里是罗马音示例"),
+                romanization: L10n.t("这里是读音示例"),
                 translation: L10n.t("这里是译文示例"),
                 mainText: L10n.t("这里是一句歌词示例"),
                 words: nil, wordGroups: nil, side: nil),

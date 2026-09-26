@@ -270,7 +270,7 @@ func runLyricsManagerTests() {
         let cacheJSON = """
         {
           "周杰伦|枫|十一月的萧邦": {
-            "lyrics": "[00:01.00]正文", "lyrics_tr": "译文", "lyrics_roma": "罗马音",
+            "lyrics": "[00:01.00]正文", "lyrics_tr": "译文", "lyrics_roma": "读音",
             "lyrics_yrc": "逐字", "lyrics_source": "netease", "manual_lyrics": true,
             "lyrics_decision": {"winner": "netease", "path": "rescore"},
             "lyrics_scoring_version": 9, "canonical_artist": "周杰伦", "plain_lyrics": "纯文本"

@@ -155,7 +155,7 @@ public struct EnrichCacheLyrics {
     /// 它为 true 而 lyrics 为空,就是"搜过了,确实没有"——UI 靠这个区别把
     /// "搜索歌词中…"换成"暂无歌词",而不是无限期转圈。
     public let resolved: Bool
-    /// 这首歌是不是粤语——给"标注哪些语言"的粤拼开关用(见 Romanizer.LyricScript.cantonese)。
+    /// 这首歌是不是粤语——给"标注的语言"里粤语那个开关用(见 Romanizer.LyricScript.cantonese)。
     /// 判据是 collector 判定的 SongLanguage 真值,不是看歌词文字(汉字认不出粤语/普通话)。
     public let isCantonese: Bool
     /// 没有时间戳的纯文本兜底——只在 lyrics 为空、这首歌又确实采纳过一条"仅纯文本"候选时

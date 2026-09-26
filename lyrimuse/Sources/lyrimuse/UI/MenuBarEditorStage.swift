@@ -412,7 +412,7 @@ struct MenuBarHoverControlsRow: View {
         SettingsRow(
             icon: "playpause.circle",
             title: L10n.t("悬停显示播放控制"),
-            help: L10n.t("鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停、间奏、或那一格太窄时不接管。点键以外的地方仍是打开面板。")
+            help: L10n.t("鼠标移到菜单栏歌词上换成「上一曲 / 播放暂停 / 下一曲」三个键，移开变回。暂停后歌词收回成图标、或那一格太窄装不下三个键时不接管。点键以外的地方仍是打开面板。")
         ) {
             Toggle("", isOn: $settings.menuBarHoverShowsControls)
         }
@@ -695,7 +695,7 @@ struct MenuBarSecondaryLineRow: View {
         SettingsRow(
             icon: "text.append",
             title: L10n.t("副行"),
-            help: L10n.t("主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和罗马音显示当前句，「下一句」显示接下来那句、主行不再提前切。副行不滚动，装不下时尾部渐隐。")
+            help: L10n.t("主歌词下方多一行，高度不变（两行 10pt / 9pt，「字号」不生效）。译文和读音显示当前句，「下一句」显示接下来那句；开着副行时主行不再提前切到下一句。副行不滚动，装不下时尾部渐隐。")
         ) {
             Picker("", selection: $settings.menuBarSecondaryLine) {
                 ForEach(LyricSecondaryLine.allCases, id: \.self) { kind in

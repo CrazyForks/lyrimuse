@@ -2238,7 +2238,7 @@ struct LyricsWindowView: View {
                                 translationButtonLabel
                             }
                             .buttonStyle(.plain)
-                            .help(L10n.t("译文与罗马音"))
+                            .help(L10n.t("译文与读音"))
                             .anchorPreference(key: TranslationMenuButtonBoundsKey.self, value: .bounds) { $0 }
                         }
                         if !previewMode, !isIdle { lyricsQueuePill(showPlayerPane: showPlayerPane) }
@@ -3433,7 +3433,7 @@ struct LyricsWindowView: View {
                 withAnimation(.easeOut(duration: 0.12)) { showsTranslationMenu = false }
                 AppSettings.shared.showTranslation.toggle()
             }
-            MoreMenuRow(title: L10n.t(playback.showRomanization ? "隐藏罗马音" : "显示罗马音"),
+            MoreMenuRow(title: L10n.t(playback.showRomanization ? "隐藏读音" : "显示读音"),
                         enabled: trackHasRomanization) {
                 withAnimation(.easeOut(duration: 0.12)) { showsTranslationMenu = false }
                 AppSettings.shared.showRomanization.toggle()
@@ -3462,7 +3462,7 @@ struct LyricsWindowView: View {
                     parts.append(L10n.t("译文"))
                 }
                 if playback.allLines.contains(where: { $0.line.romanization != nil }) {
-                    parts.append(L10n.t("罗马音"))
+                    parts.append(L10n.t("读音"))
                 }
                 return parts.joined(separator: " · ")
             }

@@ -69,7 +69,7 @@ extension KeyboardShortcuts.Name {
         case .lyricsDelayHotkey: return L10n.t("歌词延后")
         case .lyricsQuickSearchHotkey: return L10n.t("搜索歌词")
         case .toggleTranslationHotkey: return L10n.t("显示/隐藏译文")
-        case .toggleRomanizationHotkey: return L10n.t("显示/隐藏罗马音")
+        case .toggleRomanizationHotkey: return L10n.t("显示/隐藏读音")
         case .toggleNotchOverlayHotkey: return L10n.t("显示/隐藏灵动岛歌词")
         case .toggleMenuBarLyricsHotkey: return L10n.t("显示/隐藏菜单栏歌词")
         case .lyricsOffsetResetHotkey: return L10n.t("歌词偏移归零")
@@ -207,7 +207,7 @@ enum GlobalHotkeys {
             let on = !AppSettings.shared.showRomanization
             AppSettings.shared.showRomanization = on
             flashHint(icon: "textformat.abc",
-                      text: on ? L10n.t("已显示罗马音") : L10n.t("已隐藏罗马音"))
+                      text: on ? L10n.t("已显示读音") : L10n.t("已隐藏读音"))
         }
         // 灵动岛/菜单栏歌词的显隐。跟「显示/隐藏悬浮歌词」凑齐三种形态 —— 原来只有悬浮
         // 那一个有键,另外两个没有,不对称。
