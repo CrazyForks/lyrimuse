@@ -79,14 +79,31 @@ public enum MediaControlClient {
 
     // MARK: - 切歌间隙保持(见 PlayerGapHold)
 
+    /// 这一拍是「在放、但不是音乐」(KKBOX 的播客单集,见 `TrustedPlayers.artistlessContent`)就当没在放:切歌间隙保持
+    /// 当场放手(不然会把上一首撑满整个窗口),调用方直接交回 nil、不退回去问别家的暂停会话。
+    private static func artistlessContentNotMusic(bundleID: String, snapshot: MediaControlSnapshot) -> Bool {
+        guard TrustedPlayers.artistlessContent(bundleID: bundleID, artist: snapshot.artist,
+                                               duration: snapshot.duration, playing: snapshot.playing) else { return false }
+        setSnapshotFailure(.notASong)
+        gapHoldLock.lock()
+        defer { gapHoldLock.unlock() }
+        if gapHoldLast?.snapshot.bundleIdentifier == bundleID {
+            if let since = gapHoldingSince {
+                logger.notice("now playing: gap hold ended after \(Int(Date().timeIntervalSince(since).rounded()), privacy: .public)s (next: \(bundleID, privacy: .public) is not playing music)")
+            }
+            gapHoldingSince = nil
+            gapHoldLast = nil
+        }
+        return true
+    }
+
     private static let gapHoldLock = NSLock()
     /// 上一份被采纳的快照和它读到的时刻;保持期间不更新(在放的话,位置从它还在放的最后一刻往前推)。
     private static var gapHoldLast: (snapshot: MediaControlSnapshot, at: Date)?
     /// 这一轮保持从哪一拍开始;nil = 没在保持。
     private static var gapHoldingSince: Date?
     /// 会撤会话的那个播放器的进程号,保持期间拿它问内核「还在不在」。只在采纳它的快照时记:
-    /// NSRunningApplication 在后台线程上偶尔返回空(实测保持中有一拍说 KKBOX 不在、0.3 秒后又在),
-    /// 保持期间照它判就会提前放手。
+    /// NSRunningApplication 在后台线程上偶尔返回空,保持期间别照它判(会提前放手)。
     private static var gapHoldPID: (bundleID: String, pid: pid_t)?
 
     private static func processAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
@@ -522,6 +539,7 @@ public enum MediaControlClient {
             // 走信任列表这条路进来的(不是用户在「播放器」卡里选中的具体播放器)要多过
             // 一道"这是不是一首歌"的守卫——跟 fetchAutoDetectedSnapshot 的信任分支同一套
             // 语义,理由见 TrustedPlayers.notASong 的注释(浏览器视频/播客不能被当成一首歌)。
+            if artistlessContentNotMusic(bundleID: bundleID, snapshot: snapshot) { return nil }
             guard !trustedPlaybackRejected(bundleID: bundleID, snapshot: snapshot) else {
                 setSnapshotFailure(.notASong)
                 return fallback()
@@ -531,6 +549,7 @@ public enum MediaControlClient {
                 bundleID: bundleID, mediaControl: snapshotWithProbedAlbum(snapshot))
         }
         // 勾选的内置播放器也过一次:`artistArrivesLate` 的(KKBOX)开播那一帧还没有歌手,当作还没准备好。
+        if artistlessContentNotMusic(bundleID: bundleID, snapshot: snapshot) { return nil }
         guard !trustedPlaybackRejected(bundleID: bundleID, snapshot: snapshot) else {
             setSnapshotFailure(.notASong)
             return fallback()
@@ -747,6 +766,8 @@ public enum MediaControlClient {
             setSnapshotFailure(.focusHeldByOtherApp)
             return snapshotAfterFocusLost()
         }
+        // KKBOX 在放播客:没在放音乐,不退回去问别家(见 TrustedPlayers.artistlessContent)。
+        if artistlessContentNotMusic(bundleID: bundleID, snapshot: snapshot) { return nil }
         // 信任的未知播放器再过一道"这是不是一首歌"的守卫:歌手名**或专辑名**为空的丢掉
         // (浏览器视频/播客)。见 TrustedPlayers.notASong —— 跟 collector 侧同一套语义。
         guard !trustedPlaybackRejected(bundleID: bundleID, snapshot: snapshot) else {

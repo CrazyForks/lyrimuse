@@ -167,6 +167,48 @@ func TestKKBOXUpcomingAlbumUsesBatchDetails(t *testing.T) {
 }
 
 // 歌单:上下文串里叫 online-playlist,只有一段序号;曲目表在 /v2/playlists/<id>,每首自带歌手。
+// 单曲:上下文是 kkbox:track:<id>,接下来会播的是这首的相关歌曲(自动续播),表里第一首是它自己。
+func TestKKBOXUpcomingSingleTrack(t *testing.T) {
+	withTestKKBOX(t, "kkbox:track:SEED", false)
+	testChromiumCacheEntry(t, kkboxCacheDirOverride, "rt1_0", "https://api-webapps.kkbox.com.tw/v2/related-tracks/SEED?terr=tw",
+		`{"data":{"id":"REL==","tracks":[
+		{"id":"SEED","name":"最偉大的作品","artist_roles":{"main_artists":[{"name":"周杰倫"}],"featured_artists":[]},"album":{"name":"最偉大的作品"}},
+		{"id":"R1","name":"Skywalker","artist_roles":{"main_artists":[{"name":"怕胖團"}],"featured_artists":[]},"album":{"name":"2049"}}]}}`)
+	got, ok := kkboxUpcoming("周杰倫", "最偉大的作品", 5)
+	if !ok || len(got) == 0 || got[0].title != "Skywalker" || got[0].artist != "怕胖團" {
+		t.Fatalf("got %+v ok=%v", got, ok)
+	}
+}
+
+// 收藏库「全部歌曲」:上下文用 track_id;曲目表每首只有 id,歌名歌手从单曲 / 批量详情补,补不上的那首不交出去。
+func TestKKBOXUpcomingLibraryAllTracks(t *testing.T) {
+	withTestKKBOX(t, "kkbox:my-library:@all:0?track_id=L1", false)
+	cache := kkboxCacheDirOverride
+	testChromiumCacheEntry(t, cache, "lib_0", "https://api-webapps.kkbox.com.tw/v2/library/all-tracks?lang=tc",
+		`{"status":"OK","data":{"version":1,"tracks":[{"id":"L1"},{"id":"L2"},{"id":"L3"}]}}`)
+	testChromiumCacheEntry(t, cache, "lib1_0", "https://api-webapps.kkbox.com.tw/v2/tracks/L1?terr=tw",
+		`{"data":{"id":"L1","name":"最偉大的作品","artist_roles":{"main_artists":[{"name":"周杰倫"}]},"album":{"name":"最偉大的作品"}}}`)
+	testChromiumCacheEntry(t, cache, "lib2_0", "https://api-webapps.kkbox.com.tw/v2/tracks/?ids=L2&plain=0",
+		`{"data":[{"id":"L2","name":"親密愛人","artist_roles":{"main_artists":[{"name":"法蘭"}]},"album":{"name":"另一個法蘭"}}]}`)
+	got, ok := kkboxUpcoming("周杰倫", "最偉大的作品", 5)
+	if !ok || len(got) == 0 || got[0].title != "親密愛人" || got[0].artist != "法蘭" {
+		t.Fatalf("got %+v ok=%v", got, ok)
+	}
+	for _, tr := range got {
+		if tr.title == "" {
+			t.Errorf("没有详情的那首不该交出去: %+v", got)
+		}
+	}
+	if !isKKBOXTrackListPath("/v2/library/all-tracks") || isKKBOXTrackListPath("/v2/library/favorite-tracks") {
+		t.Error("最近列表兜底只认全部歌曲那份")
+	}
+
+	withTestKKBOX(t, "kkbox:my-library:@favorites:0?track_id=L1", false)
+	if _, ok := kkboxUpcoming("周杰倫", "最偉大的作品", 5); ok {
+		t.Error("收藏库里没接的那几份:退回同专辑预取")
+	}
+}
+
 func TestKKBOXUpcomingOnlinePlaylist(t *testing.T) {
 	withTestKKBOX(t, "kkbox:online-playlist:PL1:22?track=P1", false)
 	testChromiumCacheEntry(t, kkboxCacheDirOverride, "hhhh_0", "https://api-webapps.kkbox.com.tw/v2/playlists/PL1?terr=tw",
@@ -332,6 +374,12 @@ func TestParseKKBOXContext(t *testing.T) {
 	got, ok := parseKKBOXContext("kkbox:song-list:9aAuLbTii-uJpt3QZaHg==:15:0?track=KowPqsXBP2VFtgmG5K")
 	if want := (kkboxContext{kind: "song-list", id: "9aAuLbTii-uJpt3QZaHg==", track: "KowPqsXBP2VFtgmG5K"}); !ok || got != want {
 		t.Errorf("got %+v ok=%v", got, ok)
+	}
+	if got, ok := parseKKBOXContext("kkbox:my-library:@all:1?track_id=D-GkWXIWldMimVKEC3"); !ok || got.id != "@all" || got.track != "D-GkWXIWldMimVKEC3" {
+		t.Errorf("收藏库:曲目 id 在 track_id 里, got %+v ok=%v", got, ok)
+	}
+	if got, ok := parseKKBOXContext("kkbox:track:4s7gyziTOGRFhEcFQf"); !ok || got.kind != "track" || got.track != "4s7gyziTOGRFhEcFQf" {
+		t.Errorf("单曲:上下文本身就是这首, got %+v ok=%v", got, ok)
 	}
 	for _, bad := range []string{"kkbox:void", "", "spotify:album:x?track=y", "kkbox:album:ALB:0:0"} {
 		if _, ok := parseKKBOXContext(bad); ok {

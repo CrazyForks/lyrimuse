@@ -194,6 +194,13 @@ func albumTracks(artist, title, album, bundleID string) ([]albumTrack, bool) {
 			return tracks, true
 		}
 	}
+	// KKBOX 同理:缓存里有这张专辑的曲目表就用它的(kkboxalbum.go kkboxAlbumTracks);没有才往下走网易云,
+	// 歌手改写成 KKBOX 的写法(见下面 return 那一行)。
+	if bundleID == kkboxBundleID {
+		if tracks, ok := kkboxAlbumTracks(artist, title); ok {
+			return tracks, true
+		}
+	}
 	// 复用解析歌词时那次搜索的结果 —— neteaseLookup 带 30 天缓存,当前这首歌刚解析过,
 	// 这里是缓存命中、零网络;拿到的 AlbumID 是**这首歌自己所属**的那张专辑。缓存命中
 	// 路径不会真的发请求,没有可取消的对象,context.Background() 就够。
@@ -223,7 +230,11 @@ func albumTracks(artist, title, album, bundleID string) ([]albumTrack, bool) {
 		log.Printf("album prefetch: netease album %q != local %q, skipping", ne.Album, album)
 		return nil, false
 	}
-	return neteaseAlbumTracks(ne.AlbumID)
+	tracks, ok := neteaseAlbumTracks(ne.AlbumID)
+	if ok && bundleID == kkboxBundleID {
+		tracks = kkboxAlbumTrackArtists(tracks, artist)
+	}
+	return tracks, ok
 }
 
 // albumTracksFromMusicApp 用 AppleScript 问 Music.app 本地库里这张专辑都有哪些曲目

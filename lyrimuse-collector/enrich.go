@@ -340,6 +340,10 @@ type enrichEntry struct {
 	// 单独成段放在这里(不挤进上面链接那一组)是为了不动那一组的 gofmt 对齐列。
 	SpotifyTrackID string `json:"spotify_track_id,omitempty"`
 
+	// KKBOXURL:用 KKBOX 放这首歌时,它缓存里的单曲详情给的歌曲页(`https://www.kkbox.com/<地区>/<语言>/song/<id>`,
+	// 见 kkboxlyrics.go kkboxPlayingInfoFor)。App 从里面取曲目 id 拼 `kkbox://song/<id>#view` 在 KKBOX 里打开,网页用原样链接。
+	KKBOXURL string `json:"kkbox_url,omitempty"`
+
 	// Unknown 装这条记录里**当前二进制不认识的键**(原样的 JSON 片段),MarshalJSON 时原样写回
 	// (enrichjson.go)。
 	//
@@ -366,6 +370,7 @@ func (e enrichEntry) fields() map[string]string {
 	put("qq_music_url", e.QQURL)
 	put("spotify_url", e.spotifyLink())
 	put("spotify_track_id", e.SpotifyTrackID)
+	put("kkbox_url", e.KKBOXURL)
 	put("lyrics", e.Lyrics)
 	put("lyrics_tr", e.LyricsTr)
 	put("lyrics_roma", e.LyricsRoma)
@@ -540,6 +545,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 	if radioStationCard(radio, artist, title) {
 		return nil
 	}
+	// artistArrivesLate 的播放器(KKBOX)歌手空的只可能是非歌曲内容(播客单集,见 builtinArtistNotReady):
+	// 同上一个理由,不拿去搜歌词、不写进缓存。
+	if artist == "" && playerArtistArrivesLate[bundleID] {
+		return nil
+	}
 	// 广告不能拿去搜歌词:qqMusicURL()/e.SpotifyURL 这两路兜底链接只要 title!="" 就会给出
 	// 非空值,导致 resolveEnrichAsync 的"全空不写入"判断永远不成立,广告标题会被当成一首
 	// "歌"永久写进磁盘缓存、污染"歌词管理"列表,还白跑一轮网络搜索。判据见 isAdBreak。
@@ -568,6 +578,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 	// 那个。 必须在取 enrichMu **之前**算 —— 它内部经 lyricResolvedArtists 取同一把锁(不可重入,09-07 那次
 	// poll 循环冻死 11 分钟就是持锁期间又加锁来的)。
 	coverAlbum := coverAlbumForTrack(context.Background(), artist, title, album, durationSecs)
+	// KKBOX 的缓存里现在有没有这首的词:要扫它的缓存目录,放在锁外(记忆 30 秒,见 kkboxLyricsAvailable)。
+	var kkboxInfo kkboxPlayingInfo
+	if bundleID == kkboxBundleID {
+		kkboxInfo = kkboxPlayingInfoFor(artist, title, durationSecs)
+	}
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	if !ok {
@@ -599,6 +614,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		// 电台真曲长提示(同一套模式):目录锚点是异步的,条目写下那一拍通常还没有,几秒后
 		// 到位了要补进来 —— App 拿它当电台进度条的分母。见 radioduration.go。
 		if applyRadioDurationHintLocked(hintKey, &e) {
+			spotifyHintDirty = true
+		}
+		// KKBOX 歌曲页:用 KKBOX 放时从它缓存的单曲详情里取(锁外已经取好),同一套「变了才落盘」。
+		if kkboxInfo.url != "" && e.KKBOXURL != kkboxInfo.url {
+			e.KKBOXURL = kkboxInfo.url
 			spotifyHintDirty = true
 		}
 		if spotifyHintDirty {
@@ -648,6 +668,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		} else if needsLyricsRescore(e, pinned, features().LyricsAutoUpgrade) && !enrichInflight[key] {
 			enrichInflight[key] = true
 			go rescoreLyrics(context.Background(), key, artist, title, album, durationSecs)
+		} else if kkboxLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, kkboxInfo.lyrics) &&
+			!enrichInflight[key] && kkboxLyricsRecheckOnce(key) {
+			// KKBOX 自己的词在这首被预解析之后才有(见 kkboxLyricsWorthRecheck),让它进一次打分。
+			enrichInflight[key] = true
+			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
 		} else if needsLyricsRetry(e, wrongDuration, pinned, features().LyricsAutoUpgrade) && !enrichInflight[key] {
 			enrichInflight[key] = true
 			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
@@ -1350,8 +1375,12 @@ func needsLyricsRetry(e enrichEntry, wrongDuration, pinned, autoUpgrade bool) bo
 	//
 	// 下面的手改保护/重试上限/时间节流照常生效 —— 同源候选要是每次都赢不了(比如它质量
 	// 实在差,250 分也翻不过来),重试次数上限会兜住,不会没完没了地重搜。
+	//
+	// kkbox 不走这条:它的词只在用 KKBOX 放过之后才进缓存,出现在候选里时几乎总是已经带着同源加权打过分了,「没选它」
+	// 就是结论(它只有逐行,输给逐字源是常态),走这条会让每首用 KKBOX 放的歌都连着全源重搜到次数上限。它什么时候值得
+	// 重来一次由 kkboxLyricsWorthRecheck 管。
 	nativeMissedOut := hasNativeLyricSource() && !isNativeLyricSource(e.LyricsSource) &&
-		slices.ContainsFunc(e.LyricsSourcesSeen, func(s string) bool { return isNativeLyricSource(s) })
+		slices.ContainsFunc(e.LyricsSourcesSeen, func(s string) bool { return isNativeLyricSource(s) && s != kkboxLocalLyricsSource })
 	// 版本时长对不上(预取用了另一个版本的时长做校验)跟"同源落选"一样,本身就是重来
 	// 一次的理由,同样要越过下面"已经有逐字就不重试"那道闸。wrongDuration 由调用方
 	// (trackEnrichment)算好传进来:durationMismatch 的原始观察值必须先过
@@ -2743,6 +2772,12 @@ func pickLyricCandidate(scored []scoredLyricCandidateResult) *scoredLyricCandida
 				}
 			}
 		}
+		// KKBOX 本地歌词不在用户排的顺序里(它不是歌词源):顺序里的源都没给出可用的,才轮到它。
+		for i := range scored {
+			if scored[i].Source == kkboxLocalLyricsSource && scored[i].Score >= 0 {
+				return &scored[i]
+			}
+		}
 		return nil
 	}
 	var picked *scoredLyricCandidateResult
@@ -3662,6 +3697,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	am := raw["applemusic"]
 	amLyr, amYRC, amTr, amTitle, amArtist, amAlbum, amCover, amDur, amPlainOnly := am.lyr, am.yrc, am.tr, am.matchTitle, am.matchArtist, am.matchAlbum, am.matchCover, am.srcDur, am.plainOnly
 	soda := raw["soda"]
+	kk := raw[kkboxLocalLyricsSource]
 	sodaLyr, sodaYRC, sodaTitle, sodaArtist, sodaAlbum, sodaCover, sodaDur := soda.lyr, soda.yrc, soda.matchTitle, soda.matchArtist, soda.matchAlbum, soda.matchCover, soda.srcDur
 	amll := raw["amll"].amll
 	// 候选的封面只用它自己那个源给的,没有就空着(「搜索候选歌词」弹窗显示占位图,「解析决策」全空时整列不出现)。
@@ -3762,6 +3798,16 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			title:                      sodaTitle, artist: sodaArtist, album: sodaAlbum,
 			cover:                   sodaCover,
 			identityFromLocalClient: soda.identityFromLocalClient,
+		})
+	}
+	if kk.lyr != "" {
+		// KKBOX 本地歌词(用 KKBOX 放歌时读它自己缓存里的那份,逐行,见 kkboxlyrics.go)。只精确到整秒的那类不置
+		// identityFromLocalClient,不享受同源加权。
+		candidates = append(candidates, lyricCandidate{
+			source: kkboxLocalLyricsSource, lyrics: kk.lyr,
+			sourceReportedDurationSecs: kk.srcDur,
+			title:                      kk.matchTitle, artist: kk.matchArtist, album: kk.matchAlbum,
+			identityFromLocalClient: kk.identityFromLocalClient,
 		})
 	}
 	if !amll.empty() {
@@ -4295,6 +4341,16 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 	// raw:目前为止到手的各源原始应答,按源名存。打分/排序全部下放给
 	// rankLyricSourceResults(包级纯函数,回归金标集与生产共用),这里只负责收结果、喂进去。
 	raw := map[string]lyricSourceResult{}
+	// KKBOX 本地歌词不是歌词源,不进上面那组并发(源清单、进度分母、收集循环都只数歌词源):正在用 KKBOX 放歌时,
+	// 开搜之前读一次它自己的缓存(本机文件,毫秒级),有就当一份候选放进去(见 kkboxlyrics.go)。
+	//
+	// 只在首轮读:它按时长就认得出这首,跟查询用的歌手写法无关,别名轮 / 反查轮里再放一份,会被当成「这个别名救回了
+	// 候选」。首轮那份靠 mergeLyricCandidateRounds 的只增不减留到最后。
+	if lyricQueryReasonFrom(ctx) == lyricQueryReasonPrimary {
+		if r, ok := kkboxLocalLyricsFor(artist, title, durationSecs); ok {
+			raw[kkboxLocalLyricsSource] = r
+		}
+	}
 	// scoreAndSort 用目前为止已经到手的原始结果重新构建候选、算 corroboratedEndings、
 	// 打分、排序——每次有新结果到达都会重新跑一遍(而不是缓存增量),因为一份候选的
 	// corroborated 状态可能随后到的源变化(见上面 onUpdate 的注释),分数不是只增不改

@@ -155,6 +155,12 @@ func TestCompanionLaunchProcessNamesHonorsChosenPlayers(t *testing.T) {
 	if got := resolveLaunchLyrimuseOnPlayers([]string{playerAuto, "bogus", playerNetease}); len(got) != 1 || !got[playerNetease] {
 		t.Errorf("resolveLaunchLyrimuseOnPlayers 应只留 netease, got %v", got)
 	}
+	// 每个内置播放器都认。
+	for player := range playerBundleIDs {
+		if got := resolveLaunchLyrimuseOnPlayers([]string{player}); !got[player] {
+			t.Errorf("resolveLaunchLyrimuseOnPlayers 该认 %q, got %v", player, got)
+		}
+	}
 	if got := resolveLaunchLyrimuseOnPlayers(nil); got != nil {
 		t.Errorf("nil 应原样透传(表示键缺失), got %v", got)
 	}

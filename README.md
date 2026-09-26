@@ -205,7 +205,7 @@ Yes, whenever the lyrics carry word-level timing — NetEase Cloud Music, QQ Mus
 No. Lyrimuse ships ad-hoc signed, like it always has — no developer account for you, or for the project. See "Getting Started" above for the one-time Gatekeeper step this implies.
 
 **Does it work with Spotify, QQ Music, or NetEase Cloud Music, or only Apple Music?**
-All of them, plus Kugou Music, Soda Music and KKBOX — seven players in total, or let it auto-detect whichever one macOS currently considers "Now Playing." Apple Music is read via Automation access; the other six need no extra permission at all, since they're read through macOS's own system-level MediaRemote.
+All of them, plus Kugou Music, Soda Music and KKBOX — seven players in total (when you play in KKBOX, the lyrics KKBOX itself keeps in its local cache for that song also join the candidates — nothing is fetched from KKBOX), or let it auto-detect whichever one macOS currently considers "Now Playing." Apple Music is read via Automation access; the other six need no extra permission at all, since they're read through macOS's own system-level MediaRemote.
 
 **Is this the same as NetEase Cloud Music's built-in desktop lyrics?**
 Same idea, not the same app — Lyrimuse brings that floating-desktop-lyrics experience to any of six players (not just NetEase's own client), native to macOS, with a Dynamic-Island-style option and a full Apple-Music-style lyrics window on top of the classic overlay.

@@ -170,6 +170,9 @@ func mergePeripheralInto(winner, loser enrichEntry) enrichEntry {
 	if winner.SpotifyTrackID == "" {
 		winner.SpotifyTrackID = loser.SpotifyTrackID
 	}
+	if winner.KKBOXURL == "" {
+		winner.KKBOXURL = loser.KKBOXURL
+	}
 	if winner.CanonicalArtist == "" {
 		winner.CanonicalArtist = loser.CanonicalArtist
 	}

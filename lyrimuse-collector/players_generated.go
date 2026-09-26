@@ -102,6 +102,7 @@ var playerNativeLyricSources = map[string]string{
 	playerNetease:    "netease",
 	playerKugou:      "kugou",
 	playerSoda:       "soda",
+	playerKKBOX:      "kkbox",
 }
 
 // playerNeedsFullDiskAccess 是「播放器标识 → collector 读它的客户端文件要不要

@@ -35923,6 +35923,29 @@
         }
       }
     },
+    "在 KKBOX 中显示" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in KKBOX"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 KKBOX 中显示"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 KKBOX 中顯示"
+          }
+        }
+      }
+    },
     "反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据" : {
       "extractionState" : "manual",
       "localizations" : {

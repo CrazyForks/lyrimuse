@@ -157,6 +157,16 @@ public enum TrustedPlayers {
         return blank(artist) || blank(album)
     }
 
+    /// `artistArrivesLate` 的内置播放器报了一份歌手空、但时长已经有了而且在放的快照:不是开播那一帧(那一帧时长 0、
+    /// 没在放),是本来就没有歌手的非歌曲内容(KKBOX 的播客单集)。它的 title 是 Chromium 拿窗口标题凑的,不能当曲名
+    /// (见 02 章决策 62)。调用方当成「没在放音乐」(`MediaControlClient.artistlessContentNotMusic`)。
+    /// 跟 collector 的 builtinArtistlessContent 同一套语义。纯函数,selftest 直接覆盖。
+    public static func artistlessContent(bundleID: String?, artist: String?, duration: Double?, playing: Bool?) -> Bool {
+        guard let bundleID, PlaybackPlayer.builtin(forBundleID: bundleID)?.artistArrivesLate == true else { return false }
+        guard (artist ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return (duration ?? 0) > 0 && playing == true
+    }
+
     /// 信任列表里有 App 后来成了内置播放器(KKBOX 就是先被用户加进信任列表、后来才内置的):把它从信任列表
     /// 挪进播放器选择。
     ///

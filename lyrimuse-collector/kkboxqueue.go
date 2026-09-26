@@ -27,8 +27,7 @@ import (
 //     (`api-webapps.kkbox.*/v2/tracks-set|albums|playlists/<id>`,gzip 过的 JSON),里面是整份曲目表。
 // 顺序播放取当前这首后面几首;随机播放下一首猜不出来,按 shuffleCandidates 的规则交一批(见 queueorder.go)。
 //
-// 歌手名必须跟 KKBOX 报给系统的**逐字一致**,不然预解析写进缓存的 key 对不上、白解析一遍(内置之前退回同专辑预取,
-// 按 Apple 目录的「Taylor Swift」解析了一批,KKBOX 报的却是「Taylor Swift (泰勒絲)」,一条都没用上)。KKBOX 前端
+// 歌手名必须跟 KKBOX 报给系统的**逐字一致**,不然预解析写进缓存的 key 对不上、白解析一遍。KKBOX 前端
 // (ArtistNameHelper)的规则:有 artist_roles 就是 main_artists + featured_artists 用 ", " 连起来,没有才用
 // artist.name。同一个歌手的 roles 写法因曲而异(「Taylor Swift」「Taylor Swift (泰勒絲)」「周杰倫」都有),所以
 // 每首歌都得拿到它自己的 roles。播放器报的是**曲目详情**(`/v2/tracks/<id>`、批量 `/v2/tracks/?ids=…`)里的 roles;
@@ -72,8 +71,11 @@ func kkboxCacheDir() string {
 }
 
 // kkboxContextEndpoints:播放上下文的类型 → 接口路径里的那一段。KKBOX 前端恢复上次播放时认五种(restoreLastPlay):
-// album / online-playlist / song-list / my-library / track,这里接实测过的三种;收藏库和单曲还没找到曲目表落在哪,
-// 退回同专辑预取。上下文串里的类型跟接口路径不同名:歌单是 online-playlist,接口是 playlists。
+// album / online-playlist / song-list / my-library / track,五种都接;收藏库只接「全部歌曲」(见 kkboxLibraryLists)。
+// 上下文串里的类型跟接口路径不同名:歌单是 online-playlist,接口是 playlists。
+//
+// 单曲(`kkbox:track:<曲目 id>`,没有序号、没有 ?track=)放完是按这首的「相关歌曲」自动续播的,接下来会播的就是
+// `/v2/related-tracks/<这首>` 那份表(第一首是它自己);续播起来之后上下文换成那份表的 song-list(见下一段)。
 //
 // song-list 还有一种不在 tracks-set 下面:专辑 / 歌单放完之后 KKBOX 自动续播的「XX 合輯」,上下文 id 是它开播那首歌时
 // 拉的 `/v2/related-tracks/<那首歌>` 响应里的 data.id(见 kkboxCache.relatedTrackList)。
@@ -81,6 +83,27 @@ var kkboxContextEndpoints = map[string]string{
 	"song-list":       "tracks-set",
 	"album":           "albums",
 	"online-playlist": "playlists",
+	"track":           "related-tracks",
+	"my-library":      "library",
+}
+
+// kkboxLibraryLists:收藏库里的哪一份 → `/v2/library/` 下面的接口。收藏库的上下文是
+// `kkbox:my-library:<那一份>:<序号>?track_id=<曲目 id>`,内置的四份是 @all(全部歌曲)/ @favorites(收藏歌曲)/
+// @history(播放历史)/ @offline(离线),自建歌单用它自己的 id。只接 @all:它的接口 `library/all-tracks` 是
+// `{version, tracks:[{id}]}`,每首只有 id,歌名歌手从曲目详情补(trackDetails);收藏歌曲的接口形状不同,播放历史 /
+// 离线不走 HTTP,自建歌单那份没见过能解开的样本,都退回同专辑预取。
+var kkboxLibraryLists = map[string]string{"@all": "all-tracks"}
+
+// kkboxContextListPath:上下文对应的曲目表接口路径;收藏库里没接的那几份返回 ok=false。
+func kkboxContextListPath(ctx kkboxContext, endpoint string) (string, bool) {
+	if ctx.kind != "my-library" {
+		return "/v2/" + endpoint + "/" + ctx.id, true
+	}
+	name, ok := kkboxLibraryLists[ctx.id]
+	if !ok {
+		return "", false
+	}
+	return "/v2/library/" + name, true
 }
 
 // kkboxUpcomingLogged:同一个上下文、同一个失败原因只记一次,换歌不刷屏。
@@ -100,7 +123,7 @@ func kkboxUpcomingNote(key, format string, args ...any) {
 }
 
 // kkboxUpcomingRetryDelays:上下文里的列表还没有这首(换了列表、还没落盘)时隔多久重读。Chromium 的 Local Storage
-// 攒一会儿才落盘(实测 1 秒到十几秒不等,见 kkboxCurrentPosition);逐次隔 1 / 2 / 2 / 3 / 4 秒,最多等 12 秒(预解析本来就
+// 攒一会儿才落盘(见 kkboxCurrentPosition);逐次隔 1 / 2 / 2 / 3 / 4 秒,最多等 12 秒(预解析本来就
 // 在后台 goroutine 里,用户听一首歌远不止这么久)。单测设成 0。
 var kkboxUpcomingRetryDelays = []time.Duration{time.Second, 2 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second}
 
@@ -111,7 +134,7 @@ func kkboxUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 	for attempt := 0; ; attempt++ {
 		tracks, ok, retry := kkboxUpcomingOnce(artist, title, n)
 		if retry == "" {
-			return tracks, ok
+			return kkboxNamedTracks(tracks), ok
 		}
 		if attempt >= len(kkboxUpcomingRetryDelays) {
 			kkboxUpcomingNote("retry:"+retry, "kkbox upcoming: %s after waiting for the app to save it; falling back to album prefetch", retry)
@@ -122,6 +145,17 @@ func kkboxUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 			kkboxUpcomingBeforeRetry()
 		}
 	}
+}
+
+// kkboxNamedTracks 去掉没有歌名的:收藏库的曲目表每首只有 id,详情没进缓存的那几首叫不出名字,交出去也解析不了。
+func kkboxNamedTracks(tracks []upcomingTrack) []upcomingTrack {
+	out := tracks[:0:0]
+	for _, t := range tracks {
+		if t.title != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // kkboxUpcomingOnce 读一次。retry 非空 = 上下文里的列表还没有播放器报的这首(换了列表、还没落盘),值得隔一会儿再读;
@@ -140,8 +174,13 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 		kkboxUpcomingNote("kind:"+ctx.kind, "kkbox upcoming: playing from a %q context, which has no cached track list; falling back to album prefetch", ctx.kind)
 		return nil, false, ""
 	}
+	path, ok := kkboxContextListPath(ctx, endpoint)
+	if !ok {
+		kkboxUpcomingNote("library:"+ctx.id, "kkbox upcoming: playing from a my-library list that is not read; falling back to album prefetch")
+		return nil, false, ""
+	}
 	cache := scanKKBOXCache(kkboxCacheDir())
-	list, ok := cache.trackList("/v2/" + endpoint + "/" + ctx.id)
+	list, ok := cache.trackList(path)
 	if !ok && ctx.kind == "song-list" {
 		list, ok = cache.relatedTrackList(ctx.id)
 	}
@@ -192,7 +231,7 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 // kkboxCurrentPosition 找播放器报的这首在曲目表里的位置;找不到返回 -1。
 //
 // 上下文里记着的曲目 id 只当提示:Chromium 的 Local Storage 攒一会儿才落盘,切得勤时「当前是哪首」能晚十几秒以上
-// (实测换歌后 1.2 秒还是上一首、3.7 秒已是这一首,也有等 12 秒还停在上一首的)。列表本身换得少,所以 id 指的那首歌名对不上时,
+// (换歌后能晚十几秒,见 09 章决策 100)。列表本身换得少,所以 id 指的那首歌名对不上时,
 // 在同一份列表里按歌名找;同名的不止一首时要歌手也对上的那首,都对不上就取第一首(交给调用方的歌手校验去拒)。
 // 列表里压根没有这首 = 换了列表、上下文还没落盘,调用方隔一会儿重读。
 func kkboxCurrentPosition(q kkboxQueue, trackID, artist, title string) int {
@@ -333,10 +372,20 @@ func parseKKBOXContext(s string) (kkboxContext, bool) {
 		return kkboxContext{}, false
 	}
 	q, err := url.ParseQuery(query)
-	if err != nil || q.Get("track") == "" {
+	if err != nil {
 		return kkboxContext{}, false
 	}
-	return kkboxContext{kind: parts[0], id: parts[1], track: q.Get("track")}, true
+	track := q.Get("track")
+	if track == "" {
+		track = q.Get("track_id") // 收藏库的上下文用这个键
+	}
+	if parts[0] == "track" && track == "" {
+		track = parts[1] // 单曲:上下文本身就是这首
+	}
+	if track == "" {
+		return kkboxContext{}, false
+	}
+	return kkboxContext{kind: parts[0], id: parts[1], track: track}, true
 }
 
 // ---- 曲目表 ----
@@ -551,7 +600,7 @@ const (
 	chromiumSimpleCacheMagic      = 0xfcfb6d1ba7725c30
 	chromiumSimpleCacheEOFMagic   = 0xf4fa6f45970d41d8
 	chromiumSimpleCacheHeaderSize = 24
-	// kkboxCacheEntryMaxBytes:单个缓存条目的读入上限。歌单接口实测几 KB 到几十 KB。
+	// kkboxCacheEntryMaxBytes:单个缓存条目的读入上限。歌单接口一般几 KB 到几十 KB。
 	kkboxCacheEntryMaxBytes = 16 << 20
 )
 
@@ -700,6 +749,8 @@ func isKKBOXTrackListPath(path string) bool {
 	switch parts[0] {
 	case "albums", "playlists", "tracks-set", "related-tracks":
 		return true
+	case "library":
+		return parts[1] == kkboxLibraryLists["@all"]
 	}
 	return false
 }

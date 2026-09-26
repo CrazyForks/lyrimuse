@@ -295,6 +295,18 @@ func runPlayerIdentityTests() {
         expectEqual(TrustedPlayers.notASong(bundleID: PlaybackPlayer.kugou.bundleIdentifier, artist: "", album: "",
                                             trusted: [:]),
                     false, "KKBOX: 这道闸只管 artistArrivesLate 的播放器,别的内置播放器不受影响")
+        typealias TP = TrustedPlayers
+        expectEqual(TP.artistlessContent(bundleID: kk, artist: "", duration: 2143.19, playing: true), true,
+                    "KKBOX: 播客单集(歌手空、有时长、在放)是非歌曲内容,当没在放音乐")
+        expectEqual(TP.artistlessContent(bundleID: kk, artist: "", duration: 0, playing: false), false,
+                    "KKBOX: 开播那一帧(时长 0、没在放)仍当还没准备好")
+        expectEqual(TP.artistlessContent(bundleID: kk, artist: "", duration: 2143.19, playing: false), false,
+                    "KKBOX: 歌手空又没在放,分不出是不是开播那一帧,照旧不采纳")
+        expectEqual(TP.artistlessContent(bundleID: kk, artist: "Taylor Swift", duration: 200, playing: true), false,
+                    "KKBOX: 有歌手的不走这条")
+        expectEqual(TP.artistlessContent(bundleID: PlaybackPlayer.kugou.bundleIdentifier, artist: "", duration: 200,
+                                         playing: true), false,
+                    "KKBOX: 只管 artistArrivesLate 的播放器(决策 41)")
 
         // 信任列表里的 KKBOX 升级后挪进播放器选择;勾着自动识别的只从信任列表里拿掉。
         let trustedKK = [kk: "KKBOX", "com.apple.Safari": "Safari"]
@@ -308,8 +320,7 @@ func runPlayerIdentityTests() {
         expectEqual(untouched.trusted, ["com.apple.Safari": "Safari"], "信任→内置: 没有内置播放器就原样")
         expectEqual(untouched.players, [.spotify], "信任→内置: 没有内置播放器就原样(选择)")
 
-        // 切歌间隙保持(PlayerGapHold):KKBOX 切歌时先撤掉 Now Playing(多数 4~5 秒,最长实测 19 秒),这段时间里
-        // Apple Music 暂停着的旧会话不算换播放器。
+        // 切歌间隙保持(PlayerGapHold):KKBOX 切歌时先撤掉 Now Playing,这段时间里 Apple Music 暂停着的旧会话不算换播放器。
         typealias H = PlayerGapHold
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         let apple = PlaybackPlayer.appleMusic.bundleIdentifier

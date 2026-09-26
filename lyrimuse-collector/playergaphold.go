@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// 播放器切歌时先撤掉 Now Playing、隔几秒才发下一首(playerDropsSessionBetweenTracks,实测 KKBOX 多数 4~5 秒,
-// 专辑开播后第一次切歌有过 19 秒):这几秒里系统焦点落到别的播放器暂停着的旧会话上,或者谁都没有。照直采纳的话,
-// 当前曲目会先换成那个暂停的播放器,网页也跟着推一次「暂停:那首歌」,几秒后再换回来。
+// 播放器切歌时先撤掉 Now Playing、隔几秒才发下一首(playerDropsSessionBetweenTracks,空档长短见 02 章决策 60):
+// 这几秒里系统焦点落到别的播放器暂停着的旧会话上,或者谁都没有。照直采纳的话,当前曲目会先换成那个暂停的播放器,
+// 网页也跟着推一次「暂停:那首歌」,几秒后再换回来。
 //
 // 判据:上一份快照(在放或暂停都算:暂停着点开一张新专辑,加载那几秒同样会撤)来自会这样撤会话的播放器;这一拍却是
 // 别的播放器没在放、什么都没有,或者同一个播放器报
@@ -77,6 +77,21 @@ func playerRunningForBundle(bundle string) bool {
 		}
 	}
 	return true
+}
+
+// releasePlayerGapHold:这个播放器此刻在放的不是音乐(见 builtinArtistlessContent),它接下来交回的空快照不是切歌空档,
+// 保持当场放手、也不再记着它的上一首。
+func releasePlayerGapHold(bundle string) {
+	gapHoldMu.Lock()
+	defer gapHoldMu.Unlock()
+	if gapHoldPrev.bundle != bundle {
+		return
+	}
+	if !gapHoldSince.IsZero() {
+		log.Printf("now playing: gap hold ended after %s (next: %s is not playing music)", time.Since(gapHoldSince).Round(time.Second), bundle)
+		gapHoldSince = time.Time{}
+	}
+	gapHoldPrev = gapHoldLast{}
 }
 
 // holdAcrossPlayerGap 在 getState 的出口过一次:要保持就报 ok=false(这一拍不算数),否则原样交回并记下这一拍。

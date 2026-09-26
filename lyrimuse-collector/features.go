@@ -363,14 +363,16 @@ type featureFlags struct {
 // resolveLaunchLyrimuseOnPlayers 把「跟随哪些播放器启动」的原始列表清洗成集合:键缺失(nil,布尔年代
 // 的老配置)原样返回 nil,由 companionLaunchProcessNames 退回旧语义;键在(哪怕是空列表)就严格按它来,
 // 不认识的值丢掉(auto 也丢 —— 它不是一个可以"启动"的进程)。
+//
+// 认得哪些按 playerBundleIDs(生成自 players.json,auto 不在里面),别写成手写清单:设置里每个播放器都勾得上,
+// 漏一个就是勾了不生效、也不报错。
 func resolveLaunchLyrimuseOnPlayers(raw []string) map[string]bool {
 	if raw == nil {
 		return nil
 	}
 	out := map[string]bool{}
 	for _, p := range raw {
-		switch p {
-		case playerAppleMusic, playerQQMusic, playerNetease, playerKugou, playerSpotify:
+		if _, ok := playerBundleIDs[p]; ok {
 			out[p] = true
 		}
 	}
@@ -710,6 +712,10 @@ func resolveLyricsSources(list []string, amllSeen *bool, lyricFindSeen *bool, ku
 // lyricsourcesreload.go 头注。这也是这个判据必须唯一的原因:多一处直接读 features().LyricsSources,
 // 那一处就还停在启动时的旧值。
 func lyricSourceEnabled(source string) bool {
+	// KKBOX 本地歌词不是歌词源、设置里没有它的开关:用 KKBOX 放歌时读它自己缓存里的那份,跟着播放器走(见 kkboxlyrics.go)。
+	if source == kkboxLocalLyricsSource {
+		return true
+	}
 	enabled := currentLyricSources()
 	return len(enabled) == 0 || enabled[source]
 }

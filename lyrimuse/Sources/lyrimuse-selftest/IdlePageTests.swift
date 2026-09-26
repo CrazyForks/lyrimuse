@@ -279,6 +279,16 @@ func runIdlePageTests() {
                     "网页行:认不出在放哪个网页平台的浏览器 → nil")
         expectEqual(all.songLink(forPlayerBundleID: PlaybackPlayer.kugou.bundleIdentifier) == nil, true,
                     "网页行:酷狗播放 → nil(collector 没存酷狗歌曲页;用户那张截图的场景)")
+        let kkApp = P.kkboxAppURL(songPage: "https://www.kkbox.com/tw/tc/song/4s7gyziTOGRFhEcFQf")
+        expectEqual(kkApp?.absoluteString, "kkbox://song/4s7gyziTOGRFhEcFQf#view", "KKBOX 歌曲页 → 进 App 的深链")
+        expectEqual(P.kkboxAppURL(songPage: "https://www.kkbox.com/tw/tc/album/X") == nil, true, "KKBOX:不是 song 页挡掉")
+        expectEqual(P.kkboxAppURL(songPage: "https://evil.example.com/tw/tc/song/X") == nil, true, "KKBOX:别的域名挡掉")
+        expectEqual(P.kkboxAppURL(songPage: "") == nil, true, "KKBOX:空串不给链接")
+        let withKK = PlatformLinks(appleMusic: am, qqSong: qq, qqAlbum: nil, qqArtist: nil, neteaseSong: ne, kkboxSong: kkApp)
+        expectEqual(withKK.songLink(forPlayerBundleID: PlaybackPlayer.kkbox.bundleIdentifier)?.platform, .kkbox,
+                    "网页行:KKBOX 播放 → 在 KKBOX 里打开这首")
+        expectEqual(all.songLink(forPlayerBundleID: PlaybackPlayer.kkbox.bundleIdentifier) == nil, true,
+                    "网页行:KKBOX 播放但没存它的歌曲页 → nil,不拿别的平台顶上")
         expectEqual(all.songLink(forPlayerBundleID: nil) == nil, true, "网页行:还没认出播放器 → nil")
         expectEqual(all.songLink(forPlayerBundleID: "") == nil, true, "网页行:.auto 的空 bundle id → nil")
         // 播放器认得出、但这首歌在它那个平台上没链接:同样 nil,不退到别的平台。

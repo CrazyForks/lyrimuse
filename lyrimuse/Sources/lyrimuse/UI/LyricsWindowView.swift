@@ -3042,6 +3042,9 @@ struct LyricsWindowView: View {
             // 网易云只白捡歌曲页:collector 解出过专辑 ID,但它只活在内存里给同专辑预取用,
             // 没有落进 enrich 缓存(要加得动 collector,与 QQ 那两个 mid 同一条路)。
             if let u = links.neteaseSong { out.append(.init(id: "ne-song", title: L10n.t("网易云音乐歌曲页"), url: u)) }
+        } else if bundleID == PlaybackPlayer.kkbox.bundleIdentifier {
+            // KKBOX 的是进 App 的深链(见 PlatformLinks.kkboxSong),文案跟上面几条浏览器页不同。
+            if let u = links.kkboxSong { out.append(.init(id: "kkbox-song", title: L10n.t("在 KKBOX 中显示"), url: u)) }
         }
         return out
     }
@@ -3540,6 +3543,7 @@ struct LyricsWindowView: View {
         case .qqMusic: return L10n.t("QQ 音乐")
         case .netease: return L10n.t("网易云音乐")
         case .spotify: return "Spotify"
+        case .kkbox: return "KKBOX"
         }
     }
 

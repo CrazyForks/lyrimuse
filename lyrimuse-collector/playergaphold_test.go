@@ -25,7 +25,7 @@ func gapState(bundle, title string, playing bool) map[string]any {
 }
 
 // KKBOX 切歌时撤掉 Now Playing,焦点落到暂停着的 Apple Music:这几拍报读取失败(当前曲目原样留着),之后照常。
-// 窗口从撤会话那一拍算起:collector 5 秒一拍,最后一次看到在放可能早了一拍;实测空档最长 19 秒。
+// 窗口从撤会话那一拍算起:collector 5 秒一拍,最后一次看到在放可能早了一拍;空档可以比 8 秒长。
 func TestHoldAcrossPlayerGap(t *testing.T) {
 	resetPlayerGapHold(t)
 	t0 := time.Unix(1_000_000, 0)
@@ -71,6 +71,21 @@ func TestHoldAcrossPlayerGapFromPaused(t *testing.T) {
 	if _, ok := holdAcrossPlayerGap(gapState(appleMusicBundleID, "Old", true), t0.Add(12*time.Second)); !ok {
 		t.Error("保持中别家开始放:照常切")
 	}
+}
+
+// KKBOX 切到播客(没在放音乐):保持当场放手,空快照照常交出去。
+func TestReleasePlayerGapHold(t *testing.T) {
+	resetPlayerGapHold(t)
+	t0 := time.Unix(1_000_000, 0)
+	holdAcrossPlayerGap(gapState(kkboxBundleID, "Song A", true), t0)
+	if _, ok := holdAcrossPlayerGap(map[string]any{}, t0.Add(3*time.Second)); ok {
+		t.Fatal("撤会话:先保持")
+	}
+	releasePlayerGapHold(kkboxBundleID)
+	if got, ok := holdAcrossPlayerGap(map[string]any{}, t0.Add(4*time.Second)); !ok || len(got) != 0 {
+		t.Errorf("放手之后空快照照常交出去: got %v ok=%v", got, ok)
+	}
+	releasePlayerGapHold(spotifyBundleID) // 不是它在保持:什么都不做
 }
 
 func TestHoldAcrossPlayerGapSwitchesToAPlayingPlayer(t *testing.T) {

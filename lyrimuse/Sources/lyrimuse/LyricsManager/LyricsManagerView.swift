@@ -250,6 +250,9 @@ func sourceColor(_ source: String) -> Color {
     // 汽水音乐(加,见 collector/soda.go 头注)。品牌色是青绿一系,而 .teal 已被占,
     // 取 .cyan 作为下一个未占用色。
     case "soda": return .cyan
+    // KKBOX 本地歌词(不是歌词源:用 KKBOX 放歌时读它自己缓存里的那份,见 collector/kkboxlyrics.go 头注)。
+    // 品牌色是青蓝一系,.cyan / .teal / .blue 都被占了,取最后一个未占用色 .yellow。
+    case "kkbox": return .yellow
     default: return .secondary
     }
 }
@@ -285,6 +288,9 @@ func sourceDisplayName(_ source: String) -> String {
     case "applemusic": return "Apple Music"
     // 汽水音乐——官方中文名,跟网易云/QQ/酷狗同一档写法。
     case "soda": return L10n.t("汽水音乐")
+    // KKBOX 本地歌词——品牌名,中文界面里也写 KKBOX,保留原名。不在 LyricsSource 里(设置里没有它的开关),
+    // 只在这份词确实来自 KKBOX 时显示出来。
+    case "kkbox": return "KKBOX"
     case "": return L10n.t("无来源")
     default: return source
     }

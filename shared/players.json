@@ -131,7 +131,7 @@
       "processName": "KKBOX",
       "displayName": {"literal": "KKBOX"},
       "scrobbleLabel": "KKBOX (macOS)",
-      "nativeLyricSource": null,
+      "nativeLyricSource": "kkbox",
       "positionTier": "cleanExtrapolated",
       "republishesZeroAnchor": false,
       "playingFromRate": false,
@@ -142,7 +142,7 @@
       "tint": {"rgb": [0.00, 0.85, 0.97]},
       "fallbackSymbol": "music.note",
       "bundledIcon": "KKBOXIcon",
-      "note": "Electron 应用,走 media-control,没有 AppleScript 字典、没有沙盒。播放中约每 1.06 秒重发一次锚点,位置精确到微秒、跟墙钟一致(实测 92 秒累计偏差 0.8 毫秒),归 cleanExtrapolated —— 跟它此前作为信任播放器走的是同一档,内置化不改变位置行为。开播先发一帧只有歌名的(歌手空、时长 0、rate 0),约半秒后才补齐,所以 artistArrivesLate;开播那个 0 锚点没见过原样重发。切歌时会先撤掉 Now Playing(多数 4~5 秒,刚开播一张专辑后的第一次切歌实测有过 19 秒),暂停着点开新列表加载时也撤,所以 dropsSessionBetweenTracks。歌手名取每首歌自己的 artist_roles,同一个歌手也时有时无括号里的译名(`Taylor Swift` / `Taylor Swift (泰勒絲)`、`周杰倫` / `周杰倫 (Jay Chou)`)。processName 5 字节。"
+      "note": "Electron 应用,走 media-control,没有 AppleScript 字典、没有沙盒。播放中约每 1.06 秒重发一次锚点,位置精确到微秒、跟墙钟一致(实测 92 秒累计偏差 0.8 毫秒),归 cleanExtrapolated —— 跟它此前作为信任播放器走的是同一档,内置化不改变位置行为。开播先发一帧只有歌名的(歌手空、时长 0、rate 0),约半秒后才补齐,所以 artistArrivesLate;开播那个 0 锚点没见过原样重发。切歌时会先撤掉 Now Playing(多数 4~5 秒,刚开播一张专辑后的第一次切歌实测有过 19 秒),暂停着点开新列表加载时也撤,所以 dropsSessionBetweenTracks。歌手名取每首歌自己的 artist_roles,同一个歌手也时有时无括号里的译名(`Taylor Swift` / `Taylor Swift (泰勒絲)`、`周杰倫` / `周杰倫 (Jay Chou)`)。nativeLyricSource 填 kkbox:不是歌词源(接入走不通,见 kkboxlyrics.go 头注),是用它放歌时读它自己缓存里的那份歌词,享受同源加权。processName 5 字节。"
     },
     {
       "id": "spotify",

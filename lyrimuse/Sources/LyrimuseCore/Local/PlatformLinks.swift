@@ -19,6 +19,7 @@ import Foundation
 ///   entitlements 里没有),`y.qq.com` 不会被 App 接走;而它注册的 `qqmusicmac://` 命令表
 ///   只有 `playsong` / `downloadsong`(二进制取证),没有任何"打开这一页"的语义 ——
 ///   而且 `playsong` 会把正在放的这首从头重播,不是我们要的。所以别把它写成「在 QQ 音乐中打开」。
+/// - KKBOX 那条是 `kkbox://song/<id>#view`,**在 KKBOX 里打开这首的页面**(不播放),所以写成「在 KKBOX 中显示」。
 public struct PlatformLinks: Sendable, Equatable {
     /// Apple Music 曲目页(已是 `music://`,进 App)。
     public let appleMusic: URL?
@@ -33,23 +34,28 @@ public struct PlatformLinks: Sendable, Equatable {
     /// (collector 的 `spotify_track_id`,Spotify 原生播放换曲那一拍从 `spotify url` 留下的),
     /// 缓存里另一个 `spotify_url` 是本地拼的**搜索页**兜底,跟 QQ 的搜索兜底同一个理由不当歌曲页给出去。
     public let spotifySong: URL?
+    /// KKBOX 曲目页 `kkbox://song/<id>#view`(进 App,不播放)。由 collector 存的歌曲页换算,见 `kkboxAppURL`。
+    public let kkboxSong: URL?
 
     public var isEmpty: Bool {
         appleMusic == nil && qqSong == nil && qqAlbum == nil && qqArtist == nil && neteaseSong == nil && spotifySong == nil
+            && kkboxSong == nil
     }
 
-    public init(appleMusic: URL?, qqSong: URL?, qqAlbum: URL?, qqArtist: URL?, neteaseSong: URL?, spotifySong: URL? = nil) {
+    public init(appleMusic: URL?, qqSong: URL?, qqAlbum: URL?, qqArtist: URL?, neteaseSong: URL?, spotifySong: URL? = nil,
+                kkboxSong: URL? = nil) {
         self.appleMusic = appleMusic
         self.qqSong = qqSong
         self.qqAlbum = qqAlbum
         self.qqArtist = qqArtist
         self.neteaseSong = neteaseSong
         self.spotifySong = spotifySong
+        self.kkboxSong = kkboxSong
     }
 
     /// 歌曲页所在的平台 —— 给「简介」面板那行选文案用(名字在 App 层本地化,这里只给身份)。
     public enum Platform: String, Sendable, Equatable {
-        case appleMusic, qqMusic, netease, spotify
+        case appleMusic, qqMusic, netease, spotify, kkbox
     }
 
     /// **当前播放器自己那个平台**上这首歌的歌曲页(规则:简介面板的「网页」行
@@ -74,11 +80,22 @@ public struct PlatformLinks: Sendable, Equatable {
         case PlaybackPlayer.qqMusic.bundleIdentifier: return qqSong.map { (.qqMusic, $0) }
         case PlaybackPlayer.netease.bundleIdentifier: return neteaseSong.map { (.netease, $0) }
         case PlaybackPlayer.spotify.bundleIdentifier: return spotifySong.map { (.spotify, $0) }
+        case PlaybackPlayer.kkbox.bundleIdentifier: return kkboxSong.map { (.kkbox, $0) }
         default: return nil
         }
     }
 
     // MARK: - 纯函数(selftest 钉住)
+
+    /// collector 存的 KKBOX 歌曲页(`https://www.kkbox.com/<地区>/<语言>/song/<id>`)换成在 KKBOX 里打开这首的深链
+    /// `kkbox://song/<id>#view`。形状闸与 collector 的 `kkboxSongPageURL` 同源,别的一律不认。
+    public static func kkboxAppURL(songPage raw: String) -> URL? {
+        guard let url = URL(string: raw), url.scheme == "https", url.host == "www.kkbox.com" else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count == 4, parts[2] == "song", !parts[3].isEmpty,
+              parts[3].allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }
+        return URL(string: "kkbox://song/" + parts[3] + "#view")
+    }
 
     /// Spotify 曲目页。ID 的形状闸与 collector 的 `spotifyTrackIDFromURI` 同源:22 位 base62,别的一律不认
     /// (缓存里这个字段只由 collector 写,形状闸是防手改 / 防把 `missing value` 这类脚本回声当 ID)。

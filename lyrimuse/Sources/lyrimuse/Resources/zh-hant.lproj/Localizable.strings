@@ -468,6 +468,7 @@
 "在 Chrome 菜单栏依次打开「显示 → 开发者 → 允许 Apple 事件中的 JavaScript」。（Chrome 自己的帮助里把这个菜单写成「查看」，是它的文案错了，菜单栏上实际叫「显示」。）" = "在 Chrome 的選單列依序打開「顯示方式 → 開發人員選項 → 允許 Apple 事件的 JavaScript」。";
 "在 Dock 中显示" = "在 Dock 中顯示";
 "在 Edge 菜单栏依次打开「查看 → 开发人员 → 允许 Apple 事件中的 JavaScript」。" = "在 Edge 的選單列依序打開「檢視 → 開發人員 → 允許 Apple 事件中的 JavaScript」。";
+"在 KKBOX 中显示" = "在 KKBOX 中顯示";
 "在 Last.fm 上喜欢" = "在 Last.fm 上喜歡";
 "在 Last.fm 打开" = "在 Last.fm 打開";
 "在 Last.fm 网站查看主页" = "在 Last.fm 網站查看個人頁面";
