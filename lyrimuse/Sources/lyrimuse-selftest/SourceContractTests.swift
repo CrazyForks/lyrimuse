@@ -3714,6 +3714,25 @@ func runSourceContractTests() {
         expectEqual(quick.contains("let current = ColorTheme.current(settings)"), true, "配色主题: 快捷菜单与设置页共用同一份当前配色打包")
     }
 
+    // ---- 关于页页头的漂浮符号走 Core Animation----
+    //
+    // 原来是 TimelineView(.animation) 30fps 按 sin(t) 算偏移,页面开着就每秒 30 次重排整个设置窗口,
+    // 暂停播放时 App 仍占约 11% CPU(14 章决策 43)。
+    do {
+        let appDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lyrimuse")
+        let raw = (try? String(contentsOfFile: appDir.appendingPathComponent("Settings/AboutHeroBackdrop.swift").path, encoding: .utf8)) ?? ""
+        let code = raw.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        expectEqual(code.isEmpty, false, "关于页页头: 读得到 AboutHeroBackdrop.swift")
+        expectEqual(code.contains("TimelineView("), false, "关于页页头: 不许用 TimelineView 逐帧驱动漂浮")
+        expectEqual(code.contains("LayerFloating("), true, "关于页页头: 漂浮交给 Core Animation(LayerFloating)")
+        expectEqual(code.contains("animating: !reduceMotion && windowVisible"), true,
+                    "关于页页头: 减弱动态效果或窗口看不见时摘掉动画")
+    }
+
     // ---- 诊断导出的崩溃报告段----
     //
     // 解析在 Core(纯 Foundation、不碰文件系统,好测),App 侧只做目录扫描;这一段跟其它日志段一样必须过脱敏

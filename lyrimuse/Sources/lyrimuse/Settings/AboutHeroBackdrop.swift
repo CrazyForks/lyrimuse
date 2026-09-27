@@ -10,13 +10,14 @@ import SwiftUI
 /// 三条约束:
 /// - **不参与布局、不吃点击**:挂在页头 VStack 的 `.background` 上、`allowsHitTesting(false)`,页头
 ///   文字和按钮的位置一个像素都不变;对 VoiceOver 也不存在。
-/// - **动效便宜且可关**:一个 `TimelineView(.animation)` 驱动全部符号(不是八个 repeatForever 动画各起
-///   一条),帧率钉 30fps,偏移量是 sin(t) 算出来的纯函数;系统「减弱动态效果」开着时 timeline 暂停、
-///   符号静止在各自的基准位。这一页不显示时视图不存在,不会在后台白跑。
+/// - **动效交给 Core Animation**:每个符号只画一次,上下浮动是图层上的往复位移(`LayerFloating`),由渲染
+///   服务播,主线程不参与。别换回 `TimelineView(.animation)` 按 sin(t) 逐帧算偏移:那样这一页开着就每秒
+///   30 次重排整个设置窗口,暂停播放时 App 仍占约 11% CPU(14 章决策 43)。系统「减弱动态效果」开着、
+///   或设置窗口看不见时摘掉动画,符号停在各自的基准位。这一页不显示时视图不存在。
 /// - **颜色跟图标走**:粉 / 桃 / 黄 / 淡紫四色都取自 AppIcon,深浅外观都只靠透明度,不另写两套。
 struct AboutHeroBackdrop: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 设置窗口看不见时停表:系统不会替被挡住 / 最小化的窗口停 TimelineView,这页一直 30 帧在画。
+    /// 设置窗口看不见时摘掉动画:被挡住 / 最小化的窗口里 Core Animation 照样在播。
     @Environment(\.previewHostVisible) private var windowVisible
 
     private struct Glyph {
@@ -73,16 +74,17 @@ struct AboutHeroBackdrop: View {
                 // 右边用桃色不用黄色:离线渲染深色外观时黄色柔光压在深灰底上发闷、偏土,桃色两种外观都干净。
                 glow(Self.peach, opacity: 0.22)
                     .position(x: width * 0.84, y: height * 0.30)
-                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || !windowVisible)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate
-                    ForEach(Array(Self.glyphs.enumerated()), id: \.offset) { _, glyph in
-                        let drift = reduceMotion ? 0 : glyph.amplitude * CGFloat(sin(t * 2 * .pi / glyph.period + glyph.phase))
+                ForEach(Array(Self.glyphs.enumerated()), id: \.offset) { _, glyph in
+                    LayerFloating(amplitude: glyph.amplitude, period: glyph.period, phase: glyph.phase,
+                                  animating: !reduceMotion && windowVisible) {
                         Image(systemName: glyph.symbol)
                             .font(.system(size: glyph.size, weight: .medium))
                             .foregroundStyle(glyph.tint.opacity(glyph.opacity))
                             .rotationEffect(.degrees(glyph.rotation))
-                            .position(x: width * glyph.x, y: height * glyph.y + drift)
+                            // 留出浮动和旋转的余量,别让宿主视图把符号的边裁掉。
+                            .padding(glyph.amplitude + 4)
                     }
+                    .position(x: width * glyph.x, y: height * glyph.y)
                 }
             }
         }
