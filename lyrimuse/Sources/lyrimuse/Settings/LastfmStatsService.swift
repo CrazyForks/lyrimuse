@@ -1368,8 +1368,8 @@ final class LastfmStatsService: ObservableObject {
     // MARK: - 播放热力图(每日计数)
 
     /// "yyyy-MM-dd"(本地时区) → 当日 scrobble 数。数据来自 user.getRecentTracks 全量
-    /// 分页聚合:首次同步整个历史(两万条 ≈ 110 页,只跑一次),之后增量重扫最近
-    /// `dailyRescanDays` 天(几页到十几页)。独立缓存文件,删了无损、下次重建。
+    /// 分页聚合:首次同步整个历史(每页 1000 条,只跑一次),之后增量重扫最近
+    /// `dailyRescanDays` 天(通常 1 页)。独立缓存文件,删了无损、下次重建。
     @Published private(set) var dailyCounts: [String: Int] = [:]
     @Published private(set) var dailySyncing = false
     /// 正在跑的是首次全量(含截断自愈重扫):这时 dailyCounts 残缺,按天算的数(近 7 天、环比、
@@ -1439,13 +1439,16 @@ final class LastfmStatsService: ObservableObject {
     //
     // 这里额外记的断点续传检查点,跟那两个水位是两回事:水位记的是"这个消费者的数据
     // 完整到什么时候",这里记的是"首次全量这一轮扫描本身进行到第几页"——网络抖动/
-    // App 被杀之后接着扫,不是从头重来(两万条 scrobble ≈ 110 页,从头重来代价很高)。
+    // App 被杀之后接着扫,不是从头重来。
     // 只在"首次全量、尚未完成"期间有意义,完成后清空。
     private struct HistorySyncCheckpoint: Codable {
         var username: String
         var page: Int
         var from: TimeInterval
         var startedAt: TimeInterval
+        /// `page` 是按每页几条数的。nil = 没存这个字段的旧断点,按 `LastfmHistoryPaging.fallbackPageSize` 算。
+        /// 续跑必须沿用这个页大小,页码才对得上同一条记录。
+        var limit: Int?
     }
 
     private static let historyCheckpointURL = LyrimusePaths.configFile("lyrimuse-lastfm-history-checkpoint.json")
@@ -1535,11 +1538,14 @@ final class LastfmStatsService: ObservableObject {
     /// dailySyncing 当单飞守卫。
     ///
     /// 两种模式:
-    /// - **首次全量**(两个水位都还是 0):边扫边把 dailyCounts/写法索引写进去、每 10 页
-    ///   落一次断点(historyCheckpoint),网络抖动/App 被杀之后从断点续跑,不用从头重来
-    ///   ——这是解决"卡、失败要反复刷新"的核心,110+ 页的扫描经不起从头重来。
+    /// - **首次全量**(两个水位都还是 0):边扫边把 dailyCounts/写法索引写进去、每
+    ///   `LastfmHistoryPaging.checkpointRows` 条落一次断点(historyCheckpoint),网络抖动/App 被杀之后
+    ///   从断点续跑,不用从头重来。
+    ///
+    /// 每页取 `LastfmHistoryPaging.pageSize` 条;某一页失败就从同一条记录起改用 `fallbackPageSize`
+    /// 接着取,这一轮之后都按小页走(页码按条数换算,见 `LastfmHistoryPaging`)。
     /// - **增量 top-up**(水位 > 0):保留原有"全部页成功才合并替换,失败原样保留旧数据"
-    ///   的策略。这条路径重扫最近 14 天(几页到十几页),重跑成本低,不值得为它引入检查点复杂度;
+    ///   的策略。这条路径重扫最近 14 天(通常 1 页),重跑成本低,不值得为它引入检查点复杂度;
     ///   更重要的是这条策略对热力图"绝不展示不完整数据"的语义很关键,别顺手把它也
     ///   改成断点续传那一套(会重新引入"半途失败导致热力图缺最近几天数据却不报错"
     ///   的隐患)。15 分钟节流,复用原 ensureTitleFormsIndex 的 titleFormsLastTopUp。
@@ -1611,14 +1617,19 @@ final class LastfmStatsService: ObservableObject {
                     dailyFullSyncing = false
                 }
             }
-            var page = (full ? historyCheckpoint?.page : nil).map { $0 + 1 } ?? 1
-            var totalPages = 1
+            let resumed = full ? historyCheckpoint : nil
+            var page = resumed.map { $0.page + 1 } ?? 1
+            var limit = resumed.map { $0.limit ?? LastfmHistoryPaging.fallbackPageSize } ?? LastfmHistoryPaging.pageSize
+            // 初值取起始页而不是 1:续跑从第 N+1 页起,初值写 1 的话循环一次都不进,半截数据会被当成
+            // 扫完了收尾(水位盖上、断点清掉),只剩截断自愈从头重扫兜底。第一页回来就换成真实值。
+            var totalPages = page
+            var requests = 0
             var failed = false
             var fresh: [String: Int] = [:] // 只有增量(!full)分支用:攒够了再一次性合并
 
-            // 400 页 = 8 万条,远超当前量级的安全上限,防 totalPages 异常时打穿。
-            while page <= totalPages && page <= 400 {
-                var extra = ["limit": "200", "page": "\(page)", "from": "\(Int(from))"]
+            while page <= totalPages && requests < LastfmHistoryPaging.maxRequests {
+                requests += 1
+                var extra = ["limit": "\(limit)", "page": "\(page)", "from": "\(Int(from))"]
                 if full { extra["to"] = "\(Int(scanUpTo))" }
                 let response = await request(
                     method: "user.getrecenttracks", cred: cred, extra: extra, priority: .background)
@@ -1629,6 +1640,16 @@ final class LastfmStatsService: ObservableObject {
                     return
                 }
                 guard let obj = response, let (rows, pages) = LastfmRecentTracksPage.parse(obj) else {
+                    // 大页失败(超时 / 5xx)先换小页从同一条记录接着取,小页也失败才算这一轮失败。
+                    if limit != LastfmHistoryPaging.fallbackPageSize,
+                       let smaller = LastfmHistoryPaging.page(
+                           page, convertingFrom: limit, to: LastfmHistoryPaging.fallbackPageSize) {
+                        logger.notice("history sync: page \(page, privacy: .public) × \(limit, privacy: .public) failed, retrying as page \(smaller, privacy: .public) × \(LastfmHistoryPaging.fallbackPageSize, privacy: .public)")
+                        page = smaller
+                        limit = LastfmHistoryPaging.fallbackPageSize
+                        totalPages = max(totalPages, page)
+                        continue
+                    }
                     failed = true
                     break
                 }
@@ -1655,12 +1676,11 @@ final class LastfmStatsService: ObservableObject {
                 // 扫描时,界面会"正在扫但不知道"。
                 if full { bootstrapState = .syncing(page: page, totalPages: totalPages) }
                 if full {
-                    // 每 10 页落一次断点+当前 dailyCounts:中断后最多重扫 10 页,
-                    // 不是从头重来 110+ 页。不做成每页都存——那是 110+ 次同步磁盘 I/O,
-                    // 换来的精度对"断点续传"这个目标没有意义。
-                    if page % 10 == 0 {
+                    // 按条数间隔落断点+当前 dailyCounts:中断后最多重扫这么多条。不做成每页都存 ——
+                    // 每页一次同步磁盘 I/O,换来的精度对"断点续传"这个目标没有意义。
+                    if LastfmHistoryPaging.shouldCheckpoint(afterPage: page, limit: limit) {
                         historyCheckpoint = HistorySyncCheckpoint(
-                            username: cred.user, page: page, from: from, startedAt: scanUpTo)
+                            username: cred.user, page: page, from: from, startedAt: scanUpTo, limit: limit)
                         saveHistoryCheckpoint()
                         saveDailySnapshot()
                     }
@@ -1677,7 +1697,7 @@ final class LastfmStatsService: ObservableObject {
                     // page 此刻是"正要扫但失败了"的那一页,退一格才是"已确认成功"的页。
                     if page > 1 {
                         historyCheckpoint = HistorySyncCheckpoint(
-                            username: cred.user, page: page - 1, from: from, startedAt: scanUpTo)
+                            username: cred.user, page: page - 1, from: from, startedAt: scanUpTo, limit: limit)
                         saveHistoryCheckpoint()
                     }
                     saveDailySnapshot()
@@ -1737,7 +1757,7 @@ final class LastfmStatsService: ObservableObject {
     // 新的分裂形态一旦在历史里出现就自动被族住,不需要再补表。userplaycount 只统计本用户
     // 的 scrobble,所以「历史里没有的写法」在 Last.fm 那边必然是 0,索引按构造即完备。
     //
-    // 更新机制:①首次全量分页建索引(~110 页,一次性,后台);②之后每一批**已经拉到手**的
+    // 更新机制:①首次全量分页建索引(一次性,后台);②之后每一批**已经拉到手**的
     // scrobble 行(最近记录/热力图分页)顺手收割,零额外请求;③页面主刷新时从水位起低频
     // 增量补漏(App 关着期间产生的新写法,15 分钟节流,通常 1 页)。
 

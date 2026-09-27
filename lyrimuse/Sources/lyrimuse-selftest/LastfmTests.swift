@@ -185,6 +185,20 @@ func runLastfmTests() {
                     "落库判定: 没有播放锚点 → 按没入账算")
     }
 
+    // ---- LastfmHistoryPaging:历史扫描换页大小时页码按条数换算 ----
+    do {
+        typealias H = LastfmHistoryPaging
+        expectEqual(H.pageSize % H.fallbackPageSize, 0, "历史分页: 小页整除大页,换页大小才换算得出同一个起点")
+        expectEqual(H.page(1, convertingFrom: 1000, to: 200), 1, "历史分页: 第 1 页失败 → 小页第 1 页")
+        expectEqual(H.page(3, convertingFrom: 1000, to: 200), 11, "历史分页: 大页第 3 页从第 2001 条起 = 小页第 11 页")
+        expectEqual(H.page(3, convertingFrom: 1000, to: 300), nil, "历史分页: 不整除时不换算")
+        expectEqual(H.page(0, convertingFrom: 1000, to: 200), nil, "历史分页: 页码从 1 起")
+        expectEqual(H.shouldCheckpoint(afterPage: 2, limit: 1000), true, "历史分页: 大页每 2 页落断点")
+        expectEqual(H.shouldCheckpoint(afterPage: 3, limit: 1000), false, "历史分页: 大页单数页不落断点")
+        expectEqual(H.shouldCheckpoint(afterPage: 10, limit: 200), true, "历史分页: 小页(旧断点)仍是每 10 页")
+        expectEqual(H.shouldCheckpoint(afterPage: 15, limit: 200), false, "历史分页: 小页第 15 页不落断点")
+    }
+
     // ---- LastfmRecentTracksPage:合并历史扫描的分页解析 ----
     //
     // ensureTitleFormsIndex(写法索引)和 refreshDailyCounts(热力图)原来各自写了一遍这段

@@ -52,3 +52,32 @@ public enum LastfmRecentTracksPage {
         return (rows, totalPages)
     }
 }
+
+/// 历史全量扫描(`user.getrecenttracks`)的分页规则。
+///
+/// 页码的含义跟每页条数绑定:第 p 页(每页 L 条)= 从最新往回数的第 `(p-1)·L` 条起。所以换页大小时
+/// 页码必须按条数换算,断点里也必须连同页大小一起存 —— 只存页码的旧断点是按 200 条一页记的。
+/// 换算成立的前提是这一轮扫描的上界(`to`)钉死,首次全量就是这么做的。
+public enum LastfmHistoryPaging {
+    /// 默认每页条数。文档写的上限是 200,但接口实际接受 1000(本机账号 29 页全部成功、每页约 3 秒)。
+    public static let pageSize = 1000
+    /// 某一页按 `pageSize` 取失败后改用的条数,也是旧断点的页大小。必须整除 `pageSize`。
+    public static let fallbackPageSize = 200
+    /// 断点间隔按条数算,换页大小后中断重扫的量不变。
+    public static let checkpointRows = 2000
+    /// 一轮扫描最多发的请求数,防 totalPages 异常时打穿。
+    public static let maxRequests = 400
+
+    /// 第 `page` 页(每页 `from` 条)失败后,改成每页 `to` 条时从第几页接着取:
+    /// 起点是同一条记录。`to` 不整除 `from` 时返回 nil(换算不出同一个起点)。
+    public static func page(_ page: Int, convertingFrom from: Int, to: Int) -> Int? {
+        guard page >= 1, from > 0, to > 0, from % to == 0 else { return nil }
+        return (page - 1) * (from / to) + 1
+    }
+
+    /// 取完第 `page` 页(每页 `limit` 条)之后该不该落一次断点。
+    public static func shouldCheckpoint(afterPage page: Int, limit: Int) -> Bool {
+        guard page >= 1, limit > 0 else { return false }
+        return (page * limit) % checkpointRows == 0
+    }
+}
