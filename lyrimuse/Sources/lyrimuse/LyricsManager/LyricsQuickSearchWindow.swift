@@ -37,7 +37,7 @@ import LyrimuseCore
 // 和候选,而下面 onApply 闭包捕获的已是新 `context.key`:采纳会把上一首的歌词写进当前这首的
 // 条目。修在 `LyricsSearchSheet` 内部(按原始字段 `.task(id:)` 重搜 + `.onChange` 重置查询词),
 // **刻意不**在这里加 `.id(context.key)` 整棵重建——探针实测重建时新面板的搜索会被旧面板迟到的
-// cancelRunning() 杀掉,详见那边 `.task(id:)` 上方的注释。
+// 取消杀掉,详见那边 `.task(id:)` 上方的注释。
 // 不像 LyricsWindowView 那边特意 `Task.detached` 到背景线程读 EnrichCacheReader(那扇
 // 窗口有 60fps 的逐字填色,主线程哪怕短暂卡顿都会被看见)——这扇窗口只在打开这一瞬间读一次
 // 缓存,直接在 MainActor 上做,没有必要为这一次性读多绕一层线程切换。
@@ -58,17 +58,21 @@ struct LyricsQuickSearchWindow: View {
 
     var body: some View {
         Group {
-            if let context {
+            if let context, context.title.trimmingCharacters(in: .whitespaces).isEmpty {
+                // 没在播放:拿空歌名去搜只会报错,手动填完再采纳会写进一条没有元数据的空条目。
+                ContentUnavailableView(L10n.t("现在没有在放的歌"), systemImage: "music.note",
+                                       description: Text(L10n.t("开始播放一首歌，再点「搜索歌词…」")))
+                    .frame(minWidth: 720, minHeight: 480)
+            } else if let context {
                 LyricsSearchSheet(
                     artist: context.artist, title: context.title, album: context.album,
                     currentSource: context.currentSource, currentFingerprint: context.currentFingerprint,
                     durationSecs: context.durationSecs, keepsOpenAfterApply: true
                 ) { candidate in
-                    // 同 LyricsWindowView 的 onApply 三步:reload 兜"store 还没加载过"
-                    // (空 raw 上 saveEdit 会把条目其它字段如 cover_url 整个丢掉)→
-                    // saveEdit → 让播放侧立刻重载,不等 2s 轮询的 mtime 检查。
+                    // 同 LyricsWindowView 的 onApply:saveEdit → 让播放侧立刻重载,不等 2s 轮询的 mtime 检查。
+                    // 保存前不用先把整份缓存读进 store:写入由 collector 执行(EnrichEditChannel),不经 store 的内存副本;
+                    // 歌词管理没开着时先读一遍就是白解析一整份缓存,commit 收尾还会再读一遍。
                     // 不再自己套 Task:面板要等这里回报"落盘成败"再决定挪徽标/回声。
-                    await EnrichCacheStore.shared.reload(onlyIfChanged: true)
                     let saved: Bool
                     if candidate.isPlainTextOnly {
                         // 这条分流必须按 isPlainTextOnly 走 savePlainTextEdit,跟歌词管理、

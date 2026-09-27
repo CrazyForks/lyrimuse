@@ -2299,9 +2299,7 @@ struct LyricsWindowView: View {
                     currentSource: ctx.currentSource, currentFingerprint: ctx.currentFingerprint,
                     durationSecs: ctx.durationSecs
                 ) { candidate in
-                    // reload(onlyIfChanged:) 兜住「store 还没加载过」:saveEdit 直接改
-                    // raw[key],空 raw 上写会把条目的其它字段(cover_url 等)整个丢掉。
-                    await EnrichCacheStore.shared.reload(onlyIfChanged: true)
+                    // 保存前不用先把整份缓存读进 store:写入由 collector 执行(EnrichEditChannel),不经 store 的内存副本。
                     // 仅纯文本的候选走独立的存法(见 savePlainTextEdit 头注)——不能
                     // 跟带时间戳的候选共用 saveEdit,那会把纯文本当成一份"没有任何一行
                     // 能同步显示"的坏 LRC 写进 lyrics,反而让这首歌在别的展示面上从

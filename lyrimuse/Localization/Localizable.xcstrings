@@ -32301,52 +32301,6 @@
         }
       }
     },
-    "十二个源的请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "None of the twelve sources responded. That usually means a network problem rather than a song with no lyrics. Check your connection, then click Retry below"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "十二个源的请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "十二個來源的請求全部失敗，很可能是網路連線有問題，不是這首歌真的沒有歌詞——檢查網路後可以按下面的「重試」"
-          }
-        }
-      }
-    },
-    "十二个源都没找到可用的候选" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No Lyrics from Any Source"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "十二个源都没找到可用的候选"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "十二個來源都沒找到可用的候選"
-          }
-        }
-      }
-    },
     "汽水音乐" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36469,6 +36423,295 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有部分設定沒能寫入（%@），其餘已匯入。可以再匯入一次，或檢查設定檔案夾的寫入權限"
+          }
+        }
+      }
+    },
+    "这首的歌词正文读不回来（歌词文件缺失或损坏），为免覆盖盘上的内容，这里暂时不能保存修改。可以用「联网搜索候选歌词」重新采纳一份" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This song's lyrics can't be read back (the lyrics file is missing or damaged), so saving is disabled here to avoid overwriting what's on disk. You can adopt a new copy with “Search Candidate Lyrics Online”."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這首的歌詞正文讀不回來（歌詞檔案遺失或損壞），為免覆蓋磁碟上的內容，這裡暫時不能儲存修改。可以用「聯網搜尋候選歌詞」重新採用一份"
+          }
+        }
+      }
+    },
+    "自动备份没写成功，为免丢了找不回来，这次没有删除。检查一下磁盘空间和配置文件夹的写入权限，再试一次" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The automatic backup couldn't be written, so nothing was deleted this time to keep it recoverable. Check your disk space and write access to the config folder, then try again."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動備份沒寫成功，為免丟了找不回來，這次沒有刪除。檢查一下磁碟空間和設定檔案夾的寫入權限，再試一次"
+          }
+        }
+      }
+    },
+    "另有 %d 个没写进歌词文件夹，检查一下写入权限和磁盘空间" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%d more couldn't be written to the lyrics folder. Check write access and disk space."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %d 個沒寫進歌詞檔案夾，檢查一下寫入權限和磁碟空間"
+          }
+        }
+      }
+    },
+    "后台服务这次没把它们收进缓存，列表里暂时看不到；文件已经在歌词文件夹里，后台服务下次启动时会自动导入" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The background service didn't take them into the cache this time, so they won't show in the list yet. The files are already in the lyrics folder and will be imported the next time the background service starts."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景服務這次沒把它們收進快取，列表裡暫時看不到；檔案已經在歌詞檔案夾裡，背景服務下次啟動時會自動匯入"
+          }
+        }
+      }
+    },
+    "之前的自动决策" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Earlier Automatic Decision"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之前的自動決策"
+          }
+        }
+      }
+    },
+    "现在这份歌词是你手动修改或手动采纳的，不是下面这轮自动决策选出来的" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current lyrics were edited or picked by you, not chosen by the automatic decision below."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在這份歌詞是你手動修改或手動採用的，不是下面這輪自動決策選出來的"
+          }
+        }
+      }
+    },
+    "启用的歌词源请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None of the enabled lyrics sources responded. That usually means a network problem rather than a song with no lyrics. Check your connection, then click Retry below"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用的歌詞來源請求全部失敗，很可能是網路連線有問題，不是這首歌真的沒有歌詞——檢查網路後可以按下面的「重試」"
+          }
+        }
+      }
+    },
+    "启用的歌词源都没找到可用的候选" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Lyrics from Any Source"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用的歌詞來源都沒找到可用的候選"
+          }
+        }
+      }
+    },
+    "现在没有在放的歌" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Is Playing"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在沒有在播放的歌"
+          }
+        }
+      }
+    },
+    "开始播放一首歌，再点「搜索歌词…」" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start playing a song, then choose “Search Lyrics…” again."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始播放一首歌，再按「搜尋歌詞…」"
+          }
+        }
+      }
+    },
+    "没有找到带时间戳的版本；找到了一份纯文本兜底，但没能存下来" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No timed version found. A plain-text fallback was found, but it couldn't be saved."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有找到帶時間戳記的版本；找到了一份純文字備用版本，但沒能存下來"
+          }
+        }
+      }
+    },
+    "没有符合条件的歌" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Matching Songs"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合條件的歌"
+          }
+        }
+      }
+    },
+    "换个筛选条件或关键词试试" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try different filters or search terms."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "換個篩選條件或關鍵字試試"
+          }
+        }
+      }
+    },
+    "清空搜索" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Search"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除搜尋"
+          }
+        }
+      }
+    },
+    "还没有歌词记录" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Lyrics Yet"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還沒有歌詞記錄"
+          }
+        }
+      }
+    },
+    "播放过的歌会自动出现在这里" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Songs you play will show up here automatically."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放過的歌會自動出現在這裡"
+          }
+        }
+      }
+    },
+    "写入本地记录文件失败，后台服务没能执行这次修改" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't write the local records: the background service couldn't carry out this change."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寫入本機記錄檔案失敗，背景服務沒能執行這次修改"
           }
         }
       }

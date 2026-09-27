@@ -29,20 +29,73 @@ private let searchLyricsHealthMarkers = ["rejected (code", "backing off", "cooli
 final class LyricsSearchService {
     static let shared = LyricsSearchService()
 
-    /// 上一次还在跑的搜索子进程。把「重新搜索」按钮在搜索途中也放开之后需要它:
-    /// 不杀掉的话,旧那一轮会继续跑满(最长 20 秒兜底超时),白占九个源的网络请求 —— 结果
-    /// 反正会被调用方的 searchGeneration 判定作废、一行都不会显示。
-    /// 用锁而不是 @MainActor:search() 的进程收尾在后台队列上,两边都要碰这个引用。
-    private let processLock = NSLock()
-    private var runningProcess: Process?
+    /// 一个发起方:一个搜索面板(歌词管理里的、悬浮窗「搜索歌词…」小窗里的各算一个)、详情页的
+    /// 「重新自动匹配」。调用方各自在 @State 里持有一个。
+    ///
+    /// 在跑的子进程按发起方分开记:同一个发起方起新一轮时把自己上一轮杀掉(「重新搜索」在搜索途中也放开,
+    /// 不杀的话旧那一轮会跑满 20 秒兜底,白占九个源的网络请求,结果反正被调用方的 generation 判作废),
+    /// 但不碰别的发起方 —— 只记一个全局"当前在跑的"时,关掉一个面板会把另一扇窗里的搜索、或者正在跑的
+    /// 自动匹配一起杀掉,被杀的那边收到非零退出码、误报"搜索失败"。
+    struct Owner: Hashable, Sendable {
+        private let id = UUID()
+        init() {}
+    }
 
-    /// 取消正在跑的那一轮(没有就什么都不做)。
-    func cancelRunning() {
+    /// 一轮搜索的子进程句柄。取消可能早于进程起跑(Task 刚创建就被取消),所以先记下"已取消",起跑前查。
+    private final class RunHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var process: Process?
+        private var cancelled = false
+
+        /// 返回 false:这一轮已经被取消了,别再起进程。
+        func attach(_ process: Process) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !cancelled else { return false }
+            self.process = process
+            return true
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let process = self.process
+            lock.unlock()
+            if let process, process.isRunning { process.terminate() }
+        }
+    }
+
+    /// 用锁而不是 @MainActor:search() 的进程收尾在后台队列上,两边都要碰这张表。
+    private let processLock = NSLock()
+    private var running: [Owner: RunHandle] = [:]
+
+    /// 取消这个发起方正在跑的那一轮(没有就什么都不做),别的发起方的不受影响。
+    func cancelRunning(for owner: Owner) {
         processLock.lock()
-        let process = runningProcess
-        runningProcess = nil
+        let handle = running.removeValue(forKey: owner)
         processLock.unlock()
-        if let process, process.isRunning { process.terminate() }
+        handle?.cancel()
+    }
+
+    /// 登记这个发起方的新一轮,顶掉(并杀掉)它上一轮。
+    private func register(_ handle: RunHandle, for owner: Owner) {
+        processLock.lock()
+        let previous = running.updateValue(handle, forKey: owner)
+        processLock.unlock()
+        previous?.cancel()
+    }
+
+    /// 这一轮结束时撤下登记;已经被同一发起方的新一轮顶掉了就不动。
+    private func unregister(_ handle: RunHandle, for owner: Owner) {
+        processLock.lock()
+        if running[owner] === handle { running.removeValue(forKey: owner) }
+        processLock.unlock()
     }
 
     struct ScoreTerm: Equatable, Decodable {
@@ -385,7 +438,9 @@ final class LyricsSearchService {
     ///   (见 Pick)。候选列表照常流式返回,冠军只在最后那行带回来。
     /// - currentSource: 这首歌眼下生效的歌词源,只在 pickWinner 时有意义(喂给 collector 的
     ///   decidable 判定)。
+    /// - owner: 发起方,见 `Owner`。
     func search(
+        owner: Owner,
         artist: String, title: String, album: String, durationSecs: Double = 0,
         pickWinner: Bool = false, currentSource: String = "",
         onUpdate: @escaping @MainActor (SearchUpdate) -> Void
@@ -394,17 +449,35 @@ final class LyricsSearchService {
         // searchGeneration 换代)时顺手终结子进程 —— 原来没有任何取消接线,sheet 关掉/
         // 采纳候选后 collector 子进程照跑满(九个源、20 秒兜底),NDJSON 还在往已消失的
         // 视图里灌,全是无人消费的废工(性能审计;sheet 侧另有 onDisappear
-        // 兜底,两层都在,谁先到谁生效——cancelRunning 幂等)。
+        // 兜底,两层都在,谁先到谁生效——取消幂等)。取消只停**这一轮**的子进程:同一发起方
+        // 紧接着起的新一轮不会被旧任务迟到的取消误杀。
+        let handle = RunHandle()
+        register(handle, for: owner)
+        defer { unregister(handle, for: owner) }
         try await withTaskCancellationHandler {
-            try await performSearch(artist: artist, title: title, album: album,
+            try await performSearch(handle: handle, artist: artist, title: title, album: album,
                                     durationSecs: durationSecs, pickWinner: pickWinner,
                                     currentSource: currentSource, onUpdate: onUpdate)
         } onCancel: {
-            cancelRunning()
+            handle.cancel()
         }
     }
 
+    /// 子进程失败时给界面看的一句:stderr 是 collector 的整段日志(可能几十行英文,还带时间戳),原样塞进弹窗
+    /// 会把「重试」挤出窗口。只取最后一行非空的(出错原因通常在最后)、剥掉 Go log 的时间戳前缀、截到 160 字;
+    /// 全文已经进了日志。
+    static func failureSummary(_ stderr: String) -> String {
+        guard var line = stderr.split(whereSeparator: \.isNewline)
+            .map({ $0.trimmingCharacters(in: .whitespaces) })
+            .last(where: { !$0.isEmpty }) else { return "" }
+        if let r = line.range(of: #"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? "#, options: .regularExpression) {
+            line.removeSubrange(r)
+        }
+        return line.count > 160 ? String(line.prefix(160)) + "…" : line
+    }
+
     private func performSearch(
+        handle: RunHandle,
         artist: String, title: String, album: String, durationSecs: Double,
         pickWinner: Bool = false, currentSource: String = "",
         onUpdate: @escaping @MainActor (SearchUpdate) -> Void
@@ -444,11 +517,11 @@ final class LyricsSearchService {
                     process.arguments?.append(contentsOf: ["-current-source", currentSource])
                 }
             }
-            // 新一轮开始前先把上一轮杀掉,并记下自己,好让下一轮也能杀掉我。
-            self.cancelRunning()
-            self.processLock.lock()
-            self.runningProcess = process
-            self.processLock.unlock()
+            // 记到这一轮的句柄上,好让取消(同一发起方的下一轮、调用方 Task 取消)能杀掉我。
+            guard handle.attach(process) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()
@@ -501,7 +574,9 @@ final class LyricsSearchService {
                         // 数组,界面退回原来那句笼统的"没找到候选",不会因此报错或崩。
                         tracksFoundNoLyrics: raw.tracksFoundNoLyrics ?? [],
                         pick: raw.pick)
-                    Task { @MainActor in onUpdate(update) }
+                    // 走主队列而不是各起一个 MainActor Task:收尾的 continuation 也从主队列恢复(见 terminationHandler),
+                    // 同一条串行队列先进先出,最后那行(带 pick 的)一定先于 search() 返回送到;各起 Task 的顺序语言层面不保证。
+                    DispatchQueue.main.async { MainActor.assumeIsolated { onUpdate(update) } }
                 }
             }
 
@@ -533,14 +608,30 @@ final class LyricsSearchService {
                 // 进程已退出,两条后台读取任务读到 EOF 会自然结束;等它们真正跑完再继续,
                 // 避免极端情况下读任务还没来得及把最后一批数据处理完就被下面读到半份状态。
                 readGroup.wait()
-                guard proc.terminationStatus == 0 else {
-                    let msg = String(data: box.errBuffer, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    logger.error("search-lyrics exited \(proc.terminationStatus): \(msg ?? "", privacy: .public)")
-                    continuation.resume(throwing: SearchError.processFailed(msg?.isEmpty == false ? msg! : String(format: L10n.t("退出码 %@"), "\(proc.terminationStatus)")))
-                    return
+                // 是这边主动停的(同一发起方起了新一轮、调用方 Task 取消、面板关了):不是失败,别报「搜索失败」。
+                let cancelled = handle.isCancelled
+                let status = proc.terminationStatus
+                let stderrText = String(data: box.errBuffer, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cancelled {
+                    if status == 0 {
+                        Self.logSourceHealthSignals(box.errBuffer)
+                    } else {
+                        logger.error("search-lyrics exited \(status): \(stderrText ?? "", privacy: .public)")
+                    }
                 }
-                Self.logSourceHealthSignals(box.errBuffer)
-                continuation.resume(returning: ())
+                // 排在所有逐行回调后面恢复(同一条主队列,见 drainCompleteLines);文案也在主线程上取 ——
+                // L10n.t 的缓存没有加锁。
+                DispatchQueue.main.async {
+                    if cancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else if status != 0 {
+                        let summary = Self.failureSummary(stderrText ?? "")
+                        continuation.resume(throwing: SearchError.processFailed(
+                            summary.isEmpty ? String(format: L10n.t("退出码 %@"), "\(status)") : summary))
+                    } else {
+                        continuation.resume(returning: ())
+                    }
+                }
             }
 
             do {

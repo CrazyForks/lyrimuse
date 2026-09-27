@@ -21,6 +21,9 @@ struct LyricsDecisionSheet: View {
     let summary: EnrichCacheStore.Summary
     /// 展示页签:「当前歌词的出处」在前、「最近一次评估」在后;同一轮只留一份(见 init)。
     private let records: [(label: String, record: LyricsResolutionDecision)]
+    /// 当前这份歌词不是这些存档里任何一轮自动决策选出来的(手动改过,或手动采纳了别的源的候选):
+    /// 保存编辑 / 采纳候选不写新的决策存档,出处那一槽还停在之前那轮自动决策上。
+    private let currentLyricsNotFromDecision: Bool
     @State private var selectedRecord = 0
     /// 哪几条候选是展开的(按源名)。**折叠态给差值、展开态给绝对明细带解释** ——
     /// 见 candidateRow 头注。默认全折:判词卡已经回答了"为什么是它",明细是第二层。
@@ -39,9 +42,15 @@ struct LyricsDecisionSheet: View {
          applied: LyricsResolutionDecision?) {
         self.summary = summary
         let origin = applied ?? ((latest?.applied == true) ? latest : nil)
+        // 手改过(人工修正),或者生效的源跟那轮的胜者对不上(手动采纳了另一个源的候选):那一轮只是之前的
+        // 自动决策,不再是现在这份词的出处,页签别这么叫、判词上面说一句。
+        let stale = origin.map { o in
+            summary.isManual || (o.winner.map { !$0.isEmpty && $0 != summary.lyricsSource } ?? false)
+        } ?? false
+        currentLyricsNotFromDecision = stale
         var tabs: [(label: String, record: LyricsResolutionDecision)] = []
         if let origin {
-            tabs.append((L10n.t("当前歌词的出处"), origin))
+            tabs.append((stale ? L10n.t("之前的自动决策") : L10n.t("当前歌词的出处"), origin))
         }
         if let latest, origin == nil || origin?.decidedAt != latest.decidedAt || origin?.path != latest.path {
             tabs.append((L10n.t("最近一次评估"), latest))
@@ -167,6 +176,13 @@ struct LyricsDecisionSheet: View {
                             options: Array(records.indices),
                             label: { records[$0].label }
                         )
+                    }
+                    if currentLyricsNotFromDecision {
+                        Label(L10n.t("现在这份歌词是你手动修改或手动采纳的，不是下面这轮自动决策选出来的"),
+                              systemImage: "info.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if let decision {
                         // 顺序即「三层」:先一句判词回答"为什么是它",再摊候选表(每条一行,
@@ -733,6 +749,12 @@ struct LyricsDecisionSheet: View {
                       silent.map { sourceDisplayName($0) }.joined(separator: "、"))
     }
 
+    /// 「几个源应答」的分母:当前启用的源,加上这一轮应答过、现在已经关掉的。跟「未应答」那一行(`silentSources`)
+    /// 同一口径 —— 应答数 + 未应答数 = 分母;按全部内置源算的话,关掉几个源的用户会看到分母比两行加起来还大。
+    private func askedSourceCount(_ responded: [String]) -> Int {
+        responded.count + silentSources(responded).count
+    }
+
     /// 当前启用、但这一轮没应答的源(顺序沿用用户配的源优先级)。
     /// 界面上它是字段表里「未应答」那一行的值,纯文本那边仍然拼成上面那句话。
     private func silentSources(_ responded: [String]) -> [String] {
@@ -760,7 +782,7 @@ struct LyricsDecisionSheet: View {
         let responded = decision.sourcesResponded ?? []
         if !responded.isEmpty {
             parts.append(String(format: L10n.t("%1$d/%2$d 个源应答"),
-                                responded.count, LyricsSource.allCases.count))
+                                responded.count, askedSourceCount(responded)))
         }
         if let digest = queryDigest(decision) {
             parts.append(String(format: L10n.t("查询 %d 组"), digest.total))
@@ -874,7 +896,7 @@ struct LyricsDecisionSheet: View {
     private func inputsSection(_ decision: LyricsResolutionDecision) -> some View {
         let digest = queryDigest(decision)
         let responded = decision.sourcesResponded ?? []
-        let total = LyricsSource.allCases.count
+        let total = askedSourceCount(responded)
         let summary = inputsSummary(decision)
         VStack(alignment: .leading, spacing: 6) {
             Divider()
@@ -896,9 +918,7 @@ struct LyricsDecisionSheet: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .onHover { inside in
-                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-            }
+            .modifier(PointingHandOnHover())
             .help(String(format: L10n.t("分母为当前启用的 %d 个源；较早的条目当时可用的源可能更少"), total))
 
             if inputsOpen {
@@ -1056,9 +1076,7 @@ struct LyricsDecisionSheet: View {
             }
             .buttonStyle(.plain)
             // 可点时换手型光标 —— 没有它,「能点」这件事在 macOS 上没有任何视觉线索。
-            .onHover { inside in
-                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-            }
+            .modifier(PointingHandOnHover())
 
             // **折叠态一个字都不印**:改法第一步把差值改成白话之后,七条候选就是七行几乎
             // 一样的「比胜者少 逐字时间轴 400 · 自带译文 50 · 行数 4 · 时长吻合 1」——措辞
@@ -1268,5 +1286,31 @@ private struct VerdictCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(tint.opacity(0.28), lineWidth: 1))
+    }
+}
+
+/// 悬停时换手型光标。push / pop 必须成对:鼠标还停在上面时面板被关掉(回车触发「完成」)、或者滚动让行从
+/// 静止的光标下面移走,离开事件不会来,裸写 onHover 的 pop 就漏了,手型光标会留在父窗口上。
+/// 记着自己推没推过,消失时补一次 pop。
+private struct PointingHandOnHover: ViewModifier {
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside, !pushed {
+                    NSCursor.pointingHand.push()
+                    pushed = true
+                } else if !inside, pushed {
+                    NSCursor.pop()
+                    pushed = false
+                }
+            }
+            .onDisappear {
+                if pushed {
+                    NSCursor.pop()
+                    pushed = false
+                }
+            }
     }
 }

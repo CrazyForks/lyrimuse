@@ -198,12 +198,24 @@ public final class EnrichCacheStore: ObservableObject {
     @Published private(set) var albumDisplayMap: [String: String] = [:]
     /// 筛选下拉的候选集,同样随 summaries 重建一次,不再每次 body 现算。
     @Published private(set) var distinctArtists: [String] = []
+    /// 见 SummariesBundle.extraSources。来源筛选下拉靠它列出这几个,不然这些行按来源筛不出来。
+    @Published private(set) var extraSources: [String] = []
     @Published private(set) var distinctAlbums: [String] = []
     /// 宽松 key(`EnrichCacheKeys.looseKey`)到列表里第一条对得上的 key,随 summaries 在后台重建一次。
     /// 占位行每 5 秒核对一次、「回到当前播放」精确对不上时都要按宽松 key 找;逐条现算要对全库八千多个 key
     /// 各做一次繁简转换,放在主线程上。
     private var looseKeyIndex: [String: String] = [:]
-    @Published public private(set) var lastError: String?
+    /// 读盘失败(缓存读不出、正文补不回):下一次读成功就清。
+    @Published private var loadError: String?
+    /// 写入失败(保存、删除、清空没做成):只在下一次写成功、或调用方 `dismissEditError()` 时清 ——
+    /// 不能跟读盘失败共用一个字段,否则每 5 秒一次的轮询重读一成功就把刚报的写入失败抹掉,红字一闪即逝,
+    /// 删除后的「已删除」反馈据此判断成功与否也就跟着不可靠。
+    @Published private var editError: String?
+    /// 界面上那条红字:写入失败优先(那是用户刚做的事没做成)。
+    public var lastError: String? { editError ?? loadError }
+
+    /// 换了一首歌之类:上一首的写入失败不该挂在这一首的详情页上。
+    public func dismissEditError() { editError = nil }
     // 缓存 JSON 文件本身 + lyrics/ 权威源文件夹里所有文件的总大小——"歌词管理"工具栏
     // 展示用,让用户知道这个"解析一次永久保留"的缓存实际占了多少磁盘空间。跟 reload()
     // 同一次磁盘扫描顺带算出来,不为这一个数字单独再打开一轮文件 I/O。
@@ -298,7 +310,9 @@ public final class EnrichCacheStore: ObservableObject {
             await inFlight.value
             return
         }
-        if let inFlight = inFlightReload { await inFlight.value }
+        // 用 while 而不是 if:两个显式调用方同时在等同一次在飞的读盘时,先醒的那个已经起了新的一次,
+        // 后醒的要接着等它,不能也起一次并发去解析同一份文件。
+        while let inFlight = inFlightReload { await inFlight.value }
         let task = Task { await self.performReload(onlyIfChanged: onlyIfChanged) }
         inFlightReload = task
         await task.value
@@ -320,13 +334,14 @@ public final class EnrichCacheStore: ObservableObject {
         // refreshSizeBytes()(delete 完刷新占用数字用的同一条路径),独立算、独立更新,
         // 不再等它。
         refreshSizeBytes()
-        isLoading = summaries.isEmpty
-        defer { isLoading = false }
+        // @Published 同值赋值也会发变更通知,观察这个 store 的整个窗口跟着重算一遍 body:只在真的变了时赋值。
+        if summaries.isEmpty, !isLoading { isLoading = true }
+        defer { if isLoading { isLoading = false } }
         final class ResultBox: @unchecked Sendable {
             var obj: [String: [String: Any]]?
             var bundle: SummariesBundle?
             var fingerprint: FileFingerprint?
-            var errorMessage: String?
+            var parseFailed = false
             // 基线埋点(临时,见 LyricsManagerBaseline)——分段耗时在 detached 闭包里量,
             // 借这个盒子捎回 MainActor 一起打一条日志。
             var bytes = 0
@@ -349,7 +364,7 @@ public final class EnrichCacheStore: ObservableObject {
             box.parseMS = snapshot.parseMS
             box.bytes = snapshot.bytes
             guard let obj = snapshot.obj else {
-                box.errorMessage = snapshot.errorMessage
+                box.parseFailed = snapshot.parseFailed
                 return
             }
             box.obj = obj
@@ -363,7 +378,7 @@ public final class EnrichCacheStore: ObservableObject {
             raw = obj
             lastLoadedFingerprint = box.fingerprint
             isReleased = false
-            lastError = nil
+            if loadError != nil { loadError = nil }
             applySummaries(bundle)
             scheduleReleaseIfUnheld()
             LyricsManagerBaseline.logReload(
@@ -373,8 +388,11 @@ public final class EnrichCacheStore: ObservableObject {
         } else {
             raw = [:]
             lastLoadedFingerprint = nil
-            lastError = box.errorMessage ?? L10n.t("读取本地记录文件失败")
-            applySummaries(Self.buildSummaries(from: [:], offsetsSnapshot: offsetsSnapshot, lyricsDir: Self.lyricsDir))
+            // 内存里没有可用快照(见 isReleased 的注释):删除按传入的 key 交给 collector,不按空的 raw 算成「没有可删的」。
+            isReleased = true
+            loadError = box.parseFailed ? L10n.t("解析本地记录文件失败") : L10n.t("读取本地记录文件失败")
+            // raw 是空的,不用为了建一份空列表去列举整个歌词目录。
+            applySummaries(SummariesBundle(summaries: [], albumDisplayMap: [:], distinctArtists: [], distinctAlbums: []))
         }
     }
 
@@ -425,6 +443,8 @@ public final class EnrichCacheStore: ObservableObject {
         var distinctArtists: [String]
         var distinctAlbums: [String]
         var looseKeyIndex: [String: String] = [:]
+        /// 条目里出现过、但不在 `LyricsSource` 里的来源:播放器自带的那份歌词(KKBOX、Spotify)。
+        var extraSources: [String] = []
     }
 
     /// 把一份构建结果发布出去。跟 buildSummaries 拆开:构建是纯函数(reload 时在后台跑,
@@ -437,6 +457,7 @@ public final class EnrichCacheStore: ObservableObject {
         distinctArtists = bundle.distinctArtists
         distinctAlbums = bundle.distinctAlbums
         looseKeyIndex = bundle.looseKeyIndex
+        if extraSources != bundle.extraSources { extraSources = bundle.extraSources }
     }
 
     /// 界面开始看这份快照(见 `snapshotHolders`)。取消正在倒数的清理。
@@ -465,10 +486,13 @@ public final class EnrichCacheStore: ObservableObject {
 
     /// 等在飞的读盘跑完再清;有人重新握住、或还有交给 collector 还没回来的改动就不清。清完把列表一起清空(没人在看),
     /// 并把 `lastLoadedFingerprint` 置空 —— 否则下一次 `reload(onlyIfChanged:)` 会以为快照还在、直接跳过。
+    ///
+    /// 等读盘要等到**没有**在飞的为止,再清 releaseTask:等的时候又起了一次读盘的话,那次读盘收尾时的
+    /// scheduleReleaseIfUnheld 看到 releaseTask 还在就不会重新排,这里要是见到在飞的就放弃,快照就一直留着了。
     private func dropSnapshotIfIdle() async {
-        defer { releaseTask = nil }
-        if let r = inFlightReload { await r.value }
-        guard !Task.isCancelled, snapshotHolders.isEmpty, inFlightReload == nil,
+        while let r = inFlightReload { await r.value }
+        releaseTask = nil
+        guard !Task.isCancelled, snapshotHolders.isEmpty,
               editsInFlight == 0, !isReleased else { return }
         let count = raw.count
         raw = [:]
@@ -482,7 +506,9 @@ public final class EnrichCacheStore: ObservableObject {
 
     private struct SlimSnapshot {
         var obj: [String: [String: Any]]?
-        var errorMessage: String?
+        /// obj 为 nil 时:true = 读到了但解不开,false = 读不出来。只带标志不带文案:这里跑在后台线程,
+        /// L10n.t 的缓存没有加锁,文案回主线程再取。
+        var parseFailed = false
         var bytes = 0
         var readMS = 0.0
         var parseMS = 0.0
@@ -516,16 +542,20 @@ public final class EnrichCacheStore: ObservableObject {
             guard attempt < 7, Date().timeIntervalSince(main) < 3 else { break }
             Thread.sleep(forTimeInterval: 0.4)
         }
+        // 全新安装、collector 还没写过缓存:库是空的,不是读失败,别亮红字。
+        guard FileManager.default.fileExists(atPath: cacheURL.path) else {
+            out.obj = [:]
+            return out
+        }
         let tRead = CFAbsoluteTimeGetCurrent()
         guard let data = try? Data(contentsOf: cacheURL) else {
-            out.errorMessage = L10n.t("读取本地记录文件失败")
             return out
         }
         out.readMS = LyricsManagerBaseline.ms(since: tRead)
         out.bytes = data.count
         let tParse = CFAbsoluteTimeGetCurrent()
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else {
-            out.errorMessage = L10n.t("解析本地记录文件失败")
+            out.parseFailed = true
             return out
         }
         out.obj = obj.mapValues(EnrichCacheSlim.slim)
@@ -551,6 +581,9 @@ public final class EnrichCacheStore: ObservableObject {
     /// 用到这一条的正文之前把它补成完整条目(见 `EnrichCacheSlim`)。先读正文小文件;对不上(collector 还没
     /// 重写 / 文件缺了)就回主缓存取这一条 —— 那要解一遍整份主缓存,只在这种少见情况下付。
     /// - Returns: false = 补不回来(主缓存也读不了),调用方别拿缺正文的条目去改、去写。
+    /// 在哪一版主缓存里确认过「这几条也是精简的,正文补不回来」,见 hydrate。
+    private var leanInMainCache: (fingerprint: FileFingerprint?, keys: Set<String>) = (nil, [])
+
     @discardableResult
     private func hydrate(_ key: String, fallbackToMainCache: Bool = true) -> Bool {
         guard let entry = raw[key], EnrichCacheSlim.isSlim(entry) else { return true }
@@ -560,16 +593,24 @@ public final class EnrichCacheStore: ObservableObject {
             return true
         }
         guard fallbackToMainCache else { return false }
+        // 这份主缓存(按文件指纹认)已经解过一遍、确认这一条在里面也是精简的:再解一遍结果一样,
+        // 白在主线程上付一次整份(几十到一百多 MB)解析。主缓存一换(collector 重写了)就重新试。
+        let mainFingerprint = Self.fileFingerprint(Self.cacheURL)
+        if mainFingerprint != nil, mainFingerprint == leanInMainCache.fingerprint, leanInMainCache.keys.contains(key) {
+            return false
+        }
         logger.notice("hydrate: lyrics body file missing or damaged, reading the main cache")
         guard let data = try? Data(contentsOf: Self.cacheURL),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else {
-            lastError = L10n.t("读取本地记录文件失败")
+            loadError = L10n.t("读取本地记录文件失败")
             return false
         }
         // 主缓存里这一条也是精简的(新版 collector 就这么写):正文只在那个读不到的小文件里,补不回来。
         // 如实返回 false,别让调用方拿缺正文的条目当完整的用。
         if let fromMain = obj[key], EnrichCacheSlim.isSlim(fromMain) {
             logger.notice("hydrate: main cache entry is lean too, lyrics body unavailable")
+            if leanInMainCache.fingerprint != mainFingerprint { leanInMainCache = (mainFingerprint, []) }
+            leanInMainCache.keys.insert(key)
             return false
         }
         raw[key] = EnrichCacheSlim.restoreBodies(entry, from: obj[key])
@@ -579,10 +620,34 @@ public final class EnrichCacheStore: ObservableObject {
     // public:「歌词管理」详情页调过/重置过时间轴偏移之后也要调这个——那份改动只落在
     // LyricsOffsetStore(不是这里的 raw 字典),summaries 里预算好的 offsetMs 不会自己
     // 跟着变,得靠调用方显式喊一次重建(见 LyricsManagerView.applyOffsetEdit)。
+    ///
+    /// 在后台建:要列举整个歌词目录(上万个文件)再逐条过八千多个条目,放主线程上每调一次偏移就卡一下。
+    /// 建的过程中列表换过一版(reload 读到了新缓存、另一次重建先落地),这一版就作废,按最新的 raw 和偏移重建一次。
     public func rebuildSummaries() {
-        applySummaries(Self.buildSummaries(from: raw, offsetsSnapshot: LyricsOffsetStore.shared.offsetsSnapshot,
-                                           lyricsDir: Self.lyricsDir))
+        rebuildTask?.cancel()
+        final class Box: @unchecked Sendable {
+            let raw: [String: [String: Any]]
+            var bundle: SummariesBundle?
+            init(raw: [String: [String: Any]]) { self.raw = raw }
+        }
+        let box = Box(raw: raw)
+        let offsetsSnapshot = LyricsOffsetStore.shared.offsetsSnapshot
+        let lyricsDir = Self.lyricsDir
+        let startGeneration = summariesGeneration
+        rebuildTask = Task { [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                box.bundle = Self.buildSummaries(from: box.raw, offsetsSnapshot: offsetsSnapshot, lyricsDir: lyricsDir)
+            }.value
+            guard let self, !Task.isCancelled, let bundle = box.bundle else { return }
+            self.rebuildTask = nil
+            guard self.summariesGeneration == startGeneration else {
+                self.rebuildSummaries()
+                return
+            }
+            self.applySummaries(bundle)
+        }
     }
+    private var rebuildTask: Task<Void, Never>?
 
     // 排序键必须跟"列表上看到的那套分组"用**同一套归并规则**,否则会出现"显示层合并了、
     // 排序层还按原始写法把同一张专辑劈成两半"。实测撞到:「春游」这张专辑
@@ -747,7 +812,10 @@ public final class EnrichCacheStore: ObservableObject {
         var artistMap: [String: String] = [:]
         var looseIndex: [String: String] = [:]
         looseIndex.reserveCapacity(items.count)
+        let knownSources = Set(LyricsSource.allCases.map(\.rawValue))
+        var extraSources: Set<String> = []
         for s in items {
+            if !s.lyricsSource.isEmpty, !knownSources.contains(s.lyricsSource) { extraSources.insert(s.lyricsSource) }
             let loose = EnrichCacheKeys.looseKey(s.key)
             if looseIndex[loose] == nil { looseIndex[loose] = s.key }
             if !s.album.isEmpty, albumMap[s.normAlbum] == nil { albumMap[s.normAlbum] = s.album }
@@ -761,7 +829,8 @@ public final class EnrichCacheStore: ObservableObject {
             albumDisplayMap: albumMap,
             distinctArtists: Array(Set(artistMap.values)).sorted(),
             distinctAlbums: Array(Set(albumMap.values)).sorted(),
-            looseKeyIndex: looseIndex
+            looseKeyIndex: looseIndex,
+            extraSources: extraSources.sorted()
         )
     }
 
@@ -824,15 +893,19 @@ public final class EnrichCacheStore: ObservableObject {
     // 返回值含 yrc:「歌词管理」的单曲歌词时间轴偏移输入框需要跟 LocalPlaybackSource
     // 用同一份内容(lyrics+lyricsYRC)算出来的指纹去查/存 LyricsOffsetStore,不然算出来
     // 的 key 对不上真正播放时用的那个 key。
-    public func detail(for key: String) -> (lyrics: String, tr: String, roma: String, yrc: String) {
+    ///
+    /// `complete == false`:这一条的正文补不回来(正文小文件缺了 / 坏了,主缓存里也是精简的),返回的四份都是空的 ——
+    /// 调用方别拿它去填编辑框再存回去,那会把盘上的歌词、译文、罗马音一起清掉。
+    public func detail(for key: String) -> (lyrics: String, tr: String, roma: String, yrc: String, complete: Bool) {
         let t0 = CFAbsoluteTimeGetCurrent()
-        hydrate(key)
+        let complete = hydrate(key)
         let entry = raw[key] ?? [:]
         let result = (
             entry["lyrics"] as? String ?? "",
             entry["lyrics_tr"] as? String ?? "",
             entry["lyrics_roma"] as? String ?? "",
-            entry["lyrics_yrc"] as? String ?? ""
+            entry["lyrics_yrc"] as? String ?? "",
+            complete
         )
         // 基线埋点(临时,见 LyricsManagerBaseline):记录直接从内存里拿这份数据要多久,
         // 供跟未来改成读 lyrics/ 文件的方案比较耗时。
@@ -1110,7 +1183,9 @@ public final class EnrichCacheStore: ObservableObject {
         // 阈值以上才先打快照:打一份要读几千个小文件、压缩十几 MB,删一条付不起;删一条也够不上"手滑毁一片",
         // 它的兜底是 collector 把文件挪进废纸篓。
         if victims.count >= Self.autoSnapshotDeleteThreshold {
-            lastAutoSnapshotURL = await LyricsBackupStore.writeAutoSnapshot(reason: "delete")
+            guard await takeAutoSnapshot(reason: "delete") else { return }
+        } else {
+            lastAutoSnapshotURL = nil // 这次没打快照,下面那行日志别写成上一次的
         }
         let result = await commit("delete", ["keys": victims])
         guard result.ok else { return }
@@ -1132,7 +1207,7 @@ public final class EnrichCacheStore: ObservableObject {
     public func clearAll() async {
         // 快照必须排在最前面:buildArchive 读的是磁盘上的 lyrics/ 文件族,清完就什么都读不到了。
         // 11 章已知坑 7 那次「833 条手工修正丢失」就是这个入口,这一层是它唯一的可恢复层。
-        lastAutoSnapshotURL = await LyricsBackupStore.writeAutoSnapshot(reason: "clear")
+        guard await takeAutoSnapshot(reason: "clear") else { return }
         logger.notice("""
             clearAll: wiping \(self.raw.count, privacy: .public) entries, \
             snapshot=\(self.lastAutoSnapshotURL?.lastPathComponent ?? "none", privacy: .public)
@@ -1147,14 +1222,32 @@ public final class EnrichCacheStore: ObservableObject {
     /// 批量删除到几条起,值得先打一份自动快照。见 delete(keys:) 里那段注释。
     static let autoSnapshotDeleteThreshold = 5
 
+    /// 破坏性操作前打自动快照。返回 false = 有歌词文件却没备份成(打包失败、盘满),调用方就此停手:
+    /// 确认框承诺了「会先自动备份」,备份没成还照删,出了事就没有可恢复层。歌词文件夹里本来就没有
+    /// 可打包的文件时不算失败(没有东西可丢)。
+    private func takeAutoSnapshot(reason: String) async -> Bool {
+        lastAutoSnapshotURL = await LyricsBackupStore.writeAutoSnapshot(reason: reason)
+        guard lastAutoSnapshotURL == nil, !LyricsBackupStore.hasNoLyricsFiles() else { return true }
+        editError = L10n.t("自动备份没写成功，为免丢了找不回来，这次没有删除。检查一下磁盘空间和配置文件夹的写入权限，再试一次")
+        logger.error("autoSnapshot(\(reason, privacy: .public)) failed, destructive edit aborted")
+        return false
+    }
+
     /// 从一份自动快照把歌词库铺回去:`LyricsBackupStore.restoreAutoSnapshot` 铺文件、留待采纳的非歌词字段,
     /// 再由它交给 collector 收进缓存(adopt_restore),最后刷新列表。返回给用户看的一句结果;nil = 读不出这份快照。
     func restoreFromAutoSnapshot(_ snapshot: LyricsBackupStore.Snapshot) async -> String? {
         guard let result = await LyricsBackupStore.restoreAutoSnapshot(snapshot) else { return nil }
         if !isReleased { await reload() }
         refreshSizeBytes()
-        return String(format: L10n.t("已恢复 %d 个歌词文件（新增 %d、覆盖 %d）"),
-                      result.total, result.added, result.overwritten)
+        var lines = [String(format: L10n.t("已恢复 %d 个歌词文件（新增 %d、覆盖 %d）"),
+                            result.total, result.added, result.overwritten)]
+        if result.failed > 0 {
+            lines.append(String(format: L10n.t("另有 %d 个没写进歌词文件夹，检查一下写入权限和磁盘空间"), result.failed))
+        }
+        if !result.adopted {
+            lines.append(L10n.t("后台服务这次没把它们收进缓存，列表里暂时看不到；文件已经在歌词文件夹里，后台服务下次启动时会自动导入"))
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// 把一次改动交给 collector(见 EnrichEditChannel),完了按 collector 写好的盘上内容刷新列表,并让正在放的
@@ -1168,15 +1261,18 @@ public final class EnrichCacheStore: ObservableObject {
         }
         let result = await EnrichEditChannel.send(op, fields)
         if !isReleased { await reload() }
-        // reload 成功会清 lastError,失败原因要写在它之后。
         if result.ok {
-            lastError = nil
+            if editError != nil { editError = nil }
+        } else if let error = result.error, result.errorIsLocalized {
+            editError = String(format: L10n.t("写入本地记录文件失败：%@"), error)
         } else {
-            lastError = String(format: L10n.t("写入本地记录文件失败：%@"), result.error ?? "")
+            // collector 回的是英文的内部错误(「save_edit: empty key」这类),原样拼进界面没有意义;原文进日志。
+            editError = L10n.t("写入本地记录文件失败，后台服务没能执行这次修改")
             logger.error("enrich edit \(op, privacy: .public) failed: \(result.error ?? "", privacy: .public)")
         }
         PlaybackCoordinator.shared.refreshLyricsForCurrentTrack()
-        refreshSizeBytes()
+        // 上面读过盘的话 performReload 已经算过一次占用了。
+        if isReleased { refreshSizeBytes() }
         return result
     }
 
@@ -1194,7 +1290,7 @@ public final class EnrichCacheStore: ObservableObject {
             let bytes = await Task.detached(priority: .utility) {
                 Self.directorySizeBytes(lyricsDir) + Self.fileSizeBytes(cacheURL)
             }.value
-            self?.totalSizeBytes = bytes
+            if self?.totalSizeBytes != bytes { self?.totalSizeBytes = bytes }
         }
     }
 

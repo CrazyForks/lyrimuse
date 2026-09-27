@@ -201,6 +201,7 @@
 "之前创建过就从这里找回：列表里点应用名，页面上就有 API Key 和 Shared Secret" = "Already created one? Find it here — click the application name and the page shows its API Key and Shared Secret";
 "之前手动选定的 %@ 首已经都是锁定状态" = "All %@ songs you picked manually are already locked";
 "之前手动选定的 %@ 首，歌词后来都被自动更新过，已经不是你当初选的那一份，所以没有锁定" = "The %@ songs you picked earlier have since been updated automatically — they are no longer the versions you chose, so they were not locked";
+"之前的自动决策" = "Earlier Automatic Decision";
 "五" = "F";
 "人工修正" = "Manually Edited";
 "人工修正 %@ 首" = "%@ manually edited";
@@ -318,6 +319,7 @@
 "写入 config.json 失败：%@" = "Couldn't write config.json: %@";
 "写入 iCloud 失败，可以改用下面的「导出…」存成文件" = "Couldn't save to iCloud — use Export… below to save a file instead";
 "写入功能开关文件失败：%@" = "Couldn't write the feature flags file: %@";
+"写入本地记录文件失败，后台服务没能执行这次修改" = "Couldn't write the local records: the background service couldn't carry out this change.";
 "写入本地记录文件失败：%@" = "Couldn't save to the lyrics cache: %@";
 "决定性差异：「%@」" = "Deciding difference: “%@”";
 "减少推荐" = "Suggest Less";
@@ -377,8 +379,6 @@
 "匹配条目：改用 Last.fm 编目里这首歌的歌手写法，例如「Wang Leehom」发成「王力宏」；编目里查不到就原样发。\n只发第一位：合唱串只取第一位，「陶喆, 卢广仲」发成「陶喆」，不查编目；Last.fm 上确实收录了这个合唱条目时不截。\n原始：原样发播放器报的歌手。" = "Match: use the spelling Last.fm's catalog has for this song, e.g. Wang Leehom → 王力宏; sent as-is when the catalog has no entry.\nFirst Only: keep just the first credited artist — 陶喆, 卢广仲 becomes 陶喆. No catalog lookup, and nothing is trimmed when Last.fm really does list the collaboration.\nRaw: exactly the artist the player reports.";
 "匹配模式" = "Matching Mode";
 "匹配算法" = "Matching Algorithm";
-"十二个源的请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」" = "None of the twelve sources responded. That usually means a network problem rather than a song with no lyrics. Check your connection, then click Retry below";
-"十二个源都没找到可用的候选" = "No Lyrics from Any Source";
 "升级重试" = "Upgrade retry";
 "单日最高 · %@" = "Busiest day · %@";
 "单曲循环" = "Repeat One";
@@ -414,6 +414,7 @@
 "口白" = "Talk";
 "另一轮扫描正在进行，等它结束再来" = "Another scan is already running — wait for it to finish";
 "另有 %@ 条太旧、Last.fm 不再接受" = "%@ more are too old for Last.fm to accept";
+"另有 %d 个没写进歌词文件夹，检查一下写入权限和磁盘空间" = "%d more couldn't be written to the lyrics folder. Check write access and disk space.";
 "只作用于播放中/指向展开时那一行。没在播放时灵动岛缩成刘海大小，那时左边是封面、右边是播放指示条，不受这里影响。\n\n播放指示条固定在右耳外缘，不占模块位。" = "Applies to the row shown while playing, or while hovering to expand. When nothing is playing the notch shrinks to the cutout itself, showing artwork on the left and the playback indicator on the right — unaffected by these settings.\n\nThe playback indicator is pinned to the outer edge of the right ear and does not take a module slot.";
 "只作用于播放中/指向展开时那一行。没在播放时灵动岛缩成刘海大小，那时左边是封面、右边是播放指示条，不受这里影响。\n\n播放指示条（音浪）贴哪只耳朵在上面单独配，跟下面的模块选择不互斥，可以同时选中。" = "Applies only to the row shown while playing, or while expanded on hover. When nothing is playing the notch collapses to its physical size, showing artwork on the left and the playback indicator on the right — unaffected by this setting.\n\nWhich ear the playback indicator (waveform) sits on is configured above; it is independent of the module choice below, so both can be set at once.";
 "只发第一位" = "First Only";
@@ -450,6 +451,7 @@
 "同步收听记录" = "Scrobble your listens";
 "同步服务地址" = "Sync Server URL";
 "名次跟上一期一样" = "Same rank as the previous period";
+"后台服务这次没把它们收进缓存，列表里暂时看不到；文件已经在歌词文件夹里，后台服务下次启动时会自动导入" = "The background service didn't take them into the cache this time, so they won't show in the list yet. The files are already in the lyrics folder and will be imported the next time the background service starts.";
 "后退" = "Back";
 "含明文凭证；导入会覆盖全部设置并重启" = "Contains credentials in plain text; importing overwrites every setting and restarts";
 "含账号凭据，请勿分享给他人；需要连同外观与快捷键整体迁移时，请使用「备份与迁移」" = "Contains account credentials, so don’t share it. To move everything including appearance and shortcuts, use Backup & Migrate";
@@ -457,6 +459,8 @@
 "听得最多" = "Most Played";
 "启用" = "Enable";
 "启用失败，可能是权限或系统限制导致歌词引擎没能正常启动，导出诊断信息能看到具体原因，也方便反馈问题" = "Couldn't enable it — a permission or system restriction may have kept the lyrics engine from starting. Export Diagnostics shows the specific cause and makes it easier to report";
+"启用的歌词源请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」" = "None of the enabled lyrics sources responded. That usually means a network problem rather than a song with no lyrics. Check your connection, then click Retry below";
+"启用的歌词源都没找到可用的候选" = "No Lyrics from Any Source";
 "咪咕音乐" = "Migu Music";
 "唯一的差别在「%@」这一项上。" = "The only difference is on “%@”.";
 "唯一的差别是胜者在「%1$@」上多 %2$d 分。" = "The only difference: the winner scored %2$d more on “%1$@”.";
@@ -674,6 +678,7 @@
 "开始" = "Start";
 "开始使用" = "Get Started";
 "开始扫描" = "Start Scanning";
+"开始播放一首歌，再点「搜索歌词…」" = "Start playing a song, then choose “Search Lyrics…” again.";
 "开机启动" = "Launch at Login";
 "开机时自动启动 Lyrimuse" = "Launch Lyrimuse at login";
 "开源免费，你的 ⭐ 是最大的鼓励，谢谢支持" = "Free and open source. A ⭐ means a lot — thank you!";
@@ -769,6 +774,7 @@
 "换一个组合。系统占用的组合注册不上，录进去也不会生效；要用它得先到「系统设置 → 键盘 → 键盘快捷键」里把系统那一项关掉。" = "Pick a different combination. Combinations reserved by the system cannot be registered, so recording one has no effect; to use it, first turn off the system shortcut in System Settings → Keyboard → Keyboard Shortcuts.";
 "换一个组合，或者先清除那一项。" = "Pick a different combination, or clear that one first.";
 "换一句" = "Another line";
+"换个筛选条件或关键词试试" = "Try different filters or search terms.";
 "换文件夹后，旧文件不会自动搬过去" = "Existing files aren't moved to the new folder";
 "换行" = "Wrap";
 "换行（默认）：一行放不下就折到下一行。\n滚动：每行只占一行高，放不下的横向滚动；这一句有逐字时间轴时跟着唱到哪滚到哪。" = "Wrap (default): long lines fold onto the next line.\nScroll: every line stays one line tall and the overflow scrolls sideways — following the singing when the line has word-level timings.";
@@ -808,6 +814,7 @@
 "播放热力图" = "Listening Heatmap";
 "播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响" = "Playback uses the word-level timing, so editing Lyrics (LRC) has no effect. To hand-edit the main lyrics, use 「Search Online for Lyric Candidates」 to swap in a candidate without word-level timing; translation and romanization edits still apply.";
 "播放记录" = "Play history";
+"播放过的歌会自动出现在这里" = "Songs you play will show up here automatically.";
 "收听次数：%@" = "Plays: %@";
 "收听足迹" = "Listening Footprint";
 "收起" = "Collapse";
@@ -1131,7 +1138,9 @@
 "没有封面数据时会使用下面选择的文字颜色作为备用" = "Falls back to the text color chosen below when there's no cover art";
 "没有找到匹配的设置" = "No matching settings";
 "没有找到带时间戳的版本，已自动采纳一份纯文本兜底（可在「歌词窗口」里查看）" = "No timed version found — automatically adopted a plain-text fallback (viewable in the Lyrics Window)";
+"没有找到带时间戳的版本；找到了一份纯文本兜底，但没能存下来" = "No timed version found. A plain-text fallback was found, but it couldn't be saved.";
 "没有授权" = "Not granted";
+"没有符合条件的歌" = "No Matching Songs";
 "没有缺失" = "Nothing missing";
 "没有需要补搜的歌" = "No songs needed searching";
 "没能取到那年今日——Last.fm 没有响应" = "Couldn't load this day in past years — Last.fm didn't respond";
@@ -1158,6 +1167,7 @@
 "清空全部时间轴校正" = "Clear All Timing Calibrations";
 "清空全部电台校正" = "Clear All Radio Calibrations";
 "清空全部缓存" = "Clear All Cache";
+"清空搜索" = "Clear Search";
 "清空没有完全生效，请稍后再试一次" = "Clearing didn't fully take effect — try again in a moment";
 "清除…" = "Erase…";
 "清除全部设置" = "Erase All Settings";
@@ -1193,6 +1203,8 @@
 "状态栏宽度有限，歌词可能被截断；鼠标悬停在上面永远能看到完整的这一行" = "The menu bar is narrow so the line may be truncated; hovering always shows it in full";
 "现在是广告" = "An ad is playing";
 "现在没有在播放——桌面悬浮歌词会立刻出现，灵动岛和菜单栏歌词要等开始播放才看得到" = "Nothing is playing right now — Desktop Floating Lyrics appears straight away; Notch Lyrics and Menu Bar Lyrics only show up once playback starts";
+"现在没有在放的歌" = "Nothing Is Playing";
+"现在这份歌词是你手动修改或手动采纳的，不是下面这轮自动决策选出来的" = "The current lyrics were edited or picked by you, not chosen by the automatic decision below.";
 "现场版场次不符" = "Live recording from a different show";
 "玻璃浓淡" = "Glass Density";
 "生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看" = "Creates a .zip file. It keeps recently played track names and local file paths, so review it before posting publicly";
@@ -1313,6 +1325,7 @@
 "自动下载并安装" = "Download and Install Automatically";
 "自动化权限" = "Automation Permission";
 "自动化权限让播放进度更准，还能在歌词上直接控制播放" = "Automation access keeps playback progress accurate and lets you control playback right from the lyrics";
+"自动备份没写成功，为免丢了找不回来，这次没有删除。检查一下磁盘空间和配置文件夹的写入权限，再试一次" = "The automatic backup couldn't be written, so nothing was deleted this time to keep it recoverable. Check your disk space and write access to the config folder, then try again.";
 "自动开启失败，请到该浏览器「查看→开发者」菜单里手动打开" = "Automatic enable failed — please turn it on manually from this browser's View → Developer menu";
 "自动更新" = "Automatic Updates";
 "自动检查" = "Check Automatically";
@@ -1472,6 +1485,7 @@
 "还没有手动选定过歌词；从现在起你选定的都会直接锁定" = "You haven't picked any lyrics manually yet; from now on, your picks will be locked right away";
 "还没有收听记录" = "No scrobbles yet";
 "还没有检查过更新" = "No update check yet";
+"还没有歌词记录" = "No Lyrics Yet";
 "还没有缓存任何歌词。放一首歌，Lyrimuse 会自动搜好存在这里" = "No lyrics cached yet. Play something and Lyrimuse will find them and keep them here";
 "还没有连接 Apple Music——在「歌词来源」卡片底部点「连接」登录一次即可（需要 Apple Music 订阅）" = "Apple Music is not connected yet — sign in once via Connect at the bottom of the Lyrics Sources card (an Apple Music subscription is required)";
 "还没有配对任何浏览器，点右上角「添加浏览器」选一个" = "No browsers paired yet — tap \"Add Browser\" above to pick one";
@@ -1543,6 +1557,7 @@
 "这首歌在你 Last.fm 上的第几次收听，点一下看合并了哪些写法" = "Which play of this track this was in your Last.fm history. Click to see which spellings were merged";
 "这首歌没有歌词或还在搜索时，用歌名占住歌词的位置，不缩回小图标；歌词一到就换成歌词。暂停时仍缩回图标，广告中不显示" = "While a song has no lyrics or is still being searched, keep the lyrics slot with the song title instead of collapsing to the icon; the line is swapped in as soon as lyrics arrive. Still collapses when paused, and never shows during ads";
 "这首歌第一次播放，正在联网搜索歌词，完成后会自动显示，不需要手动刷新。" = "First time playing this track, so lyrics are being searched for online. They will appear on their own — no need to refresh.";
+"这首的歌词正文读不回来（歌词文件缺失或损坏），为免覆盖盘上的内容，这里暂时不能保存修改。可以用「联网搜索候选歌词」重新采纳一份" = "This song's lyrics can't be read back (the lyrics file is missing or damaged), so saving is disabled here to avoid overwriting what's on disk. You can adopt a new copy with “Search Candidate Lyrics Online”.";
 "进入全屏" = "Enter Full Screen";
 "进入迷你尺寸" = "Enter Mini Size";
 "连上之后，你播放的每一首歌都会自动 scrobble 到 Last.fm" = "Once connected, every track you play is scrobbled to Last.fm automatically";

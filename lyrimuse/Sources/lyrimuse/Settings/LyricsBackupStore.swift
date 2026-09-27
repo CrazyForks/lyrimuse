@@ -124,6 +124,9 @@ enum LyricsBackupStore {
         /// `meta` 那份待采纳文件的字节数;0 = 这份备份不带(v1 老包)或写盘失败。
         /// restore 收尾时交给 collector 采纳(见 restore(from:) 末尾)。
         var metaBytes = 0
+        /// collector 有没有把铺好的文件收进缓存(adopt_restore)。false 时文件已经在歌词目录里,
+        /// 要等 collector 下次启动导入 —— 界面得如实说,不能只报「已恢复 N 个」。
+        var adopted = true
         var total: Int { added + overwritten }
     }
 
@@ -191,6 +194,7 @@ enum LyricsBackupStore {
         // 铺好的歌词文件和待采纳文件交给 collector 收进缓存(它是缓存唯一的写入方,见 EnrichEditChannel)。
         // 失败只记日志:文件已经在歌词目录里了,collector 下次启动也会导入它们。
         let adopt = await EnrichEditChannel.send("adopt_restore")
+        result.adopted = adopt.ok
         if !adopt.ok {
             logger.error("restore: collector did not adopt the restored files: \(adopt.error ?? "", privacy: .public)")
         }

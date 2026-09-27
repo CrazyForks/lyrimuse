@@ -335,12 +335,11 @@ func TestSwiftSourceDisplayNameCoversAllSources(t *testing.T) {
 	}
 }
 
-// 「搜索候选歌词」弹窗两句空状态文案里硬编码的中文数字("六个源都没找到可用的候选"/
-// "六个源的请求全部失败…")必须跟源的实际数量一致——加 amll 之后这两句
-// 曾经停在"五个源"没跟上,纯靠人肉截图发现,而上面几个 Test 都不会替它报警(它们守的是
-// "某个源漏挂在某个清单里",不是"某句文案里的数字过期了")。同一份文件里,零个/一个
-// 数字不用写死中文数字表——已知会用到的范围窄,给 5~9 手写映射即可,超出直接报错提醒
-// 去扩表,而不是默默算错。
+// 「搜索候选歌词」弹窗的空状态文案如果写了中文数字("六个源都没找到可用的候选"/
+// "六个源的请求全部失败…"),必须跟源的实际数量一致——加 amll 之后这两句曾经停在"五个源"没跟上,
+// 纯靠人肉截图发现,而上面几个 Test 都不会替它报警(它们守的是"某个源漏挂在某个清单里",
+// 不是"某句文案里的数字过期了")。现在这两句改成不带数字的「启用的歌词源……」(用户关掉几个源时
+// 写全部源数本来就不对),没有数字就没有可过期的;这里守的是以后谁再把数字写回来时它得对。
 func TestSwiftSearchEmptyStateCountMatchesSourceCount(t *testing.T) {
 	chineseDigits := map[int]string{5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十", 11: "十一", 12: "十二"}
 	n := len(allLyricSourceConstants())
@@ -354,15 +353,12 @@ func TestSwiftSearchEmptyStateCountMatchesSourceCount(t *testing.T) {
 	if err != nil {
 		t.Skipf("读不到 %s: %v", p, err)
 	}
-	body := string(raw)
-	needles := []string{
-		digit + `个源都没找到可用的候选`,
-		digit + `个源的请求全部失败`,
-	}
-	for _, needle := range needles {
-		if !strings.Contains(body, needle) {
-			t.Errorf("在 %s 里没找到 %q——源数量是 %d(%s个),这两句空状态文案的数字要跟着改",
-				p, needle, n, digit)
+	// 只看界面文案(L10n.t 的键),注释里记着的旧措辞不算。
+	re := regexp.MustCompile(`L10n\.t\("([一二三四五六七八九十]+)个源(都没找到可用的候选|的请求全部失败)`)
+	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
+		if m[1] != digit {
+			t.Errorf("%s 里的 %q 写的是%s个源,实际源数量是 %d(%s个)——改成不带数字,或者跟着改数字",
+				p, m[0][len(`L10n.t("`):], m[1], n, digit)
 		}
 	}
 }

@@ -18,6 +18,8 @@ enum EnrichEditChannel {
         var ok: Bool
         var changed: Int
         var error: String?
+        /// error 是不是已经本地化的、可以直接给用户看的一句(这边自己的超时、系统错误);collector 回的是英文内部错误。
+        var errorIsLocalized = false
     }
 
     /// 跟 collector main.go 里 setEnrichEditDir 的目录名逐字节一致。
@@ -46,7 +48,12 @@ enum EnrichEditChannel {
         if isRunning {
             return await viaRequestDirectory(data)
         }
-        let cli = await Task.detached(priority: .userInitiated) { viaCLI(data, collectorPath: path) }.value
+        // 子进程要阻塞一条线程等它跑完(可能到两分钟),放 GCD 上等,不占 Swift 并发池里的线程。
+        let cli = await withCheckedContinuation { (continuation: CheckedContinuation<Result, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: viaCLI(data, collectorPath: path))
+            }
+        }
         // 判断「没在跑」和执行之间后台服务刚好起来了:CLI 拿不到锁,改走请求目录。
         if !cli.ok, cli.error == "collector is running" {
             return await viaRequestDirectory(data)
@@ -74,19 +81,19 @@ enum EnrichEditChannel {
             try FileManager.default.moveItem(at: tmp, to: request)
         } catch {
             logger.error("enrich edit: writing the request failed: \(error.localizedDescription, privacy: .public)")
-            return Result(ok: false, changed: 0, error: error.localizedDescription)
+            return Result(ok: false, changed: 0, error: error.localizedDescription, errorIsLocalized: true)
         }
         if let answer = await waitForResult(result, timeout: resultTimeout) { return answer }
         // 超时:撤回还没被取走的请求,免得它过后被执行。撤不回说明 collector 已经取走、正在执行,那就等它做完 ——
         // 这时报失败,改动过后照样生效。
         if (try? FileManager.default.removeItem(at: request)) != nil {
             logger.error("enrich edit: collector did not pick up the request within \(Int(resultTimeout), privacy: .public)s")
-            return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"))
+            return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"), errorIsLocalized: true)
         }
         logger.notice("enrich edit: collector is still executing the request, waiting for it")
         if let answer = await waitForResult(result, timeout: executingTimeout) { return answer }
         logger.error("enrich edit: collector did not finish within \(Int(resultTimeout + executingTimeout), privacy: .public)s")
-        return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"))
+        return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"), errorIsLocalized: true)
     }
 
     private static func waitForResult(_ url: URL, timeout: TimeInterval) async -> Result? {
@@ -107,25 +114,22 @@ enum EnrichEditChannel {
         do {
             try data.write(to: tmp, options: .atomic)
         } catch {
-            return Result(ok: false, changed: 0, error: error.localizedDescription)
+            return Result(ok: false, changed: 0, error: error.localizedDescription, errorIsLocalized: true)
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: collectorPath)
-        process.arguments = ["apply-enrich-edit", tmp.path]
-        process.environment = LyrimusePaths.collectorProcessEnvironment()
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            logger.error("enrich edit: launching collector failed: \(error.localizedDescription, privacy: .public)")
-            return Result(ok: false, changed: 0, error: error.localizedDescription)
+        // 超时跟请求目录那条路的总上限一样:清空、恢复要搬几千个文件,但卡住的子进程不能让 send 永远不返回
+        // (editsInFlight 归不了零,快照也就一直不释放)。
+        guard let run = ProcessRunner.run(collectorPath, ["apply-enrich-edit", tmp.path],
+                                          timeout: resultTimeout + executingTimeout,
+                                          environment: LyrimusePaths.collectorProcessEnvironment()) else {
+            logger.error("enrich edit: launching collector failed")
+            return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"), errorIsLocalized: true)
         }
-        let out = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        if run.timedOut {
+            logger.error("enrich edit: apply-enrich-edit timed out")
+            return Result(ok: false, changed: 0, error: L10n.t("歌词引擎没有响应"), errorIsLocalized: true)
+        }
         // 结果是 stdout 最后一行 JSON;前面可能有日志行。
-        let lastLine = String(decoding: out, as: UTF8.self)
+        let lastLine = String(decoding: run.stdout, as: UTF8.self)
             .split(separator: "\n").last.map(String.init) ?? ""
         return decode(Data(lastLine.utf8))
     }

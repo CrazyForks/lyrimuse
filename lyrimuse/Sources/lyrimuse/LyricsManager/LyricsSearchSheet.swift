@@ -69,6 +69,30 @@ struct LyricsSearchSheet: View {
     // 两个独立维度:可能已经有几条候选摆在那了、但后面的源还没回来。用一个三态 enum
     // 表达不了"进行中 + 已经有部分结果"这个中间状态。
     @State private var candidates: [LyricsSearchService.Candidate] = []
+    /// 这个面板作为搜索发起方的身份,见 `LyricsSearchService.Owner`。
+    @State private var searchOwner = LyricsSearchService.Owner()
+    /// 预览区那份过滤后的正文。整首逐行分类(元信息标签、署名行)不便宜,而查询词每敲一个字、
+    /// 每到一批候选都会重算 body;选中的候选没变就沿用上一次的结果。
+    @State private var previewMemo = PreviewTextMemo()
+    /// 查询对象(换歌)换了几次,见 apply 里那道守卫。
+    @State private var subjectGeneration = 0
+
+    private final class PreviewTextMemo {
+        private var lyrics = ""
+        private var title = ""
+        private var artist = ""
+        private var cached: String?
+
+        func text(_ c: LyricsSearchService.Candidate) -> String {
+            if let cached, c.lyrics == lyrics, c.title == title, c.artist == artist { return cached }
+            let text = LyricsPreviewText.forPreview(c.lyrics, title: c.title, artist: c.artist)
+            lyrics = c.lyrics
+            title = c.title
+            artist = c.artist
+            cached = text
+            return text
+        }
+    }
     /// 给"还在搜索"那两处提示缀的进度,形如 "（2/5）"。还没收到任何一行时是空串。
     ///
     /// 轮次标识:collector 的兜底轮(首歌手变体/标题反查,见
@@ -78,6 +102,11 @@ struct LyricsSearchSheet: View {
     /// 回跳那一刻出现,自己解释自己。
     private var searchProgressSuffix: String {
         guard sourcesTotal > 0 else { return "" }
+        // 全角括号只配中文文案;英文界面用半角,前面空一格。
+        if L10n.current == "en" {
+            let roundSuffix = searchRound >= 2 ? " [\(searchRound)]" : ""
+            return " (\(sourcesDone)/\(sourcesTotal))\(roundSuffix)"
+        }
         let roundSuffix = searchRound >= 2 ? "［\(searchRound)］" : ""
         return "（\(sourcesDone)/\(sourcesTotal)）\(roundSuffix)"
     }
@@ -460,11 +489,12 @@ struct LyricsSearchSheet: View {
         //
         // 修在面板这一层,而不是让宿主加 `.id(context.key)` 整棵重建:离屏 NSHostingView 探针
         // 实测重建时**新面板的 .task 先起、旧面板的任务取消与 onDisappear 后到**,而两者都调
-        // 全局 `cancelRunning()`(它杀的是"当前在跑的那个"),新起的 collector 子进程会被旧面板
+        // 取消(当时是全局的、杀"当前在跑的那个",现在按发起方分开),新起的 collector 子进程会被旧面板
         // 的收尾杀掉,3/3 复现。`.task(id:)` 的语义是先取消旧任务再起新任务,顺序由 SwiftUI
         // 保证,同一探针下新搜索每次都能跑完。`.onChange` 在更新阶段同步触发、`.task(id:)` 的
         // 任务体在其后异步起跑,所以 load() 起跑时查询词已经是新曲目的。
         .onChange(of: searchSubject) { _, _ in
+            subjectGeneration += 1
             artist = originalArtist
             title = originalTitle
             album = originalAlbum
@@ -476,9 +506,9 @@ struct LyricsSearchSheet: View {
         .task(id: searchSubject) { await load() }
         // 关闭/采纳/Esc 任何一条退出路径都把还在跑的 collector 子进程停掉 —— 不停的话
         // 它会继续对九个源发请求直到 20 秒兜底,NDJSON 还在往已消失的视图里灌
-        // (性能审计;search 内的 withTaskCancellationHandler 是第二层,
-        // cancelRunning 幂等,两层谁先到都行)。
-        .onDisappear { LyricsSearchService.shared.cancelRunning() }
+        // (search 内的 withTaskCancellationHandler 是第二层,取消幂等,两层谁先到都行)。
+        // 只停这个面板自己发起的那一轮,另一扇窗里的搜索、详情页在跑的自动匹配不受影响。
+        .onDisappear { LyricsSearchService.shared.cancelRunning(for: searchOwner) }
     }
 
     // 三个可编辑的查询维度——默认展示这首歌本身的元数据,.task { await load() } 直接
@@ -513,7 +543,7 @@ struct LyricsSearchSheet: View {
                 .buttonStyle(.link)
             }
             // 搜索途中也允许再点:上一轮会被 load() 里的 searchGeneration 判作废,子进程
-            // 也会被 LyricsSearchService.cancelRunning 杀掉。改了关键词却要等上一轮跑完
+            // 也会被 LyricsSearchService 按同一发起方顶掉、杀掉。改了关键词却要等上一轮跑完
             // (最长 20 秒)才能重搜,是没道理的等待。
             Button(L10n.t("重新搜索")) { Task { await load() } }
                 .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -529,7 +559,8 @@ struct LyricsSearchSheet: View {
     // "查完了、真的什么都没有",提前弹出"没找到候选"的空状态提示。
     @ViewBuilder
     private var content: some View {
-        if let msg = loadError {
+        // 已经收到候选时出错(比如后面的源把子进程带崩了)不整页换成报错:到手的候选照样能挑,报错挪到列表上方一行。
+        if let msg = loadError, candidates.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 32))
@@ -554,7 +585,7 @@ struct LyricsSearchSheet: View {
                 ContentUnavailableView {
                     Label(L10n.t("网络似乎不通"), systemImage: "wifi.slash")
                 } description: {
-                    Text(L10n.t("十二个源的请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」"))
+                    Text(L10n.t("启用的歌词源请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」"))
                 } actions: {
                     Button(L10n.t("重试")) { Task { await load() } }
                 }
@@ -666,7 +697,7 @@ struct LyricsSearchSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ContentUnavailableView(L10n.t("十二个源都没找到可用的候选"), systemImage: "text.badge.xmark")
+                ContentUnavailableView(L10n.t("启用的歌词源都没找到可用的候选"), systemImage: "text.badge.xmark")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
@@ -681,6 +712,14 @@ struct LyricsSearchSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 6)
+                }
+                if let msg = loadError {
+                    Label(msg, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
                 }
                 HSplitView {
                     List(candidates, selection: selectedSourceBinding) { c in
@@ -770,11 +809,13 @@ struct LyricsSearchSheet: View {
     ///    的 lastError 红字负责说明),留着的模式给标题栏一条回声、不重搜 —— 候选本来就在。
     private func apply(_ c: LyricsSearchService.Candidate) async {
         guard applyingSource == nil else { return }
-        let subject = searchSubject
+        // 比 @State 里的代数,不比 searchSubject:这个方法跑在按钮闭包捕获的那份视图副本上,副本的 let 属性
+        // 永远是旧值,前后比较恒等;@State 读的是共享存储,换了歌(onChange(of: searchSubject))这里看得见。
+        let subject = subjectGeneration
         applyingSource = c.source
         let saved = await onApply(c)
         applyingSource = nil
-        guard subject == searchSubject else { return }
+        guard subject == subjectGeneration else { return }
         if saved {
             appliedSource = c.source
             appliedFingerprint = c.fingerprint
@@ -853,7 +894,7 @@ struct LyricsSearchSheet: View {
                 // 一个字都不会出现,却占满预览框顶部,把用户真正要判断的"第一句词对不对、
                 // 轴准不准"挤到看不见的地方(用户提)。只影响预览,采纳落盘的
                 // 仍是候选原始文本;判据与理由见 LyricsPreviewText。
-                Text(LyricsPreviewText.forPreview(c.lyrics, title: c.title, artist: c.artist))
+                Text(previewMemo.text(c))
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1079,6 +1120,11 @@ struct LyricsSearchSheet: View {
     private func load() async {
         searchGeneration += 1
         let generation = searchGeneration
+        // 没有歌名就不搜(没在播放时打开、或者用户把歌名清空了):空歌名交给 collector 只会回一串英文报错。
+        guard !title.trimmingCharacters(in: .whitespaces).isEmpty else {
+            isSearching = false
+            return
+        }
         candidates = []
         loadError = nil
         selectedSource = nil
@@ -1094,7 +1140,8 @@ struct LyricsSearchSheet: View {
         enabledSources = Set(FeatureSettingsStore.shared.lyricsSources.map(\.rawValue))
         isSearching = true
         do {
-            try await LyricsSearchService.shared.search(artist: artist, title: title, album: album, durationSecs: durationSecs) { update in
+            try await LyricsSearchService.shared.search(owner: searchOwner, artist: artist, title: title, album: album,
+                                                        durationSecs: durationSecs) { update in
                 guard generation == searchGeneration else { return } // 已经有更新的一轮在跑,这批结果作废
                 candidates = update.candidates
                 networkLooksDown = update.networkLooksDown
