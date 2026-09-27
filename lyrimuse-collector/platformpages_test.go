@@ -204,11 +204,18 @@ func TestWarmPlatformPagesSkipsWhenLastfmEmpty(t *testing.T) {
 		topArtists: func(context.Context, string) ([]lastfmChartEntry, error) { return nil, errors.New("down") },
 		topAlbums:  func(context.Context, string) ([]lastfmChartEntry, error) { return nil, errors.New("down") },
 	}
-	if warmPlatformPages(context.Background(), time.Unix(1_800_000_000, 0), 60, src) {
+	now := time.Unix(1_800_000_000, 0)
+	if warmPlatformPages(context.Background(), now, 60, src) {
 		t.Fatal("Last.fm 一条都没取到时这轮不算数")
 	}
-	if platformPagesCache.Updated != 0 {
-		t.Fatal("不算数的一轮不盖时间戳")
+	if len(platformPagesCache.Artists) != 0 || len(platformPagesCache.Albums) != 0 {
+		t.Fatal("不算数的一轮不记结论")
+	}
+	if got, want := platformPagesCache.Updated, now.Add(platformPagesPartialRetry-platformPagesCheckInterval).Unix(); got != want {
+		t.Fatalf("Updated = %d, want %d: 取不到也要退避到 %v 之后,不能每 5 秒一拍就重发", got, want, platformPagesPartialRetry)
+	}
+	if warmPlatformPages(context.Background(), now.Add(time.Minute), 60, src) {
+		t.Fatal("退避期内不该再跑")
 	}
 }
 

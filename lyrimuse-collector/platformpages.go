@@ -194,7 +194,14 @@ func warmPlatformPages(ctx context.Context, now time.Time, budget int, src platf
 		}
 	}
 	if len(artists) == 0 && len(albums) == 0 && len(tracks) == 0 {
-		return false // Last.fm 没取到,这轮不算数,下一拍再试
+		// Last.fm 没取到:这轮不算数、不记任何结论,但也不能下一拍就重试(后台任务每 5 秒一拍,一拍 12 个请求),
+		// 记成 platformPagesPartialRetry 之后到期。
+		if ctx.Err() == nil {
+			platformPagesMu.Lock()
+			platformPagesCache.Updated = now.Add(platformPagesPartialRetry - platformPagesCheckInterval).Unix()
+			platformPagesMu.Unlock()
+		}
+		return false
 	}
 	changed := false
 	stale := func(checked int64) bool {
