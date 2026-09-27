@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -77,8 +78,8 @@ var lyricsFileSuffixes = [4]string{".lrc", ".tr.lrc", ".roma.lrc", ".yrc"}
 // 这里的 Go-side sweep 无法区分"这个 key 刚被显式删除"和"这个 key 从未存在过",所以
 // 只负责清理仍存在条目的*过期变体文件*(如上)。
 //
-// 全量导出要对每个条目逐个读比 4 个文件,条目上千时是秒级的磁盘 IO;运行期只改了个别条目的
-// 路径用 exportLyricsFilesFor。启动与 CLI 仍用这个全量版本。
+// 全量导出在常驻进程里只读比记录对不上的文件(见 lyricsfilestate.go),没有记录时(CLI、单测)每个条目逐个读比
+// 4 个文件,条目上千时是秒级的磁盘 IO;运行期只改了个别条目的路径用 exportLyricsFilesFor。
 func exportLyricsFiles() {
 	exportLyricsFilesMatching(nil)
 }
@@ -143,6 +144,33 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
+	// 上次之后没人动过、要写的内容也没变的文件不读不写(见 lyricsfilestate.go)。全量导出先把目录列一遍,
+	// 「在不在、动没动」都从这份列表里查,不再对每个可能的文件名逐个 stat / 删除;单首导出只碰那几个文件,直接 stat。
+	useState := lyricsFileStateEnabled(dir)
+	var present map[string]fs.FileInfo
+	if onlyFolds == nil {
+		present = listLyricsDir(dir)
+	}
+	statOf := func(name string) fs.FileInfo {
+		if present != nil {
+			return present[name]
+		}
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			return nil
+		}
+		return info
+	}
+	remove := func(name string) {
+		if present != nil {
+			if _, ok := present[name]; !ok {
+				return
+			}
+			delete(present, name)
+		}
+		_ = os.Remove(filepath.Join(dir, name)) // 忽略"文件本来就不存在"的错误,这是预期情况
+		forgetLyricsFile(dir, name)
+	}
 
 	// macOS 默认文件系统(APFS)大小写不敏感、只保留显示大小写——而这个项目本来就有个
 	// 已知问题:media-control 偶尔读到的专辑名大小写跟 Music.app 真实库 tag 不一致,
@@ -183,7 +211,7 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 			// 其中某一个的写入弄乱,留着只是一份意义不明的孤儿文件。
 			plainBase := sanitizeLyricsFilename(j.key)
 			for _, suffix := range lyricsFileSuffixes {
-				_ = os.Remove(filepath.Join(dir, plainBase+suffix))
+				remove(plainBase + suffix)
 			}
 		}
 		// 同理清掉"加长度上限之前那个更长的文件名"下的残留。这类文件是存量:长度上限
@@ -195,25 +223,46 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 			for _, suffix := range lyricsFileSuffixes {
 				// 名字本身超过 255 字节时 Remove 会返回 ENAMETOOLONG,那正说明它不可能
 				// 存在过,和"文件不存在"一样忽略掉。
-				_ = os.Remove(filepath.Join(dir, untruncated+suffix))
+				remove(untruncated + suffix)
 			}
 		}
 		header := lyricsFileHeader(j.artist, j.title, j.album, j.source, j.manual)
 		for k, suffix := range lyricsFileSuffixes {
-			path := filepath.Join(dir, base+suffix)
+			name := base + suffix
+			path := filepath.Join(dir, name)
 			content := j.variants[k]
 			if content == "" {
-				_ = os.Remove(path) // 忽略"文件本来就不存在"的错误,这是预期情况
+				remove(name)
 				continue
 			}
-			full := header + content
-			if existing, err := os.ReadFile(path); err == nil && string(existing) == full {
+			full := []byte(header + content)
+			sum := lyricsCRC(full)
+			info := statOf(name)
+			if useState && info != nil {
+				if recorded, same := lyricsFileUnchanged(dir, name, info); same && recorded == sum {
+					continue
+				}
+			}
+			if info != nil {
+				if existing, err := os.ReadFile(path); err == nil && string(existing) == string(full) {
+					recordLyricsFile(dir, name, info, sum)
+					continue
+				}
+			}
+			if err := writeLyricsFileAtomic(path, full); err != nil {
+				slog.Error("lyrics export: write failed", "file", name, "err", err)
 				continue
 			}
-			if err := writeLyricsFileAtomic(path, []byte(full)); err != nil {
-				slog.Error("lyrics export: write failed", "file", filepath.Base(path), "err", err)
+			if st, err := os.Lstat(path); err == nil {
+				recordLyricsFile(dir, name, st, sum)
+				if present != nil {
+					present[name] = st
+				}
 			}
 		}
+	}
+	if present != nil && useState {
+		saveLyricsFileState(dir, present)
 	}
 }
 

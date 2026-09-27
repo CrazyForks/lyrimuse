@@ -3,6 +3,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,11 +37,16 @@ type parsedLyricsFile struct {
 // 标签"的判断。老版本(改动前导出、完全没有头)文件第 1 行就匹配不上 [ar:],直接判
 // ok=false,调用方(importLyricsFromFiles)据此跳过整组、沿用 JSON 里的旧值。
 func parseLyricsFile(path string) parsedLyricsFile {
-	var p parsedLyricsFile
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return p
+		return parsedLyricsFile{}
 	}
+	return parseLyricsBytes(data)
+}
+
+// parseLyricsBytes 是 parseLyricsFile 的解析部分(文件内容已经读进来了),规则见 parseLyricsFile。
+func parseLyricsBytes(data []byte) parsedLyricsFile {
+	var p parsedLyricsFile
 	lines := strings.Split(string(data), "\n")
 	get := func(i int) (string, bool) {
 		if i < 0 || i >= len(lines) {
@@ -101,15 +107,6 @@ func parseLyricsFile(path string) parsedLyricsFile {
 	// 就没有专辑名),不在这个校验范围内。
 	p.ok = p.artist != "" && p.title != ""
 	return p
-}
-
-// readVariantBody 读一个歌词变体文件、拆出去掉头部之后的正文——path 为空(这组里根本
-// 没有这个变体对应的文件)时返回空字符串。
-func readVariantBody(path string) string {
-	if path == "" {
-		return ""
-	}
-	return parseLyricsFile(path).body
 }
 
 // importLyricsFromFiles 在启动时把 lyrics/ 文件夹里的内容,采纳进 enrichCache 对应
@@ -188,8 +185,14 @@ func importLyricsFrom(dir string, persist bool) int {
 		return 0 // 目录还不存在(全新安装,还没导出过任何东西)是正常情况
 	}
 	adopted := 0
+	// 上次之后没人动过的文件不读(见 lyricsfilestate.go);整组都没动过就整组跳过。
+	useState := lyricsFileStateEnabled(dir)
 
-	type group struct{ files map[string]string } // suffix -> 完整路径
+	type group struct {
+		files     map[string]string // suffix -> 完整路径
+		infos     map[string]fs.FileInfo
+		unchanged int
+	}
 	groups := make(map[string]*group)
 	for _, ent := range entries {
 		if ent.IsDir() {
@@ -212,23 +215,43 @@ func importLyricsFrom(dir string, persist bool) int {
 		base := strings.TrimSuffix(name, suffix)
 		g, ok := groups[base]
 		if !ok {
-			g = &group{files: map[string]string{}}
+			g = &group{files: map[string]string{}, infos: map[string]fs.FileInfo{}}
 			groups[base] = g
 		}
 		g.files[suffix] = filepath.Join(dir, name)
+		if useState {
+			if info, err := ent.Info(); err == nil {
+				g.infos[suffix] = info
+				if _, same := lyricsFileUnchanged(dir, name, info); same {
+					g.unchanged++
+				}
+			}
+		}
 	}
 
 	enrichMu.Lock()
 	for _, g := range groups {
+		if useState && g.unchanged == len(g.files) {
+			continue
+		}
+		// 组里每个文件只读一次:认身份的头部与各变体的正文都从这一份里取,读的时候顺手记下它的状态。
+		bodies := make(map[string]parsedLyricsFile, len(g.files))
+		for suffix, path := range g.files {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			bodies[suffix] = parseLyricsBytes(data)
+			if info, ok := g.infos[suffix]; ok {
+				recordLyricsFile(dir, filepath.Base(path), info, lyricsCRC(data))
+			}
+		}
+		readBody := func(suffix string) string { return bodies[suffix].body }
 		// 4 个后缀里随便挑一个能解析出头部的文件即可——同一组里的头部理应完全一致
 		// (都是同一次 exportLyricsFiles 写出来的)。
 		var parsed parsedLyricsFile
 		for _, suffix := range lyricsFileSuffixes {
-			path, ok := g.files[suffix]
-			if !ok {
-				continue
-			}
-			if p := parseLyricsFile(path); p.ok {
+			if p, ok := bodies[suffix]; ok && p.ok {
 				parsed = p
 				break
 			}
@@ -243,26 +266,26 @@ func importLyricsFrom(dir string, persist bool) int {
 
 		e := enrichCache[key] // 不存在时是 enrichEntry{} 零值,TS 自然留 0
 		changed := false
-		if path, ok := g.files[".lrc"]; ok {
-			if v := readVariantBody(path); e.Lyrics != v {
+		if _, ok := g.files[".lrc"]; ok {
+			if v := readBody(".lrc"); e.Lyrics != v {
 				e.Lyrics, changed = v, true
 			}
 		}
-		if path, ok := g.files[".tr.lrc"]; ok {
-			if v := readVariantBody(path); e.LyricsTr != v {
+		if _, ok := g.files[".tr.lrc"]; ok {
+			if v := readBody(".tr.lrc"); e.LyricsTr != v {
 				e.LyricsTr, changed = v, true
 				// 译文被文件里的内容顶替了,原来记的语言不再描述它 —— 清掉,让
 				// translationUsable 退回文本判别,别拿旧语言给新内容背书。
 				e.LyricsTrLang = ""
 			}
 		}
-		if path, ok := g.files[".roma.lrc"]; ok {
-			if v := readVariantBody(path); e.LyricsRoma != v {
+		if _, ok := g.files[".roma.lrc"]; ok {
+			if v := readBody(".roma.lrc"); e.LyricsRoma != v {
 				e.LyricsRoma, changed = v, true
 			}
 		}
-		if path, ok := g.files[".yrc"]; ok {
-			if v := readVariantBody(path); e.LyricsYRC != v {
+		if _, ok := g.files[".yrc"]; ok {
+			if v := readBody(".yrc"); e.LyricsYRC != v {
 				e.LyricsYRC, changed = v, true
 			}
 		}
