@@ -180,6 +180,8 @@ public final class LyricsSyncEngine {
     private var trLines: [LyricLine] = []
     /// 背景人声轨(collector `lyrics_bg`),每行的 timeMs 是它所属主句的行头,见 backgroundWords(forLineAt:)。
     private var bgLines: [LyricLineWords] = []
+    /// 行级歌词里只有时间戳、没有文字的那些行的时间(升序,见 LRCParser.parseEndMarks)。逐字模式不用。
+    private var baseEndMarks: [Int] = []
     private var usingWords = false
 
     /// 内容匹配用的"歌词原文 → 译文/罗马音"字典。见 load() 里构建它
@@ -1566,8 +1568,7 @@ public final class LyricsSyncEngine {
         if usingWords {
             let plan = LyricDuet.planWords(candidateWords)
             let kept = zip(zip(plan.lines, plan.sides), plan.dropped).filter { !$0.1 }
-            wordLines = kept.map { $0.0.0 }
-            wordSides = kept.map { $0.0.1 }
+            (wordLines, wordSides) = Self.mergingSameStart(kept.map { $0.0.0 }, sides: kept.map { $0.0.1 })
             baseLines = []
             baseSides = []
         } else {
@@ -1576,9 +1577,10 @@ public final class LyricsSyncEngine {
             wordSides = []
             let kept = zip(zip(zip(filteredBase, plan.texts), plan.sides), plan.dropped)
                 .filter { !$0.1 }
-            baseLines = kept.map { LyricLine(timeMs: $0.0.0.0.timeMs, text: $0.0.0.1) }
-            baseSides = kept.map { $0.0.1 }
+            (baseLines, baseSides) = Self.mergingSameStart(
+                kept.map { LyricLine(timeMs: $0.0.0.0.timeMs, text: $0.0.0.1) }, sides: kept.map { $0.0.1 })
         }
+        baseEndMarks = usingWords ? [] : LRCParser.parseEndMarks(lyrics)
         // 译文和罗马音也要剥掉演唱者标签(理由见 LyricDuet.strippingKnownLabel):这两条
         // 是独立于正文的路径,`plan`/`planWords` 剥标签那一步它们走不到,不在这儿剥就没人剥。
         //
@@ -1778,6 +1780,55 @@ public final class LyricsSyncEngine {
     /// 最近邻——两条路都保留,内容匹配只是优先级更高的一条更准的路径。
     /// 把相邻两句整行的拼接键登记进内容匹配字典,值是两句各自的译文 / 罗马音用空格连起来
     /// (只有一句有就只用那一句)。已有同名键的不覆盖。
+    /// 起点完全相同的相邻几行并成一行(边取第一行的)。同一个起点上的两行,按「最后一个起点 ≤ 当前位置」
+    /// 找当前行时前一行永远轮不到;逐字模式下它的末字还会被 `KaraokeFill.tailClamped` 按「下一行紧接着
+    /// 就开始」压到最短。过滤署名 / 剥掉独占一行的演唱者标签之后还撞在一起的,多是同一句被拆成两截、
+    /// 或者一截零时长的碎片,并起来显示最接近原意。
+    static func mergingSameStart(_ lines: [LyricLine], sides: [LyricDuet.Side?]) -> ([LyricLine], [LyricDuet.Side?]) {
+        guard lines.count > 1 else { return (lines, sides) }
+        var outLines: [LyricLine] = []
+        var outSides: [LyricDuet.Side?] = []
+        for (i, line) in lines.enumerated() {
+            if let last = outLines.last, last.timeMs == line.timeMs {
+                let sep = needsJoinSpace(last.text, line.text) ? " " : ""
+                outLines[outLines.count - 1] = LyricLine(timeMs: last.timeMs, text: last.text + sep + line.text)
+                continue
+            }
+            outLines.append(line)
+            outSides.append(i < sides.count ? sides[i] : nil)
+        }
+        return (outLines, outSides)
+    }
+
+    /// 逐字版:词按原顺序接上,接缝处该有空格就补在前一截最后一个词上(词的时间不动)。
+    static func mergingSameStart(_ lines: [LyricLineWords], sides: [LyricDuet.Side?]) -> ([LyricLineWords], [LyricDuet.Side?]) {
+        guard lines.count > 1 else { return (lines, sides) }
+        var outLines: [LyricLineWords] = []
+        var outSides: [LyricDuet.Side?] = []
+        for (i, line) in lines.enumerated() {
+            if let last = outLines.last, last.timeMs == line.timeMs {
+                var words = last.words
+                if let tail = words.last,
+                   needsJoinSpace(tail.text, line.words.first?.text ?? "") {
+                    words[words.count - 1] = LyricWord(startMs: tail.startMs, durationMs: tail.durationMs,
+                                                       text: tail.text + " ")
+                }
+                outLines[outLines.count - 1] = LyricLineWords(timeMs: last.timeMs, words: words + line.words)
+                continue
+            }
+            outLines.append(line)
+            outSides.append(i < sides.count ? sides[i] : nil)
+        }
+        return (outLines, outSides)
+    }
+
+    /// 两截拼起来时中间要不要补空格:任一侧本来就有空白、或接缝两边有汉字 / 假名时不补。
+    public static func needsJoinSpace(_ a: String, _ b: String) -> Bool {
+        guard let x = a.unicodeScalars.last, let y = b.unicodeScalars.first else { return false }
+        if x.properties.isWhitespace || y.properties.isWhitespace { return false }
+        return !(CharacterSet.hanLike.contains(x) || CharacterSet.hanLike.contains(y))
+    }
+
     static func addAdjacentPairKeys(into dict: inout [String: String], lines: [LyricLine], byTime: [Int: String]) {
         guard lines.count >= 2 else { return }
         for i in 0..<(lines.count - 1) {
@@ -2509,8 +2560,18 @@ public final class LyricsSyncEngine {
     /// 这一行唱完的时间:逐字取最后一个词的结束;行级不可知,给 nil。
     /// 背景人声唱到主句结束之后时,这一行要唱到背景人声唱完:换行(短间隙的滚动锚)和间奏点都从这里算,
     /// 早了背景人声就落在已经滚走的非当前行上。
+    ///
+    /// 行级歌词一般不可知;这一句和下一句之间要是有一行空的时间戳(打轴的人标的「到这儿唱完」),
+    /// 就拿它当结束 —— 间奏点、单行展示面的「♪」、换行滚动因此跟逐字歌词一样按真实结束来判,
+    /// 不再让上一句一直亮到下一句开唱。
     private func gapLineEndMs(at index: Int) -> Int? {
-        guard usingWords, wordLines.indices.contains(index),
+        if !usingWords {
+            guard baseLines.indices.contains(index) else { return nil }
+            let start = baseLines[index].timeMs
+            let next = index + 1 < baseLines.count ? baseLines[index + 1].timeMs : Int.max
+            return baseEndMarks.first { $0 > start && $0 < next }
+        }
+        guard wordLines.indices.contains(index),
               let last = wordLines[index].words.last else { return nil }
         let end = last.startMs + last.durationMs
         guard let bgLast = backgroundLine(forLineAt: wordLines[index].timeMs)?.words.last else { return end }

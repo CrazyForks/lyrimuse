@@ -29,6 +29,44 @@ func runSyncEngineTests() {
         expectEqual(engine2.gapMarkers().map(\.index), [1], "间奏点(LRC): 只有 ≥15s 的起点差才标")
     }
 
+    // ---- 行级 LRC 的空时间戳行 = 上一句唱完 ----
+    do {
+        let lrc = "[00:01.00]aa\n[00:04.00]\n[00:13.00]bb\n[00:15.00]cc\n"
+        expectEqual(LRCParser.parseEndMarks(lrc), [4000], "空戳行: 解析出时间")
+        expectEqual(LRCParser.parse(lrc).map(\.text), ["aa", "bb", "cc"], "空戳行: 不算一句歌词")
+        let engine = LyricsSyncEngine()
+        engine.load(lyrics: lrc, lyricsTr: "", lyricsRoma: "", lyricsYRC: "")
+        // 起点差只有 12s(不到行级的 15s 门槛),但知道第一句 4s 就唱完了:静默 9s ≥ 6s,按逐字的规则标。
+        expectEqual(engine.gapMarkers().map(\.index), [0], "空戳行: 按真实结束判间奏")
+        expectEqual(engine.activeGapIndex(atMs: 8000), 0, "空戳行: 间奏里不再算上一句")
+        expectEqual(engine.activeGapIndex(atMs: 2000), nil, "空戳行: 唱着的时候不是间奏")
+        // 没有空戳行的对照组:维持原来的保守判法。
+        let plain = LyricsSyncEngine()
+        plain.load(lyrics: "[00:01.00]aa\n[00:13.00]bb\n[00:15.00]cc\n", lyricsTr: "", lyricsRoma: "", lyricsYRC: "")
+        expectEqual(plain.gapMarkers(), [], "空戳行: 没有它时照旧按 15s 起点差")
+    }
+
+    // ---- 起点相同的几行并成一行 ----
+    do {
+        let engine = LyricsSyncEngine()
+        let lrc = "[00:01.00]aa\n[00:05.00]Romancipation\n[00:05.00]You'll never know\n[00:09.00]cc\n"
+        engine.load(lyrics: lrc, lyricsTr: "", lyricsRoma: "", lyricsYRC: "")
+        expectEqual(engine.allLines(idPrefix: "t").count, 3, "同起点: 行级两行并成一行")
+        expectEqual(engine.activeLine(atMs: 6000)?.plainText, "Romancipation You'll never know",
+                    "同起点: 并起来的那一行两截都在,中间补空格")
+        let words = LyricsSyncEngine()
+        let yrc = "[1000,800](1000,400,0)aa (1400,400,0)bb \n"
+            + "[5000,0](5000,0,0)3D (5000,0,0)(alright)\n"
+            + "[5000,1500](5000,500,0)You (5500,500,0)know\n"
+            + "[9000,800](9000,400,0)cc (9400,400,0)dd \n"
+        words.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc)
+        expectEqual(words.allLines(idPrefix: "t").count, 3, "同起点: 逐字两行并成一行")
+        expectEqual(words.activeLine(atMs: 5600)?.words?.map(\.text).joined(), "3D (alright) You know",
+                    "同起点: 逐字按原顺序接上,接缝补空格")
+        expectEqual(LyricsSyncEngine.needsJoinSpace("你", "好"), false, "同起点: 汉字之间不补空格")
+        expectEqual(LyricsSyncEngine.needsJoinSpace("a ", "b"), false, "同起点: 已有空白不补")
+    }
+
     // ---- 不设门槛的间奏窗口(悬浮歌词兜底,rawActiveGapWindow / TickResolution.rawGapWindow) ----
     do {
         // 前奏 2s(< minIntroMs 5000)、句间静默两处都是 3s(< minGapMs 6000)——门槛版

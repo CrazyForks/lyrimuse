@@ -50,6 +50,18 @@ public enum LRCParser {
     public static let maxOffsetMs = 10_000
 
     public static func parse(_ text: String) -> [LyricLine] {
+        scan(text).filter { !$0.text.isEmpty }
+    }
+
+    /// 只有时间戳、没有文字的行(`[01:23.45]` 独占一行)的时间,升序。打轴的人用它标「上一句到这儿
+    /// 唱完」—— 后面往往是一段间奏。`parse(_:)` 把这种行丢掉(它不是一句歌词),行级歌词要知道一句
+    /// 唱到几点就只能从这里拿(见 LyricsSyncEngine.gapLineEndMs)。
+    public static func parseEndMarks(_ text: String) -> [Int] {
+        scan(text).compactMap { $0.text.isEmpty ? $0.timeMs : nil }
+    }
+
+    /// parse / parseEndMarks 共用的扫描:带时间戳的每一行按每个时间戳各出一条,正文可以是空串。
+    private static func scan(_ text: String) -> [LyricLine] {
         var out: [LyricLine] = []
         // 见 YRCParser.parse 同一处注释:CRLF 换行的社区上传内容(酷狗尤其常见)会让
         // split(separator:"\n") 按 Character 比较时把整份文本当一整行切不开。这里的
@@ -69,7 +81,6 @@ public enum LRCParser {
             let stripped = bracketRegex
                 .stringByReplacingMatches(in: line, range: fullRange, withTemplate: "")
                 .trimmingCharacters(in: .whitespaces)
-            if stripped.isEmpty { continue }
             for m in matches {
                 let minutes = Int(nsLine.substring(with: m.range(at: 1))) ?? 0
                 let seconds = Int(nsLine.substring(with: m.range(at: 2))) ?? 0
