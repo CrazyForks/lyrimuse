@@ -93,18 +93,26 @@ func normTimelineText(s string) string {
 }
 
 // lrcStampMs 把 lrcTimestampCaptureRe 的一次匹配换算成毫秒。
-// 小数位按位数解释:2 位是百分秒(xx→xx*10ms),3 位是毫秒。
 func lrcStampMs(m []string) int {
 	mm, _ := strconv.Atoi(m[1])
 	ss, _ := strconv.Atoi(m[2])
-	frac, _ := strconv.Atoi(m[3])
-	ms := (mm*60 + ss) * 1000
-	switch len(m[3]) {
-	case 3:
-		ms += frac
-	default:
-		ms += frac * 10
+	return (mm*60+ss)*1000 + lrcFracMs(m[3])
+}
+
+// lrcFracMs 把时间戳的小数部分换算成毫秒:补齐 / 截断到 3 位再当毫秒读(`5`→500、`50`→500、`123`→123),
+// 跟 App 侧 LRCParser 同一条规则。原来按「3 位是毫秒、其余一律 ×10」算,1 位小数的 `.5` 就成了 50ms ——
+// 跟 App 差 450ms,号称与 App 同口径的几处(displayedTimeline、时间轴重挂、平移判定)就对不上了。
+func lrcFracMs(frac string) int {
+	if frac == "" {
+		return 0
 	}
+	if len(frac) > 3 {
+		frac = frac[:3]
+	}
+	for len(frac) < 3 {
+		frac += "0"
+	}
+	ms, _ := strconv.Atoi(frac)
 	return ms
 }
 

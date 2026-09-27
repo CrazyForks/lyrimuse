@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 /// 「歌词库备份」这份 sidecar 归档的**纯逻辑**:文件名怎么起、收进来的名字哪些能落盘、
@@ -78,7 +79,13 @@ public enum LyricsBackupArchive {
     /// `decisionDirectory`:判决记录的候选明细旁路目录(`DecisionSidecar`)。给了就把两槽判决按指纹补齐再
     /// 打包 —— 备份要自带完整证据,恢复到别的机器上由那边的 collector 保存时再拆出去;不给(老调用方 /
     /// selftest)就原样打包主缓存里的判决。
-    public static func strippedMeta(fromCacheJSON data: Data, decisionDirectory: URL? = nil) -> Data? {
+    ///
+    /// `bodiesDirectory`:正文小文件目录(`EnrichCacheSlim.bodiesDirectoryName`)。主缓存现在是精简格式,
+    /// `plain_lyrics`(用户点「采纳为静态文本」的那份)和 `lyrics_bg`(背景人声)都只在正文小文件里 ——
+    /// 它们没有对应的导出文件,不从这里补回来就不在任何备份里。精简格式的两个标记(`body_crc` / `body_fields`)
+    /// 一律去掉,它们描述的是这台机器上那份小文件,带到别的机器上没有意义。
+    public static func strippedMeta(fromCacheJSON data: Data, decisionDirectory: URL? = nil,
+                                    bodiesDirectory: URL? = nil) -> Data? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
@@ -86,6 +93,15 @@ public enum LyricsBackupArchive {
         out.reserveCapacity(root.count)
         for (key, value) in root {
             guard var entry = value as? [String: Any] else { continue }
+            if let bodiesDirectory, EnrichCacheSlim.isSlim(entry) {
+                let url = bodiesDirectory.appendingPathComponent(DecisionSidecar.fileName(forKey: key))
+                if let bodyData = try? Data(contentsOf: url),
+                   let body = try? JSONDecoder().decode(EnrichCacheBody.self, from: bodyData),
+                   let full = EnrichCacheSlim.hydrate(entry, body: body) ?? EnrichCacheSlim.adoptNewerBody(entry, body: body) {
+                    entry = full
+                }
+            }
+            entry = EnrichCacheSlim.stripMarkers(entry)
             for field in lyricFieldKeys { entry.removeValue(forKey: field) }
             if let decisionDirectory {
                 entry = DecisionSidecar.hydrateEntry(entry, key: key, directory: decisionDirectory)
@@ -164,8 +180,41 @@ public enum LyricsBackupArchive {
     /// 归档字节 → 载荷。**先试解压、失败当明文**:手改过的包、或将来某个版本改成不压缩,
     /// 都还能读出来 —— 恢复失败的代价(几千首歌的歌词和校正值)远高于多试一次的代价。
     public static func decode(_ data: Data) -> Payload? {
-        let raw = ((try? (data as NSData).decompressed(using: .zlib)) as Data?) ?? data
+        let raw = inflate(data, limit: maxDecodedBytes) ?? data
         return try? JSONDecoder().decode(Payload.self, from: raw)
+    }
+
+    /// 解压后的上限。正常一份歌词库备份解开是几十 MB;归档是外来文件,一份几百 KB 的压缩炸弹解开能到几个 GB,
+    /// 一次导入就把内存撑爆。超过就当解不开(再当明文试一次,自然也解不出载荷)。
+    public static let maxDecodedBytes = 512 << 20
+
+    /// 流式解 zlib(跟 `NSData.compressed(using: .zlib)` 同一种格式,raw DEFLATE),边解边数,超过 `limit` 就停。
+    /// `NSData.decompressed` 没有上限可设。不是这种格式(明文包)返回 nil。
+    public static func inflate(_ data: Data, limit: Int) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let chunk = 1 << 16
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+        defer { buffer.deallocate() }
+        var stream = compression_stream(dst_ptr: buffer, dst_size: 0, src_ptr: UnsafePointer(buffer), src_size: 0, state: nil)
+        guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+            return nil
+        }
+        defer { compression_stream_destroy(&stream) }
+        return data.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Data? in
+            guard let base = src.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            stream.src_ptr = base
+            stream.src_size = data.count
+            var out = Data()
+            while true {
+                stream.dst_ptr = buffer
+                stream.dst_size = chunk
+                let status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                out.append(buffer, count: chunk - stream.dst_size)
+                if out.count > limit { return nil }
+                if status == COMPRESSION_STATUS_END { return out }
+                if status != COMPRESSION_STATUS_OK { return nil }
+            }
+        }
     }
 
     /// 归档里的一个文件名能不能落盘。返回 nil = 拒收。
@@ -186,8 +235,12 @@ public enum LyricsBackupArchive {
     /// 落盘那一侧另有一道"解析后的父目录必须还是歌词目录"的兜底(见 `restoreTarget`)。
     public static func sanitizedFileName(_ raw: String) -> String? {
         guard !raw.isEmpty, raw.utf8.count <= 255 else { return nil }
-        guard !raw.contains("/"), !raw.contains("\\") else { return nil }
-        guard !raw.hasPrefix(".") else { return nil }
+        // 按 Unicode 标量查,不按字符:`contains("/")` 比的是字素簇,`a/\u{338}b`(斜杠后跟一个组合字符)在字符层面
+        // 不含 "/",标量层面照样有一个真斜杠;`.\u{301}x` 同理能绕过「不许以点开头」。控制字符(含 NUL)一并拒收。
+        let scalars = raw.unicodeScalars
+        guard !scalars.contains(where: { $0 == "/" || $0 == "\\" || $0.properties.generalCategory == .control })
+        else { return nil }
+        guard scalars.first != "." else { return nil }
         guard EnrichCacheKeys.lyricsFileSuffixes.contains(where: { raw.hasSuffix($0) }) else { return nil }
         return raw
     }

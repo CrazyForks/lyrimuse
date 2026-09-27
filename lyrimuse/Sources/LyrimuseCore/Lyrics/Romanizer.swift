@@ -694,7 +694,9 @@ extension Romanizer {
     public static func kanaLineRatio(_ text: String) -> Double {
         var total = 0
         var kana = 0
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        // 按 isNewline 切,不能 `split(separator: "\n")`:Swift 把 `\r\n` 当成一个字符,跟 "\n" 不相等,
+        // CRLF 歌词(酷狗源里很多)会被当成整份一行,任意一处有假名就判成整首日文歌。
+        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             total += 1

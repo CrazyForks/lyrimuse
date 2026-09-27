@@ -656,6 +656,20 @@ func runRomanizationTests() {
         expectEqual(Romanizer.kanaLineRatio("你好\nサヨナラ\n世界\n再见"), 0.25, "行占比: 4 行里 1 行有假名")
         // 空行不计入分母(歌词里空行很多)。
         expectEqual(Romanizer.kanaLineRatio("你好\n\n   \nサヨナラ"), 0.5, "行占比: 空行不进分母")
+        // CRLF:Swift 把 \r\n 当成一个字符,按 "\n" 切不开,整份被当成一行 → 有一个假名就是 100%。
+        expectEqual(Romanizer.kanaLineRatio("你好\r\nサヨナラ\r\n世界\r\n再见"), 0.25, "行占比: CRLF 也按行算")
+        // 假名标注在 CRLF 歌词里照样认得出来(原来 [kana:] 那行找不到,整份标注静默丢掉)。
+        let crlfKana = "[kana:1あい]\r\n[00:01.00]愛\r\n[00:02.00]こころ"
+        expectEqual(KanaAnnotation.parse(lrc: crlfKana) != nil,
+                    KanaAnnotation.parse(lrc: crlfKana.replacingOccurrences(of: "\r\n", with: "\n")) != nil,
+                    "假名标注: CRLF 跟 LF 解析结果一致")
+        // 预生成罗马音:演唱者标签要先剥掉,不能读成「nán：…」。
+        let duet = ["[00:01.00]男：周末守着烤箱", "[00:03.00]女：你在想什么", "[00:05.00]男：没什么",
+                    "[00:07.00]女：那就好", "[00:09.00]男：嗯"].joined(separator: "\n")
+        let duetRoma = LyricsRomanization.romanizeLRC(duet) ?? ""
+        expectEqual(duetRoma.contains("nán") || duetRoma.contains("nǚ") || duetRoma.contains("："),
+                    false, "预生成罗马音: 演唱者标签先剥掉再读")
+        expectEqual(duetRoma.contains("zhōu mò"), true, "预生成罗马音: 正文照常出读音")
         expectEqual(Romanizer.kanaLineRatio(""), 0, "行占比: 空文本 0,不除零")
 
         // 真实形状:《这样吧》75 行里 3 行含假名(4.0%)→ 不是日文歌。

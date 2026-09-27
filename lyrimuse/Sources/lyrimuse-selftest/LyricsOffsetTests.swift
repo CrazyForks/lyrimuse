@@ -44,6 +44,58 @@ func runLyricsOffsetTests() {
                     "trackKey: 全角空格折成普通空格")
     }
 
+    // ---- trackKey:开头的 BOM 不算内容 ----
+    // 播放侧(JSONDecoder)读到的正文开头带 U+FEFF,「歌词管理」(JSONSerialization)读到的被吞掉了 ——
+    // 两边必须算出同一个 key,否则在管理页敲的偏移播放时查不到。
+    do {
+        let plain = "[00:01.00]第一句\n[00:05.00]第二句"
+        expectEqual(LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: "\u{FEFF}" + plain, lyricsYRC: ""),
+                    LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: plain, lyricsYRC: ""),
+                    "trackKey: 正文开头的 BOM 不影响指纹")
+        expectEqual(LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: "", lyricsYRC: "\u{FEFF}[1000,500](1000,500,0)字"),
+                    LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: "", lyricsYRC: "[1000,500](1000,500,0)字"),
+                    "trackKey: 逐字串开头的 BOM 同样不算")
+        expectEqual(LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: plain + "\u{FEFF}", lyricsYRC: "")
+                        == LyricsOffsetStore.trackKey(artist: "歌手", title: "歌名", lyrics: plain, lyricsYRC: ""),
+                    false, "trackKey: 只剥开头,正文里别处的字符照样算内容")
+    }
+
+    // ---- 备份归档:文件名第一道闸按 Unicode 标量查 / 解压有上限 ----
+    do {
+        typealias B = LyricsBackupArchive
+        expectEqual(B.sanitizedFileName("a/\u{338}b.lrc") == nil, true, "备份文件名: 斜杠后跟组合字符也拒收")
+        expectEqual(B.sanitizedFileName(".\u{301}x.lrc") == nil, true, "备份文件名: 点开头后跟组合字符也拒收")
+        expectEqual(B.sanitizedFileName("a\u{0}b.lrc") == nil, true, "备份文件名: 控制字符拒收")
+        expectEqual(B.sanitizedFileName("陶喆 - 天天 - I'm O.K..yrc"), "陶喆 - 天天 - I'm O.K..yrc", "备份文件名: 正常名字照收")
+        let payload = B.Payload(at: "2026-09-27T00:00:00Z", device: "Mac", files: ["a.lrc": "[00:01.00]x"], pins: [:])
+        let packed = B.encode(payload)!
+        expectEqual(B.decode(packed)?.files["a.lrc"], "[00:01.00]x", "备份归档: 压缩包往返")
+        expectEqual(B.inflate(packed, limit: 10) == nil, true, "备份归档: 解压超过上限就停")
+        let plainJSON = try! JSONEncoder().encode(payload)
+        expectEqual(B.decode(plainJSON)?.device, "Mac", "备份归档: 明文包照样认")
+
+        // 主缓存是精简格式时,纯文本歌词和背景人声只在正文小文件里:打包 meta 要从那里补回来。
+        let key = "歌手|歌名|专辑"
+        let full: [String: Any] = ["lyrics": "[00:01.00]x", "plain_lyrics": "纯文本", "lyrics_bg": "[1000,500](1000,500,0)啊",
+                                   "cover_url": "https://example.com/a.jpg"]
+        let slim = EnrichCacheSlim.slim(full)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lyrimuse-selftest-bodies-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let body: [String: Any] = ["crc": EnrichCacheSlim.bodyCRC(full), "lyrics": "[00:01.00]x",
+                                   "plain_lyrics": "纯文本", "lyrics_bg": "[1000,500](1000,500,0)啊"]
+        try? JSONSerialization.data(withJSONObject: body)
+            .write(to: dir.appendingPathComponent(DecisionSidecar.fileName(forKey: key)))
+        let cache = try! JSONSerialization.data(withJSONObject: [key: slim])
+        let meta = B.strippedMeta(fromCacheJSON: cache, bodiesDirectory: dir)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [String: Any]] }?[key]
+        expectEqual(meta?["plain_lyrics"] as? String, "纯文本", "备份 meta: 纯文本歌词从正文小文件补回")
+        expectEqual(meta?["lyrics_bg"] as? String, "[1000,500](1000,500,0)啊", "备份 meta: 背景人声从正文小文件补回")
+        expectEqual(meta?["body_crc"] == nil && meta?["body_fields"] == nil && meta?["lyrics"] == nil, true,
+                    "备份 meta: 精简标记和歌词六字段都不带")
+        expectEqual(meta?["cover_url"] as? String, "https://example.com/a.jpg", "备份 meta: 其余字段原样带走")
+    }
+
     // ---- 存量 key 搬迁:老记录留在旧形态下会永久查不到 ----
     do {
         let fp = "abc123def456"

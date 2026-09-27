@@ -3596,11 +3596,7 @@ func lastLRCTimestampMs(lyrics string) int {
 		}
 		mm, _ := strconv.Atoi(m[1])
 		ss, _ := strconv.Atoi(m[2])
-		frac, _ := strconv.Atoi(m[3])
-		ms := (mm*60+ss)*1000 + frac*10
-		if len(m[3]) == 3 {
-			ms = (mm*60+ss)*1000 + frac
-		}
+		ms := (mm*60+ss)*1000 + lrcFracMs(m[3])
 		if ms > best {
 			best = ms
 		}

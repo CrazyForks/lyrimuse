@@ -141,13 +141,15 @@ public final class LyricsPinStore: ObservableObject {
         try? data.write(to: Self.url, options: [.atomic])
     }
 
+    /// 文件在、却解不开(坏了,或者是以后的版本换了格式):挪到旁边(`<名>.corrupt-<unix 秒>`)再从空开始。
+    /// 不挪的话下一次 persist 会拿只含新 pin 的字典整份覆盖它,原来的已校准名单就没了。
     private static func load() -> [String: Int] {
-        guard
-            let data = try? Data(contentsOf: url),
-            let file = try? JSONDecoder().decode(File.self, from: data)
-        else {
-            return [:]
-        }
-        return file.pins
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        if let file = try? JSONDecoder().decode(File.self, from: data) { return file.pins }
+        let aside = url.deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + ".corrupt-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.moveItem(at: url, to: aside)
+        logger.error("pins file could not be decoded, moved aside as \(aside.lastPathComponent, privacy: .public)")
+        return [:]
     }
 }

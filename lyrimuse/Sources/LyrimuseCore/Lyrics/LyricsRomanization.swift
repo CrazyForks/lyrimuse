@@ -27,20 +27,27 @@ public enum LyricsRomanization {
     ///   调用方按"这首歌没有罗马音"处理,别写一个空字符串进缓存(那会让
     ///   `LyricsSyncEngine` 的 `romaLines.isEmpty` 判据失真:非空但全无内容的 `lyrics_roma`
     ///   会**关掉**客户端兜底那条路,比没有更糟)。
+    ///
+    /// 喂给读音函数之前的预处理跟播放那条路逐项一致,顺序也一样,每一步都调同一个函数:
+    ///  1. 日文歌先修回被源写成简体的汉字(`JapaneseKanjiRepair`,播放侧在 `LocalPlaybackSource` 交给引擎之前做);
+    ///  2. 认出演唱者标签、按同一套规则判掉署名行(`LyricDuet.speakers` + `LyricsSyncEngine.strippingCreditLines`);
+    ///  3. 「整首是不是日文歌」按**过滤后的正文**判 —— 按原文判会被元信息行、署名行里的日文人名带偏;
+    ///  4. 每行先剥掉演唱者标签再算读音(否则读出「nán： zhōu mò」,引擎剥罗马音标签只认汉字那一形)。
+    /// 少任何一步,有预生成结果的歌在播放时就跟现算的对不上(引擎优先用预生成的)。
     public static func romanizeLRC(_ lyrics: String) -> String? {
         guard !lyrics.isEmpty else { return nil }
-        // 整首歌的日文判定跟播放引擎同一个函数,阶梯里"纯汉字行看整首"那一支要用它。
-        let songLooksJapanese = Romanizer.looksJapaneseSong(lyrics)
+        let repaired = JapaneseKanjiRepair.repair(lyrics, japaneseSong: Romanizer.looksJapaneseSong(lyrics))
         // 酷狗那类把假名标注写进同一份 LRC 的源,读音优先用标注 —— 播放引擎也是从同一份
         // 歌词里 `KanaAnnotation.parse(lrc:)` 出来的,这里照做才能保证两条路读音一致。
-        let annotation = KanaAnnotation.parse(lrc: lyrics)
+        let annotation = KanaAnnotation.parse(lrc: repaired)
         // CRLF 归一化:社区上传内容(酷狗尤其常见)带 \r\n,不归一化的话按 "\n" 切出来的
         // 每一行尾部都挂着一个 \r,读音里会混进一个看不见的控制字符。见 LRCParser.parse
         // 同一处注释。
-        let normalized = lyrics.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalized = repaired.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
 
-        var out: [String] = []
+        // 先收齐带时间戳的正文行(标签串 + 正文),署名 / 演唱者 / 整首日文判定都要整份一起看。
+        var rows: [(tags: String, body: String)] = []
         for raw in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             let ns = line as NSString
@@ -53,6 +60,18 @@ public enum LyricsRomanization {
             else { continue }
             let body = ns.substring(from: tagMatch.range.length)
                 .trimmingCharacters(in: .whitespaces)
+            guard !body.isEmpty else { continue }
+            rows.append((tags, body))
+        }
+        let bodies = rows.map(\.body)
+        let speakers = LyricDuet.speakers(in: bodies)
+        let dropped = LyricsSyncEngine.strippingCreditLines(bodies, speakerExemptions: speakers)
+        let kept = zip(rows, dropped).filter { !$0.1 }.map(\.0)
+        let songLooksJapanese = Romanizer.looksJapaneseSong(kept.map(\.body).joined(separator: "\n"))
+
+        var out: [String] = []
+        for (tags, rawBody) in kept {
+            let body = LyricDuet.strippingKnownLabel(rawBody, speakers: speakers)
             guard !body.isEmpty else { continue }
             guard let reading = Romanizer.lineReading(
                 body,

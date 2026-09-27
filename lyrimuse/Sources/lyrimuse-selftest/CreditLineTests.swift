@@ -78,6 +78,14 @@ func runCreditLineTests() {
                     "罗马音过滤(反向): 真歌词那行的罗马音照旧")
     }
 
+    // ---- 行首标签:标签跟冒号之间允许空白(跟 collector lyricSplitLabel 同一条规则) ----
+    do {
+        expectEqual(LyricDuet.splitLabel("男 : 第一句")?.label, "男", "对唱标签: 冒号前带空格照样认")
+        expectEqual(LyricDuet.splitLabel("男 : 第一句")?.rest, "第一句", "对唱标签: 冒号后正文不含空白")
+        expectEqual(LyricDuet.splitLabel("Baby I told: you") == nil, true, "对唱标签: 空白后面又来了字就不是标签")
+        expectEqual(LyricDuet.splitLabel("男：第一句")?.label, "男", "对唱标签: 原来的写法不受影响")
+    }
+
     // ---- 长得像角色名的标签不许混进演唱者名单 ----
     //
     // 说话人豁免那道门排在署名过滤**所有规则最前面**,一进去就再也不看别的判据 —— 所以一个

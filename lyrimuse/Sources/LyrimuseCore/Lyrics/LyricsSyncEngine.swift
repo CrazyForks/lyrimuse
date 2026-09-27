@@ -1317,7 +1317,8 @@ public final class LyricsSyncEngine {
 
     /// 过滤掉署名/职员表行。关键词表逐行生效(它枚举的都是明确的角色名,误判空间很小);
     /// 结构化规则只在整份被主导时才生效,见 shouldApplyStructuralCreditFilter。
-    private static func strippingCreditLines(
+    // 模块内可见:预生成罗马音(LyricsRomanization.romanizeLRC)要按同一套规则认署名行。
+    static func strippingCreditLines(
         _ texts: [String], trackTitle: String = "", trackArtist: String = "",
         speakerExemptions: Set<String> = []
     ) -> [Bool] {

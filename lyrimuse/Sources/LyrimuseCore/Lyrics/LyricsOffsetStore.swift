@@ -308,7 +308,20 @@ public final class LyricsOffsetStore: ObservableObject {
         return "\(EnrichCacheKeys.cleanTag(artist))|\(EnrichCacheKeys.normalizedTitle(title))|\(fingerprint)"
     }
 
+    /// 开头的 BOM(U+FEFF)不算内容:两条读缓存的路对它处理不一样 —— 播放侧 EnrichCacheReader 用
+    /// JSONDecoder,原样保留;「歌词管理」用 JSONSerialization,会把字符串值开头的 BOM 吞掉。不剥的话同一首歌
+    /// 两边算出两个指纹,在管理页敲的偏移播放时查不到。酷狗源开头常带它(这台机器 9017 条里 1251 条)。
+    private nonisolated static func strippingLeadingBOM(_ s: String) -> String {
+        guard s.unicodeScalars.first == "\u{FEFF}" else { return s }
+        return String(String.UnicodeScalarView(s.unicodeScalars.drop(while: { $0 == "\u{FEFF}" })))
+    }
+
     private nonisolated static func contentFingerprint(lyrics: String, lyricsYRC: String) -> String {
+        rawContentFingerprint(lyrics: strippingLeadingBOM(lyrics), lyricsYRC: strippingLeadingBOM(lyricsYRC))
+    }
+
+    /// 剥 BOM 之前那套算法。只给 `adoptLegacyKey` 找旧 key 用。
+    private nonisolated static func rawContentFingerprint(lyrics: String, lyricsYRC: String) -> String {
         let combined = lyrics + "\u{1}" + lyricsYRC
         guard combined != "\u{1}" else { return "" }
         let digest = SHA256.hash(data: Data(combined.utf8))
@@ -370,9 +383,48 @@ public final class LyricsOffsetStore: ObservableObject {
     ///
     /// 仍然是"播放到它才同步"而不是启动时全量扫一遍:offset 的 key 含歌词内容指纹,离开
     /// 播放上下文根本算不出对应的 pinKey(得先知道这首歌当下那份歌词内容是什么)。
+    ///
+    /// 解钉之前先试一次**接管**:这首歌钉着、当前内容下查不到校正值,而同一首歌(歌手|歌名相同)恰好只有另一条
+    /// 内容下的校正值 —— 钉住期间 collector 不自动换源,内容还是变了只可能是它自己的无损改写(清洗 YRC 空白、
+    /// 修 QRC 残留、重挂时间轴),时间轴跟着没变,那条校正值照样对得上。挪过来,pin 也就保住了;不挪的话这里读到
+    /// 0 会顺手解钉,pin 本来要保护的东西反倒被拆掉。用户亲手归零时那条记录已经删掉,没有可挪的,照常解钉;
+    /// 同一首歌有两条以上候选时猜不出是哪一份,不动。
     public func syncPinToOffset(forKey key: String, pinKey: String) {
-        guard !pinKey.isEmpty else { return }
+        // 指纹段为空 = 这一刻还拿不到正文:查出来的 0 不代表「校正值没了」,钉住状态先不动,等内容到了再对。
+        guard !pinKey.isEmpty, key.last != "|" else { return }
+        if offset(forKey: key) == 0, LyricsPinStore.shared.isPinned(pinKey) {
+            carryOverOffset(to: key)
+        }
         LyricsPinStore.shared.setPinned(offset(forKey: key) != 0, forKey: pinKey)
+    }
+
+    private func carryOverOffset(to key: String) {
+        // 指纹段为空 = 这一刻还拿不到正文(换歌那一下缓存正好在重建):不是内容变了,别把真正那条挪到空指纹上。
+        guard isValid(key), key.last != "|", let lastSep = key.lastIndex(of: "|") else { return }
+        let prefix = key[...lastSep]
+        // 同一首歌 = 前两段(歌手|歌名)相同、只有第三段指纹不同。
+        let candidates = offsets.keys.filter {
+            $0 != key && $0.hasPrefix(prefix) && !$0.dropFirst(prefix.count).contains("|")
+        }
+        guard candidates.count == 1, let old = candidates.first, let value = offsets[old] else { return }
+        offsets[key] = value
+        offsets.removeValue(forKey: old)
+        trackOffsetCount = offsets.count
+        persist()
+        logger.notice("offset carried over to rewritten lyrics: \(value, privacy: .public)ms")
+    }
+
+    /// 旧版指纹(没剥开头的 BOM)下存的校正值,挪到新 key 上。只有播放侧那条路存下过这种 key(它读到的正文带
+    /// BOM),所以由播放侧在算出当前 key 时顺手调一次;新 key 已经有值就不覆盖,只把旧的删掉。
+    public func adoptLegacyKey(artist: String, title: String, lyrics: String, lyricsYRC: String) {
+        let old = "\(EnrichCacheKeys.cleanTag(artist))|\(EnrichCacheKeys.normalizedTitle(title))|\(Self.rawContentFingerprint(lyrics: lyrics, lyricsYRC: lyricsYRC))"
+        let new = Self.trackKey(artist: artist, title: title, lyrics: lyrics, lyricsYRC: lyricsYRC)
+        guard old != new, let value = offsets[old] else { return }
+        if offsets[new] == nil { offsets[new] = value }
+        offsets.removeValue(forKey: old)
+        trackOffsetCount = offsets.count
+        persist()
+        logger.notice("offset key migrated off the BOM fingerprint: \(value, privacy: .public)ms")
     }
 
     /// 清掉**全部**单曲校正值(「歌词管理」工具栏那个入口)。

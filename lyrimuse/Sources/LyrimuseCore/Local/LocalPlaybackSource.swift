@@ -3505,6 +3505,10 @@ public final class LocalPlaybackSource: ObservableObject {
             songIsCantonese: found?.isCantonese ?? false,
             songIsHokkien: found?.isHokkien ?? false
         )
+        // 以前按带 BOM 的正文算过指纹、存下的校正值,先挪到新 key 上(见 LyricsOffsetStore.adoptLegacyKey)。
+        LyricsOffsetStore.shared.adoptLegacyKey(
+            artist: snapshot.artist ?? "", title: snapshot.title ?? "",
+            lyrics: found?.lyrics ?? "", lyricsYRC: found?.lyricsYRC ?? "")
         currentOffsetKey = LyricsOffsetStore.trackKey(
             artist: snapshot.artist ?? "",
             title: snapshot.title ?? "",

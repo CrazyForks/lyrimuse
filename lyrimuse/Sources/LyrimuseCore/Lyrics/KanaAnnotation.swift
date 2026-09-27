@@ -125,8 +125,9 @@ public struct KanaAnnotation {
         return w
     }
 
+    // 两处都按 isNewline 切:`\r\n` 在 Swift 里是一个字符,按 "\n" 切不开 CRLF 歌词,[kana:] 那行就找不到。
     private static func kanaTag(in lrc: String) -> String? {
-        for line in lrc.split(separator: "\n", omittingEmptySubsequences: false) {
+        for line in lrc.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let s = line.trimmingCharacters(in: .whitespaces)
             guard s.hasPrefix("[kana:"), s.hasSuffix("]") else { continue }
             return String(s.dropFirst("[kana:".count).dropLast())
@@ -170,7 +171,7 @@ public struct KanaAnnotation {
     /// 正文行:带时间戳、且去掉时间戳后非空的行。跟标注对齐用的就是这一组、这个顺序。
     static func bodyLines(of lrc: String) -> [String] {
         var out: [String] = []
-        for raw in lrc.split(separator: "\n", omittingEmptySubsequences: false) {
+        for raw in lrc.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = String(raw)
             guard let m = lrcTimeTag.firstMatch(
                 in: line, range: NSRange(line.startIndex..., in: line)) else { continue }

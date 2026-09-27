@@ -105,7 +105,7 @@ public enum LyricDuet {
 
     // MARK: - 行首标签拆分
 
-    /// 冒号左边**不允许**出现的字符:空白和标点。
+    /// 标签里**不允许**出现的字符:空白和标点(标签跟冒号之间的空白例外,见 splitLabel)。
     ///
     /// 这道限制是"标签"和"带冒号的歌词句子"之间唯一的形状差别。代价是像
     /// `Chris Tucker: Oh man!` 这种带空格的全名认不出来 —— 实测《You Rock My World》里
@@ -134,17 +134,28 @@ public enum LyricDuet {
         // 跳过行首空白(有些源会在时间戳后面留一个空格)。
         while idx < text.endIndex, text[idx].isWhitespace { idx = text.index(after: idx) }
         let labelStart = idx
+        var labelEnd = idx
         var count = 0
+        // 标签跟冒号之间允许有空白(`男 : 第一句` 跟 `男：第一句` 是同一种东西),标签**内部**不允许 ——
+        // 空白后面又来了别的字,这行就是带冒号的歌词句子。跟 collector lyricSplitLabel 同一条规则:不认的话
+        // collector 那边算演唱者、拿署名过滤豁免,这边既不剥前缀也不分左右,两侧对同一行给出两种结论。
+        var sawSpace = false
         while idx < text.endIndex {
             let ch = text[idx]
             if ch == "：" || ch == ":" { break }
-            if labelBreakers.contains(ch) { return nil }
+            if ch == " " || ch == "\t" || ch == "\u{3000}" {
+                sawSpace = true
+                idx = text.index(after: idx)
+                continue
+            }
+            if sawSpace || labelBreakers.contains(ch) { return nil }
             count += 1
             if count > maxLabelCount { return nil }
             idx = text.index(after: idx)
+            labelEnd = idx
         }
         guard idx < text.endIndex, count > 0 else { return nil }
-        let label = String(text[labelStart..<idx])
+        let label = String(text[labelStart..<labelEnd])
         var after = text.index(after: idx) // 跳过冒号
         while after < text.endIndex, text[after].isWhitespace { after = text.index(after: after) }
         let prefixCount = text.distance(from: text.startIndex, to: after)
@@ -192,6 +203,7 @@ public enum LyricDuet {
         "翻唱", "原曲", "歌名", "歌曲", "专辑", "專輯", "标题", "標題", "歌词", "歌詞",
         "OP", "SP", "Vocal", "Lyrics", "Music", "Composer", "Arranger", "Producer",
     ]
+    private static let exactCreditLabelsLowered = Set(exactCreditLabels.map { $0.lowercased() })
 
     /// 未知标签得先长得像个名字,才有资格进入下面的计数。
     ///
@@ -202,8 +214,8 @@ public enum LyricDuet {
     /// 审查发现的活回归,靠这里的角色词否决堵住。
     private static func plausibleSpeakerName(_ label: String) -> Bool {
         if label.isEmpty || label.count > maxLabelCount { return false }
-        if exactCreditLabels.contains(label) { return false }
-        if exactCreditLabels.contains(label.capitalized) { return false }
+        // 不分大小写(「op」「Op」「OP」都是署名),跟 collector 那边统一转小写再比同一口径。
+        if exactCreditLabelsLowered.contains(label.lowercased()) { return false }
         // 复用署名过滤那张角色词表(和声/监制/母带/翻译…),不再自己重复枚举。
         // 它天然放过真人名:「曲婉婷：」里「曲」虽是角色词,但正则要求它后面紧跟冒号或
         // 另一个角色词,「婉」两者都不是,整条匹配失败 —— 这正是我们想要的行为。

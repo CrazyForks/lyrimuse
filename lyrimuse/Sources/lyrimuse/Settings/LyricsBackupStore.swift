@@ -84,7 +84,8 @@ enum LyricsBackupStore {
             if let cacheData = try? Data(contentsOf: cacheURL) {
                 meta = LyricsBackupArchive.strippedMeta(
                     fromCacheJSON: cacheData,
-                    decisionDirectory: LyrimusePaths.configFile(DecisionSidecar.directoryName))
+                    decisionDirectory: LyrimusePaths.configFile(DecisionSidecar.directoryName),
+                    bodiesDirectory: LyrimusePaths.configFile(EnrichCacheSlim.bodiesDirectoryName))
                 if meta == nil {
                     logger.error("buildArchive: enrich cache present (\(cacheData.count) bytes) but strippedMeta returned nil")
                 }
