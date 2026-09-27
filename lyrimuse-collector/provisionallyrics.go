@@ -75,7 +75,8 @@ func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSe
 	e.LyricsScoringVersion = lyricsScoringVersion
 	e.ResolvedDurationSecs = durationSecs
 	e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
-	e.SongLanguage = songLanguageFromScored(scored)
+	e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
+	e.dropHokkienRoma()
 	e.maybeGenerateRoma()
 	// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
 	// 来源(否则上一轮机翻留下的 "machine" 会让新来的社区译文被标成机翻)。

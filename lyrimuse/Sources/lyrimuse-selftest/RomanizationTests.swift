@@ -860,6 +860,31 @@ func runRomanizationTests() {
         expectEqual(yueRomanization(scripts: [.chinese], isCantonese: false), "nei5 hou2",
                     "开关: 普通话歌走拼音开关")
 
+        // ---- 台语歌:汉字行不标罗马音(拼音按普通话读,对台语是错的读音),日文行照常 ----
+        do {
+            var lines: [String] = []
+            for i in 0..<24 {
+                lines.append(String(format: "[%02d:%02d.00]你袂记得阮", i / 60, i % 60))
+            }
+            lines.append("[00:30.00]サヨナラ")
+            let hokLyrics = lines.joined(separator: "\n")
+            func hokRomanization(_ ms: Int, roma: String, isHokkien: Bool) -> String? {
+                let engine = LyricsSyncEngine()
+                engine.load(lyrics: hokLyrics, lyricsTr: "", lyricsRoma: roma, lyricsYRC: "",
+                            romanizationScripts: [.chinese, .japanese], songIsHokkien: isHokkien)
+                return engine.activeLine(atMs: ms)?.romanization
+            }
+            expectEqual(hokRomanization(1_000, roma: "", isHokkien: true), nil,
+                        "台语歌: 开着拼音,汉字行也不现算")
+            expectEqual(hokRomanization(1_000, roma: "[00:01.00]ni mei ji de ruan", isHokkien: true), nil,
+                        "台语歌: 源自带的拼音也不显示")
+            expectEqual(hokRomanization(1_000, roma: "", isHokkien: false) != nil, true,
+                        "对照: 不是台语歌时汉字行照常出拼音")
+            let jaRoma = hokRomanization(30_000, roma: "", isHokkien: true)
+            expectEqual(jaRoma?.contains("sayonara") ?? false, true,
+                        "台语歌: 歌里的日文行照常出罗马字(实际 \(jaRoma ?? "nil"))")
+        }
+
         // ---- 逐字歌词的粤拼对齐:字要跟对应的音节配成一组,不是整行摆在下面 ----
         do {
             let yueYRC = "[0,1000](0,500,0)你 (500,500,0)好 \n"

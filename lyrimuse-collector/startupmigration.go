@@ -66,6 +66,10 @@ const (
 	// 最近两次只隔 22 分钟、分别修 14 条和 13 条)。加闸前先确认源头还在做这件事。
 	migrationYRCWhitespace        = "yrc_whitespace"
 	migrationYRCWhitespaceVersion = 1
+	// migrationHokkienSongLanguage:存量台语歌补记 SongLanguage、清掉普通话拼音(hokkien.go)。
+	// 改了 lyricsLookHokkien 的判据就 +1。
+	migrationHokkienSongLanguage        = "hokkien_song_language"
+	migrationHokkienSongLanguageVersion = 2
 )
 
 // loadMigrationState 读水位文件。文件不存在 / 解不出来都当作"一道都没跑过",照常全量跑 ——

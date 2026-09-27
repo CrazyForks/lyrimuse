@@ -1443,6 +1443,7 @@ public final class LyricsSyncEngine {
         let trackTitle, trackArtist: String
         let romanizationScripts: RomanizationScripts
         let songIsCantonese: Bool
+        let songIsHokkien: Bool
     }
     private var loadedFingerprint: LoadFingerprint?
 
@@ -1459,15 +1460,18 @@ public final class LyricsSyncEngine {
     public func load(
         lyrics: String, lyricsTr: String, lyricsRoma: String, lyricsYRC: String,
         trackTitle: String = "", trackArtist: String = "",
-        romanizationScripts: RomanizationScripts = .default, songIsCantonese: Bool = false
+        romanizationScripts: RomanizationScripts = .default, songIsCantonese: Bool = false,
+        songIsHokkien: Bool = false
     ) -> Bool {
         let fingerprint = LoadFingerprint(
             lyrics: lyrics, lyricsTr: lyricsTr, lyricsRoma: lyricsRoma, lyricsYRC: lyricsYRC,
             trackTitle: trackTitle, trackArtist: trackArtist,
-            romanizationScripts: romanizationScripts, songIsCantonese: songIsCantonese)
+            romanizationScripts: romanizationScripts, songIsCantonese: songIsCantonese,
+            songIsHokkien: songIsHokkien)
         if fingerprint == loadedFingerprint { return false }
         loadedFingerprint = fingerprint
         self.romanizationScripts = romanizationScripts
+        self.songIsHokkien = songIsHokkien
         // 逐字时间轴先过一遍合法性归一化(LyricTimelineNormalizer):字起点早于行首 /
         // 落在下一行开始之后的小偏差夹回来,乱序或偏差太大的行退化成均匀扫过。放在署名过滤之前——
         // 归一化要看相邻行的时间戳,得在完整的行列表上做。每次加载只记一行汇总日志。
@@ -1681,6 +1685,10 @@ public final class LyricsSyncEngine {
 
     private var songLooksJapanese = false
     private var songScript: LyricScript = .other
+    /// 台语(闽南语)歌:汉字行不标罗马音。汉字罗马音只有普通话拼音和粤拼两套,按普通话读台语是错的读音
+    /// (「袂」台语读 bē,拼音是 mèi);台罗要带文白异读的台语词典,没有接。collector 那边同样不生成、
+    /// 不留(见 collector/hokkien.go),这里管的是客户端现算那一路。日文 / 韩文行照常。
+    private var songIsHokkien = false
     private var romanizationScripts: RomanizationScripts = .default
 
     /// **这一行**该不该标罗马音 —— 由它的文字种类和用户开关共同决定。
@@ -1692,7 +1700,9 @@ public final class LyricsSyncEngine {
     ///,要么中日混唱歌(陶喆《My Anata》,41% 的行是日文)的日文行
     /// 一起丢掉罗马音。判定本身在 Romanizer.script(ofLine:song:)。
     private func romanizationAllowed(for line: String) -> Bool {
-        guard let option = Romanizer.script(ofLine: line, song: songScript).option else {
+        let script = Romanizer.script(ofLine: line, song: songScript)
+        if songIsHokkien, script == .chinese { return false }
+        guard let option = script.option else {
             return true
         }
         return romanizationScripts.contains(option)
@@ -1712,7 +1722,7 @@ public final class LyricsSyncEngine {
     private func masksHanRuns(in line: String) -> Bool {
         guard !songLooksJapanese, Romanizer.looksJapanese(line), Romanizer.containsHan(line)
         else { return false }
-        return !romanizationScripts.contains(songScript == .cantonese ? .cantonese : .chinese)
+        return songIsHokkien || !romanizationScripts.contains(songScript == .cantonese ? .cantonese : .chinese)
     }
     private var kanaAnnotation: KanaAnnotation?
 

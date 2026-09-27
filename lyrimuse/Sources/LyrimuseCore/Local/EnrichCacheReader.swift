@@ -144,6 +144,8 @@ public func enrichLyricsSearchIncomplete(lyrics: String, sourcesSkipped: [String
 // collector 那边 songLanguageCantonese 的取值("yue"),两边必须完全一致——match.go/enrich.go
 // 那份常量的注释就说了它是 lyricCandidate.language 与 enrichEntry.SongLanguage 共用的取值。
 private let songLanguageCantonese = "yue"
+// collector/hokkien.go 的 songLanguageHokkien("nan",台语 / 闽南语),两边必须完全一致(hokkien_test.go 钉着)。
+private let songLanguageHokkien = "nan"
 
 public struct EnrichCacheLyrics {
     public let lyrics: String
@@ -158,6 +160,9 @@ public struct EnrichCacheLyrics {
     /// 这首歌是不是粤语——给"标注的语言"里粤语那个开关用(见 Romanizer.LyricScript.cantonese)。
     /// 判据是 collector 判定的 SongLanguage 真值,不是看歌词文字(汉字认不出粤语/普通话)。
     public let isCantonese: Bool
+    /// 这首歌是不是台语(闽南语)——台语歌的汉字行不标罗马音(见 LyricsSyncEngine.songIsHokkien)。
+    /// 判据同 isCantonese:collector 判定的 SongLanguage 真值。
+    public let isHokkien: Bool
     /// 没有时间戳的纯文本兜底——只在 lyrics 为空、这首歌又确实采纳过一条"仅纯文本"候选时
     /// 才非空(见 EnrichCacheEntry.plainLyrics 头注)。「歌词窗口」用它决定要不要走静态
     /// 展示;桌面悬浮歌词/灵动岛这些依赖时间戳的展示面不读这个字段,继续如实显示"无歌词"。
@@ -406,6 +411,7 @@ public enum EnrichCacheReader {
             instrumental: entry.instrumental ?? false,
             resolved: (entry.ts ?? 0) > 0,
             isCantonese: entry.songLanguage == songLanguageCantonese,
+            isHokkien: entry.songLanguage == songLanguageHokkien,
             plainLyrics: plain,
             searchIncomplete: enrichLyricsSearchIncomplete(
                 lyrics: lyrics,

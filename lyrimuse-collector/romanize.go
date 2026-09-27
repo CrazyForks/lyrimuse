@@ -115,7 +115,8 @@ func (e *enrichEntry) maybeGenerateHelperRoma() {
 // 没有 lyrics-romanize,直接测那个函数会因为"helper 找不到 → 静默返回"而**恒真通过**,
 // 那是一条证明不了任何东西的测试。判据是纯函数,测它才有意义。
 func (e *enrichEntry) shouldGenerateHelperRoma() bool {
-	if e.Lyrics == "" || e.LyricsRoma != "" {
+	// 台语歌不标普通话拼音,见 hokkien.go。
+	if e.Lyrics == "" || e.LyricsRoma != "" || e.SongLanguage == songLanguageHokkien {
 		return false
 	}
 	switch dominantScript(e.Lyrics) {

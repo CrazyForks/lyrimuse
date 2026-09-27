@@ -3432,6 +3432,7 @@ public final class LocalPlaybackSource: ObservableObject {
         let variant: ChineseVariant
         let romanizationScripts: RomanizationScripts
         let isCantonese: Bool
+        let isHokkien: Bool
         // 加,见 currentTrackPlainLyrics 头注——没有时间戳的纯文本兜底,跟
         // lyrics 一样得参与这道内容等值闸,不然采纳/更换一条纯文本候选之后,闸会因为
         // 其它字段(lyrics 本来就是空的,没变)误判"内容没变"而跳过重算,新内容显示不出来。
@@ -3479,6 +3480,7 @@ public final class LocalPlaybackSource: ObservableObject {
             variant: chineseVariant,
             romanizationScripts: romanizationScripts,
             isCantonese: found?.isCantonese ?? false,
+            isHokkien: found?.isHokkien ?? false,
             plainLyrics: found?.plainLyrics ?? "")
         if reloadSnapshot == lastReloadSnapshot {
             logger.debug("lyrics reload skipped: content unchanged (mtime-only churn)")
@@ -3505,7 +3507,8 @@ public final class LocalPlaybackSource: ObservableObject {
             trackTitle: snapshot.title ?? "",
             trackArtist: snapshot.artist ?? "",
             romanizationScripts: romanizationScripts,
-            songIsCantonese: found?.isCantonese ?? false
+            songIsCantonese: found?.isCantonese ?? false,
+            songIsHokkien: found?.isHokkien ?? false
         )
         currentOffsetKey = LyricsOffsetStore.trackKey(
             artist: snapshot.artist ?? "",

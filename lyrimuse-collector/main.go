@@ -385,6 +385,9 @@ func main() {
 	// 必须排在上面三步**之后**:import / YRC 空白清洗 / 时间轴重挂都会重写 Lyrics 和
 	// LyricsYRC,而这一步要按最终内容算指纹。排在它们之前的话指纹当场过期,老用户打开
 	// 「手动选定歌词后锁定」照样一首都锁不上,且没有任何迹象。
+	// 存量台语歌补记 SongLanguage、清掉普通话拼音(见 hokkien.go)。夹在 import 与 export 之间:清掉的罗马音由
+	// exportLyricsFiles 同步成删掉 .roma.lrc;排在 migrateManualPickMarks 之前,那一步按最终内容算指纹。
+	startupStep("migrateHokkienSongLanguage", migrateHokkienSongLanguage)
 	startupStep("migrateManualPickMarks", migrateManualPickMarks)
 	startupStep("exportLyricsFiles", exportLyricsFiles)
 	// 判决记录的候选明细挪到旁路目录(decisionstore.go)。必须在 migrateSodaCoverURLs 之后:那道迁移扫的是

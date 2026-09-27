@@ -1477,7 +1477,7 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	// 罗马音兜底可能要起子进程,在上锁之前算好(见 maybeGenerateRoma);只在这一轮会换正文时才算。
 	var preparedRoma string
 	if picked != nil && picked.LyricsRoma == "" && picked.Lyrics != startLyrics {
-		preparedRoma = generatedRomaFor(picked.Lyrics, "", songLanguageFromScored(scored))
+		preparedRoma = generatedRomaFor(picked.Lyrics, "", entrySongLanguage(picked.Lyrics, scored))
 	}
 
 	enrichMu.Lock()
@@ -1573,7 +1573,8 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 		e.LyricsScoringVersion = lyricsScoringVersion
 		e.ResolvedDurationSecs = durationSecs
 		e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
-		e.SongLanguage = songLanguageFromScored(scored)
+		e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
+		e.dropHokkienRoma()
 		e.applyPregeneratedRoma(preparedRoma)
 		lyricsChanged = true
 		// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
@@ -1756,7 +1757,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	// 罗马音兜底在上锁之前算好,同 retryLyricsUpgrade。
 	var preparedRoma string
 	if decidable && picked != nil && picked.LyricsRoma == "" && picked.Lyrics != startLyrics {
-		preparedRoma = generatedRomaFor(picked.Lyrics, "", songLanguageFromScored(scored))
+		preparedRoma = generatedRomaFor(picked.Lyrics, "", entrySongLanguage(picked.Lyrics, scored))
 	}
 
 	enrichMu.Lock()
@@ -1847,7 +1848,8 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 			log.Printf("lyrics rescore: %s  %s(v%d) -> %s(%d)", key, e.LyricsSource, e.LyricsScoringVersion, picked.Source, picked.Score)
 			e.Lyrics = picked.Lyrics
 			e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
-			e.SongLanguage = songLanguageFromScored(scored)
+			e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
+			e.dropHokkienRoma()
 			e.applyPregeneratedRoma(preparedRoma)
 			lyricsChanged = true
 			// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
