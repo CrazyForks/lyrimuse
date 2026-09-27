@@ -870,7 +870,7 @@ func runNotchTests() {
         // baseAgeMs: 0 = 锚点刚收到;外推只看 fetchedAt 之后走过的相对时间,测试不受本机时钟影响。
         func anchor(_ progressMs: Int, rate: Double = 1) -> ProgressAnchor {
             ProgressAnchor(durationMs: 600_000, progressMs: progressMs, rate: rate, progressTs: nil,
-                           baseAgeMs: 0, fetchedAt: t0, fresh: true)
+                           baseAgeMs: 0, fetchedAt: t0)
         }
         func secondAt(_ a: ProgressAnchor, _ date: Date) -> Int { a.extrapolatedPositionMs(now: date) / 1000 }
 

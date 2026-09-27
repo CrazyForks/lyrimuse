@@ -231,10 +231,9 @@ enum DiagnosticsExporter {
         lines.append(String(format: "Servo error EMA: %.3fs", clock.posErrEMASecs))
         // 自然切歌锚点超前的按曲校正(见 02 章)。非零时这首歌整体被拉过多少。
         lines.append(String(format: "Reported bias: %.3fs", clock.reportedBiasSecs))
-        if let rate = clock.anchorRate, let fresh = clock.anchorFresh, let age = clock.anchorAgeSecs {
+        if let rate = clock.anchorRate, let age = clock.anchorAgeSecs {
             // 锚点年龄大得离谱 = 位置在长时间纯墙钟外推(浏览器那类只在切歌时报一次的源)。
-            lines.append(String(format: "Anchor: rate=%.2f fresh=%@ age=%.1fs",
-                                rate, fresh ? "yes" : "no", age))
+            lines.append(String(format: "Anchor: rate=%.2f age=%.1fs", rate, age))
         } else {
             lines.append("Anchor: none (paused or no track)")
         }

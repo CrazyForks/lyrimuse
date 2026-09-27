@@ -245,9 +245,9 @@ func runLyricsWindowTests() {
     do {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         func anchor(progress: Int = 10_000, rate: Double = 1, ts: Int? = nil, age: Int? = nil,
-                    fresh: Bool = true, duration: Int = 200_000) -> ProgressAnchor {
+                    duration: Int = 200_000) -> ProgressAnchor {
             ProgressAnchor(durationMs: duration, progressMs: progress, rate: rate, progressTs: ts,
-                           baseAgeMs: age, fetchedAt: t0, fresh: fresh)
+                           baseAgeMs: age, fetchedAt: t0)
         }
         expectEqual(anchor(age: 0).extrapolatedPositionMs(now: t0.addingTimeInterval(2)), 12_000,
                     "进度外推: 锚点年龄 + 本机走过的时间 × 倍速")
@@ -262,12 +262,8 @@ func runLyricsWindowTests() {
                     "进度外推: 没有锚点年龄时退回服务器时间戳")
         expectEqual(anchor().extrapolatedPositionMs(now: t0.addingTimeInterval(3)), 10_000,
                     "进度外推: 年龄和时间戳都没有 → 不外推")
-        expectEqual(anchor(age: 0, fresh: false).extrapolatedPositionMs(now: t0.addingTimeInterval(30)), 40_000,
-                    "进度外推: 非直推锚点 90s 内照常外推")
-        expectEqual(anchor(age: 0, fresh: false).extrapolatedPositionMs(now: t0.addingTimeInterval(91)), 10_000,
-                    "进度外推: 非直推锚点超过 90s 视为陈旧,停在锚点位置不再外推")
-        expectEqual(anchor(age: 0, fresh: true).extrapolatedPositionMs(now: t0.addingTimeInterval(91)), 101_000,
-                    "进度外推: 直推锚点不限龄")
+        expectEqual(anchor(age: 0).extrapolatedPositionMs(now: t0.addingTimeInterval(91)), 101_000,
+                    "进度外推: 不限龄(锚点放了 91s 照常外推,不回跳)")
         expectEqual(anchor(age: 0).extrapolatedPositionMs(now: t0.addingTimeInterval(-2)), 10_000,
                     "进度外推: 本机时钟倒退(年龄为负)不往回走")
         expectEqual(anchor(progress: 199_000, age: 0).extrapolatedPositionMs(now: t0.addingTimeInterval(5)), 200_000,

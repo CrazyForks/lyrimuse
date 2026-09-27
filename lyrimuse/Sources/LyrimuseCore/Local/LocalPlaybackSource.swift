@@ -1190,7 +1190,6 @@ public final class LocalPlaybackSource: ObservableObject {
         public var posErrEMASecs: Double
         public var reportedBiasSecs: Double
         public var anchorRate: Double?
-        public var anchorFresh: Bool?
         public var anchorAgeSecs: Double?
         public var effectiveLyricsOffsetMs: Int
         public var lrcOffsetMs: Int
@@ -1206,7 +1205,6 @@ public final class LocalPlaybackSource: ObservableObject {
             posErrEMASecs: posErrEMA,
             reportedBiasSecs: posReportedBiasSecs,
             anchorRate: anchor?.rate,
-            anchorFresh: anchor?.fresh,
             anchorAgeSecs: anchor.map { Date().timeIntervalSince($0.fetchedAt) },
             effectiveLyricsOffsetMs: currentLyricsOffsetMs,
             lrcOffsetMs: syncEngine.lrcOffsetMs,
@@ -2073,8 +2071,7 @@ public final class LocalPlaybackSource: ObservableObject {
             // 已经把外推结果落成了锚点位置本身,不需要再带任何年龄基准。
             progressTs: nil,
             baseAgeMs: nil,
-            fetchedAt: now,
-            fresh: current.fresh)
+            fetchedAt: now)
     }
 
     /// 轮询间隔按播放状态分档:每一拍都要 fork 一个子进程
@@ -3090,8 +3087,7 @@ public final class LocalPlaybackSource: ObservableObject {
                     rate: rate,
                     progressTs: nil,
                     baseAgeMs: 0, // 本机直接读取,没有网络延迟需要外推的锚点年龄
-                    fetchedAt: now,
-                    fresh: true // 本地读取,始终当作新鲜锚点,不封顶外推
+                    fetchedAt: now
                 )
             }
         } else {
@@ -3267,8 +3263,7 @@ public final class LocalPlaybackSource: ObservableObject {
                 rate: existing.rate,
                 progressTs: nil,
                 baseAgeMs: 0,
-                fetchedAt: now,
-                fresh: true
+                fetchedAt: now
             )
         } else if currentDurationMs != nil {
             // 暂停态:显示源是 pausedPositionMs(见 apply() 里那段注释),没有锚点可改。
