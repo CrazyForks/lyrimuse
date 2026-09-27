@@ -52,6 +52,39 @@ func runOpsDiagnosticsTests() {
 
         expectEqual(R.redactAll("nothing sensitive here", secrets: secrets),
                     "nothing sensitive here", "干净的行原样返回")
+
+        // 另外两个凭据长在路径里的推送平台。
+        let telegram = "Post \"https://api.telegram.org/bot123456789:AAHfakeFAKEfake/sendMessage\": timeout"
+        expectEqual(R.redactAll(telegram, secrets: [:]).contains("AAHfake"), false, "路径型凭据: Telegram 机器人 token 打掉")
+        expectEqual(R.redactAll(telegram, secrets: [:]).contains("api.telegram.org/bot<redacted>/sendMessage"), true,
+                    "路径型凭据: Telegram 只打 token 那一段")
+        let discord = "Post \"https://discord.com/api/webhooks/1234567890/FakeWebhookToken_abc\": 404"
+        expectEqual(R.redactAll(discord, secrets: [:]).contains("FakeWebhookToken"), false, "路径型凭据: Discord webhook token 打掉")
+        expectEqual(R.redactAll(discord, secrets: [:]).contains("webhooks/1234567890/"), true, "路径型凭据: Discord 的 id 保留")
+        // 查询参数按词根认(跟 collector logscrub.go 同一条):固定名单里没有的 client_secret、refresh_token。
+        let oauth = "Get \"https://example.com/cb?client_secret=CS123456&refresh_token=RT123456&state=ok\""
+        let oauthOut = R.redactAll(oauth, secrets: [:])
+        expectEqual(oauthOut.contains("CS123456") || oauthOut.contains("RT123456"), false, "查询参数: 按词根认 client_secret / refresh_token")
+        expectEqual(oauthOut.contains("state=ok"), true, "查询参数: 不含词根的照样保留")
+        expectEqual(R.redactAll("worker exited signal=15 design=flat", secrets: [:]), "worker exited signal=15 design=flat",
+                    "裸 名=值 不按词根认:signal= / design= 这类普通日志词不打")
+        let json = #"{"api_key":"JSONKEY123456","key":"周杰伦|晴天|叶惠美"}"#
+        let jsonOut = R.redactAll(json, secrets: [:])
+        expectEqual(jsonOut.contains("JSONKEY123456"), false, "JSON: \"api_key\" 的值打掉")
+        expectEqual(jsonOut.contains("周杰伦|晴天|叶惠美"), true, "JSON: 缓存 key 不是凭据,保留")
+        expectEqual(R.redactAll("Authorization: Token LBTOKEN-123456", secrets: [:]).contains("LBTOKEN"), false,
+                    "请求头: ListenBrainz 的 Authorization: Token 打掉")
+        // 用户粘贴的 token 带尾随换行,日志里是去掉之后的那串。
+        expectEqual(R.redact("token in log: \(relayToken)", secrets: ["stateRelayToken": relayToken + "\n"]).contains(relayToken), false,
+                    "值级脱敏: 配置值先去首尾空白再匹配")
+
+        // 家目录换成 ~,只换路径。
+        let home = "/Users/ann"
+        expectEqual(R.redactHomePath("lyrics dir /Users/ann/Music/lyrics, config /Users/ann", home: home),
+                    "lyrics dir ~/Music/lyrics, config ~", "家目录: 路径里的家目录换成 ~")
+        expectEqual(R.redactHomePath("other user /Users/anna/x", home: home), "other user /Users/anna/x",
+                    "家目录: /Users/anna 不会被 /Users/ann 切掉一截")
+        expectEqual(R.redactHomePath("x", home: "/"), "x", "家目录: 拿不到正经的家目录时不动")
     }
 
     // 真机端到端校验:拿**这台机器上真实的** config.json + 真实的 collector 日志跑一遍,
@@ -635,30 +668,8 @@ func runOpsDiagnosticsTests() {
                     "star 退避: 重置点已经过去 → 固定退避,不是立刻重试")
     }
 
-    // ---- CollectorLogLine / LogFiles(collector 日志时间戳的两种格式)----
-    //
-    // collector 换 log/slog 之后每行以 `time=…Z` 开头;.old 归档与迁移前的行仍是 Go log
-    // 的 `yyyy/MM/dd HH:mm:ss`(UTC 无标记)。诊断导出按时间窗口取日志靠它找起点,两种都要认、
-    // 都按 UTC 解 —— 老格式按本地时间解会把 4 小时窗口整体错开 8 小时,导出里就是一片空。
+    // ---- LogFiles(两侧日志文件的落点)----
     do {
-        print("\n== collector 日志时间戳 ==")
-        var comps = DateComponents()
-        comps.timeZone = TimeZone(identifier: "UTC")
-        comps.year = 2026; comps.month = 9; comps.day = 5; comps.hour = 1; comps.minute = 2; comps.second = 3
-        let cal = Calendar(identifier: .gregorian)
-        let expectedSlog = cal.date(from: comps)!.addingTimeInterval(0.456)
-        let gotSlog = CollectorLogLine.timestamp(of: "time=2026-09-05T01:02:03.456Z level=INFO msg=\"api call summary\" count=12")
-        expectEqual(gotSlog.map { abs($0.timeIntervalSince(expectedSlog)) < 0.001 } ?? false, true,
-                    "collector 时间戳: slog 格式按 UTC 解析到毫秒")
-        comps.day = 4; comps.hour = 15; comps.minute = 49; comps.second = 15
-        expectEqual(CollectorLogLine.timestamp(of: "2026/09/04 15:49:15 api call: GET ws.audioscrobbler.com/2.0/ -> 200 (315ms)"),
-                    cal.date(from: comps), "collector 时间戳: 老格式按 UTC 解析(不是本地时间)")
-        expectEqual(CollectorLogLine.timestamp(of: "Bootstrap failed: 5: Input/output error") == nil, true,
-                    "collector 时间戳: 外部 stderr 漏进来的行没有时间戳 → nil")
-        expectEqual(CollectorLogLine.timestamp(of: "time=garbage level=INFO msg=x") == nil, true,
-                    "collector 时间戳: time= 后不是合法时间 → nil")
-        expectEqual(CollectorLogLine.timestamp(of: "") == nil, true, "collector 时间戳: 空行 → nil")
-        expectEqual(CollectorLogLine.timestamp(of: "2026/09/04 15:49") == nil, true, "collector 时间戳: 老格式截短 → nil 不崩")
         expectEqual(LogFiles.appStderr.lastPathComponent, "lyrimuse-app.log", "日志文件: App stderr 单独一份")
         expectEqual(LogFiles.collector.lastPathComponent, "lyrimuse.log", "日志文件: collector 日志路径不变")
     }

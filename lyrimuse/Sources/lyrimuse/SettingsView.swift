@@ -6490,7 +6490,7 @@ private struct AboutSettingsTab: View {
             SettingsRow(
                 icon: "doc.text.magnifyingglass",
                 title: L10n.t("导出诊断"),
-                subtitle: L10n.t("反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据"),
+                subtitle: L10n.t("反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据和本机用户名"),
                 help: L10n.t("生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看")
             ) {
                 DiagnosticsExportButton(title: L10n.t("导出…"))

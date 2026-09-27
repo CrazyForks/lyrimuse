@@ -428,6 +428,13 @@ enum ConfigPortability {
                 ok = false
             }
         }
+        // 内存里的两份也换成刚删完的样子(空、且没有待存的改动)。不重载的话,账号页 1.2 秒防抖里还没存的
+        // 改动会让 isDirty 为真,紧接着重启时的退出兜底(applicationShouldTerminate)把内存里整份旧凭据
+        // 写回 config.json,「清除所有设置」等于白点。
+        await MainActor.run {
+            ConfigStore.shared.load()
+            FeatureSettingsStore.shared.load()
+        }
         var clearedCount = 0
         for key in UserDefaults.standard.dictionaryRepresentation().keys {
             guard key.hasPrefix("np:") || key.hasPrefix("KeyboardShortcuts_") else { continue }

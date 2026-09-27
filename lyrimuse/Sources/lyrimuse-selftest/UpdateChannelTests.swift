@@ -22,6 +22,7 @@ func runUpdateChannelTests() {
         expectEqual(V(tag: "v1.6.0-beta.2")?.displayString, "1.6.0-beta.2", "展示版本: tag 去 v 原文")
         expectEqual(V(tag: "v1.6.0-beta.2")?.isPrerelease, true, "预发布判定: 带后缀")
         expectEqual(V(tag: "v1.6.0")?.isPrerelease, false, "预发布判定: 不带后缀")
+        expectEqual(V(tag: "v1.0.99999999999999999999") == nil, true, "解析: 数字段超出 Int 范围 → nil,不崩")
         expectEqual(V(tag: "v0.0.0")?.buildNumberString, "0.0.0.1000", "构建号: 0.0.0 占位版也合法")
         for bad in ["v1.6", "v1.6.0.1", "v1.6.0-beta", "v1.6.0-beta.0", "v1.6.0-foo.1", "v1.6.0-beta.400",
                     "v1.6.0-rc.500", "v1.6.0-alpha.100", "v01.6.0", "v1.6.0-beta.01", "1.6.0-", "", "dev-abc1234",

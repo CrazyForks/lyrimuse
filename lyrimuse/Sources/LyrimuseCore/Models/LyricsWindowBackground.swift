@@ -70,13 +70,13 @@ public enum LyricsWindowBackgroundLuma {
     /// 都是为深底配的,能维持白字就维持。
     public static let lightTextThreshold = 0.3
 
-    /// 窗口系统底色的近似相对亮度,给半透明背景做 alpha 混合用。
+    /// 半透明背景**拿不到真实底色时**的兜底估计。
     ///
-    /// 写成常量而不是去读 `NSColor.windowBackgroundColor`:这个类型在 LyrimuseCore 里
-    /// 拿不到 AppKit 的动态颜色解析(那要 NSAppearance 上下文),而这两个值只影响"半透明
-    /// 自定义色到底算深还是浅"这一个判断,近似足够。数值取自 macOS 浅色 #ECECEC / 深色
-    /// #323232 线性化后的相对亮度。
-    public static let lightModeBackdropLuma = 0.78
+    /// 半透明色让窗口本体变成透明(见 LyricsWindowView.wantsTransparentWindow),颜色后面透出来的是
+    /// 桌面壁纸或别的窗口,不是窗口底色 —— 调用方能拿到壁纸亮度时应当传 `backdropLuma`。拿不到才按
+    /// 系统外观猜:浅色外观多半配浅色壁纸,深色外观多半配深色壁纸。数值取 macOS 浅色 #ECECEC /
+    /// 深色 #323232 线性化后的相对亮度。
+    public static let lightModeBackdropLuma = 0.84
     public static let darkModeBackdropLuma = 0.03
 
     /// sRGB 单通道线性化(WCAG 2.x 的那条分段函数)。
@@ -99,11 +99,13 @@ public enum LyricsWindowBackgroundLuma {
         return (r, g, b, a)
     }
 
-    /// 一个颜色**盖在窗口底色上之后**的相对亮度。
-    public static func effectiveLuma(hex: String, darkAppearance: Bool) -> Double? {
+    /// 一个颜色**盖在它背后那一层上之后**的相对亮度。
+    ///
+    /// - Parameter backdropLuma: 背后那一层(透明窗口下是桌面壁纸)的相对亮度;nil = 拿不到,按系统外观估计。
+    public static func effectiveLuma(hex: String, darkAppearance: Bool, backdropLuma: Double? = nil) -> Double? {
         guard let c = parse(hex: hex) else { return nil }
         let own = 0.2126 * linearize(c.r) + 0.7152 * linearize(c.g) + 0.0722 * linearize(c.b)
-        let backdrop = darkAppearance ? darkModeBackdropLuma : lightModeBackdropLuma
+        let backdrop = backdropLuma ?? (darkAppearance ? darkModeBackdropLuma : lightModeBackdropLuma)
         // 半透明色实际看到的是它和窗口底色的混合 —— 一个 alpha 0.2 的黑,在浅色模式下
         // 仍然是个浅背景,白字照样看不见。
         return own * c.a + backdrop * (1 - c.a)
@@ -114,8 +116,8 @@ public enum LyricsWindowBackgroundLuma {
     /// 渐变取两端**平均**而不是取较亮那端:取亮端会让"深色到中灰"这种很常见的渐变被判成浅底、
     /// 整窗翻成深色字,而它的主体其实是暗的。平均在两端亮度悬殊时对某一端不利,但那种配色本来
     /// 就没有哪种文字色能同时照顾到,不该让判据为一个无解的情况牺牲常见情况。
-    public static func prefersLightText(hexes: [String], darkAppearance: Bool) -> Bool {
-        let lumas = hexes.compactMap { effectiveLuma(hex: $0, darkAppearance: darkAppearance) }
+    public static func prefersLightText(hexes: [String], darkAppearance: Bool, backdropLuma: Double? = nil) -> Bool {
+        let lumas = hexes.compactMap { effectiveLuma(hex: $0, darkAppearance: darkAppearance, backdropLuma: backdropLuma) }
         guard !lumas.isEmpty else { return true } // 颜色认不出来:维持这扇窗原来的白字
         let avg = lumas.reduce(0, +) / Double(lumas.count)
         return avg <= lightTextThreshold

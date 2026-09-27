@@ -432,7 +432,7 @@ enum DiagnosticsExporter {
     /// 为什么导出时还要再脱敏一遍,而不是让用户直接把 ~/Library/Logs/lyrimuse.log 发出来:collector
     /// 写日志时已经过一道凭据脱敏(logscrub.go 的 secretScrubber),这里再用 LogRedactor 按当前配置里的
     /// 凭据原文和正则兜一遍,两道是纵深关系,别因为源头有了就删掉这一道。导出还带上 App 侧日志和运行状态,
-    /// 原始文件里没有这些。两道都只去凭据,曲名和本机路径原样保留。
+    /// 原始文件里没有这些。包里每个文件最后再把本机家目录换成 `~`(用户名是个人信息);曲名原样保留。
     ///
     /// 为什么是 zip 而不是一个大 txt:3MB 文本压完约 270KB,解压出来 report.txt 照样直接读、
     /// 日志照样直接 grep,而 3MB 的 txt 两头都不讨好。
@@ -453,8 +453,10 @@ enum DiagnosticsExporter {
             (LogFiles.collector.lastPathComponent, fullCollectorLogText(secrets: secrets)),
             ("app-log.txt", fullAppLogText(secrets: secrets)),
         ]
+        let home = fm.homeDirectoryForCurrentUser.path
         for (name, text) in files {
-            try? text.write(to: staging.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            try? LogRedactor.redactHomePath(text, home: home)
+                .write(to: staging.appendingPathComponent(name), atomically: true, encoding: .utf8)
         }
         zipDirectory(staging, to: destination)
     }

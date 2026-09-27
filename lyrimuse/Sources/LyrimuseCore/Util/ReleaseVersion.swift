@@ -45,10 +45,12 @@ public struct ReleaseVersion: Equatable, Comparable, CustomStringConvertible {
         if s.hasPrefix("v") { s.removeFirst() }
         let dash = s.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
         let core = dash[0].split(separator: ".", omittingEmptySubsequences: false)
-        guard core.count == 3, core.allSatisfy(Self.isCanonicalNumber) else { return nil }
-        major = Int(core[0])!
-        minor = Int(core[1])!
-        patch = Int(core[2])!
+        // 数字段超出 Int 范围(tag 里写了一长串数字)时 Int() 返回 nil:当作认不出来,别强制解包崩掉。
+        guard core.count == 3, core.allSatisfy(Self.isCanonicalNumber),
+              let major = Int(core[0]), let minor = Int(core[1]), let patch = Int(core[2]) else { return nil }
+        self.major = major
+        self.minor = minor
+        self.patch = patch
         if dash.count == 1 {
             preKind = nil
             preNumber = 0

@@ -330,6 +330,8 @@ private final class LyricsWindowController: ObservableObject {
     /// 窗口此刻在不在屏幕上 —— App 激活刷新的可见性守卫用(Window 场景关闭后视图树
     /// 保活,onReceive 还会进来)。
     var isWindowVisible: Bool { window?.isVisible ?? false }
+    /// 窗口所在的屏幕(半透明背景要读那块屏幕的壁纸亮度,见 DesktopWallpaperLuma)。
+    var screen: NSScreen? { window?.screen }
     private var savedFrame: NSRect?
     private var escapeMonitor: Any?
     private var closeObserver: NSObjectProtocol?
@@ -3980,6 +3982,11 @@ struct LyricsWindowView: View {
     /// 自定义背景色里有没有"没填满"的部分 —— 有就让窗口本体透出去。
     ///
     /// 渐变看**两端里更透的那个**:只要有一端透,那一侧就该见到背后的东西。
+    /// 背景半透明时颜色后面透出来的那一层(桌面壁纸)的亮度;不透明、或者读不到壁纸时 nil(按系统外观估计)。
+    private var transparentBackdropLuma: Double? {
+        wantsTransparentWindow ? DesktopWallpaperLuma.luma(for: windowController.screen) : nil
+    }
+
     private var wantsTransparentWindow: Bool {
         func alpha(_ hex: String) -> Double { LyricsWindowBackgroundLuma.parse(hex: hex)?.a ?? 1 }
         switch activeBackgroundMode {
@@ -4012,11 +4019,12 @@ struct LyricsWindowView: View {
             return playback.artworkData != nil || playback.highResArtworkImage != nil
         case .solid:
             return LyricsWindowBackgroundLuma.prefersLightText(
-                hexes: [activeBackgroundColorHex], darkAppearance: colorScheme == .dark)
+                hexes: [activeBackgroundColorHex], darkAppearance: colorScheme == .dark,
+                backdropLuma: transparentBackdropLuma)
         case .gradient:
             return LyricsWindowBackgroundLuma.prefersLightText(
                 hexes: [activeBackgroundColorHex, activeBackgroundColorEndHex],
-                darkAppearance: colorScheme == .dark)
+                darkAppearance: colorScheme == .dark, backdropLuma: transparentBackdropLuma)
         case .glass:
             // 毛玻璃的亮度取决于此刻窗口背后是什么,算不出来也不该算。交给系统:返回 false 让
             // 文字走 `.primary`/`.secondary`,那两个语义色在 Material 上本来就会做 vibrancy

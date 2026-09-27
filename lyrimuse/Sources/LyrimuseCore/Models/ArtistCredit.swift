@@ -25,7 +25,9 @@ public enum ArtistCredit {
     /// 合 credit 串里的**第一位**;不是多人 credit(切不出第二段)时返回 nil ——
     /// nil 的语义是"没有'主歌手'这回事",调用方据此跳过归并,不要拿原串当主歌手。
     public static func primary(_ artist: String) -> String? {
-        let trimmed = artist.trimmingCharacters(in: .whitespaces)
+        // 中文「和」先换成 `&` 再切(「陶喆和卢广仲」)。换掉的「和」本身就是分隔符,不会出现在切出来的头部里,
+        // 返回的仍是原文。
+        let trimmed = normalizedHanAnd(artist.trimmingCharacters(in: .whitespaces))
         guard !trimmed.isEmpty else { return nil }
         var head = trimmed
         // 先切 feat.:它常带括号(`A (feat. B)`),按分隔符切不开。
@@ -64,6 +66,37 @@ public enum ArtistCredit {
         }
         guard !head.isEmpty, head.count < trimmed.count else { return nil }
         return head
+    }
+
+    /// 当分隔符用的中文「和」换成 `&`,跟 collector `normalizeArtistCreditHanAnd`(match.go)同一条判据:
+    /// 两侧都是 ASCII 字母(`Tom和Jerry`),或者两侧紧邻的连续汉字段都至少两个字(`陶喆和盧廣仲`);
+    /// `李和平` 两侧各一个字,是人名,不动。逐字判断,不用正则整串替换:连续几个「和」时正则会漏掉一半。
+    static func normalizedHanAnd(_ s: String) -> String {
+        guard s.contains("和") else { return s }
+        let chars = Array(s)
+        func isHan(_ c: Character) -> Bool {
+            guard c != "和", c.unicodeScalars.count == 1, let v = c.unicodeScalars.first?.value else { return false }
+            return (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
+                || (0x20000...0x2EBEF).contains(v) || (0xF900...0xFAFF).contains(v) || v == 0x3007
+        }
+        func isASCIILetter(_ c: Character) -> Bool { c.isASCII && c.isLetter }
+        func hanRun(from start: Int, step: Int) -> Int {
+            var n = 0
+            var j = start
+            while j >= 0, j < chars.count, isHan(chars[j]) { n += 1; j += step }
+            return n
+        }
+        var out = ""
+        for (i, c) in chars.enumerated() {
+            if c == "和", i > 0, i < chars.count - 1,
+               (isASCIILetter(chars[i - 1]) && isASCIILetter(chars[i + 1]))
+                || (hanRun(from: i - 1, step: -1) >= 2 && hanRun(from: i + 1, step: 1) >= 2) {
+                out.append("&")
+            } else {
+                out.append(c)
+            }
+        }
+        return out
     }
 
     /// 只有 `/` 一个分隔符时,切出来的头部像不像一个真的艺人名。

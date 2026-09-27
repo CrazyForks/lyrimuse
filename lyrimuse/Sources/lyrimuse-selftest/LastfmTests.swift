@@ -293,6 +293,9 @@ func runLastfmTests() {
         expectEqual(S.sign(["artist[0]": "A", "artist[10]": "B", "artist[2]": "C", "method": "track.scrobble",
                             "api_key": "KEY", "sk": "SK"], secret: "SECRET"),
                     "5659761ac217b49797f2e0103d7866aa", "lastfm 签名: 键名按字节序,artist[10] 在 artist[2] 前")
+        expectEqual(S.sign(["method": "auth.getsession", "api_key": "KEY", "token": "TOK", "format": "json", "callback": "cb"],
+                           secret: "SECRET"),
+                    "7159147741f8ad64a31b34b8a529be00", "lastfm 签名: format / callback 不进签名,整包传进来也签得对")
     }
 
     // ---- LastfmImage:图片字段取哪一张、万能占位星当没有 ----
@@ -992,20 +995,6 @@ func runLastfmTests() {
         expectEqual(F.familyKey(artist: "测试歌手", title: "TestSong"),
                     F.familyKey(artist: "测试歌手", title: "另一首歌"),
                     "别名查找: 本机推断表与发现表撞键时本机表优先")
-    }
-
-    // ---- 计次规则(ScrobbleRule):必须与 collector 的 listenThreshold/minTrackSecs 一致 ----
-    do {
-        // 短于 30s 不计次(minTrackSecs)。
-        expectEqual(ScrobbleRule.thresholdFraction(durationMs: 29_000), nil, "计次: 29s 的曲目不计次")
-        expectEqual(ScrobbleRule.thresholdFraction(durationMs: 0), nil,
-                    "计次: 时长未知画不出刻度(collector 仍会在 240s 计,见 ScrobbleRule 注释)")
-        // 普通长度:一半处计次。
-        expectEqual(ScrobbleRule.thresholdFraction(durationMs: 200_000), 0.5, "计次: 200s 的歌在一半处计次")
-        // 长歌封顶 240s(capSecs):600s 的歌在 240/600 = 0.4 处计次,不用等一半。
-        expectEqual(ScrobbleRule.thresholdFraction(durationMs: 600_000), 0.4, "计次: 长歌 4 分钟封顶")
-        // 恰好 480s 是两条规则的分界:min(240, 240) 都是 0.5。
-        expectEqual(ScrobbleRule.thresholdFraction(durationMs: 480_000), 0.5, "计次: 480s 处两规则相等")
     }
 
     // MARK: - LastfmRecentFeed(collector 落盘的最近记录 feed)

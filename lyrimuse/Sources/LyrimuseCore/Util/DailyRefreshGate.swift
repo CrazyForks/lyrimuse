@@ -29,6 +29,8 @@ public enum DailyRefreshGate {
         guard let lastFetchedAt, let cachedDay else { return true }
         // 跨天优先:哪怕一分钟前刚取过,只要日历天变了,手上那份讲的就是别的日子。
         guard calendar.isDate(cachedDay, inSameDayAs: now) else { return true }
-        return now.timeIntervalSince(lastFetchedAt) >= ttl
+        let age = now.timeIntervalSince(lastFetchedAt)
+        // 负数 = 系统时钟往回拨过(NTP 校正、手动改时间):上次取数的时刻不可信,当作过期(同 GitHubStars / UpdateChannel)。
+        return age < 0 || age >= ttl
     }
 }

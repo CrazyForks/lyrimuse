@@ -8,7 +8,9 @@ import Foundation
 /// 这里同样按字节比较,不用 `String` 的 `<`)。两边的单测断言同一组向量,改一处必须同步改另一处。
 public enum LastfmSignature {
     public static func sign(_ params: [String: String], secret: String) -> String {
-        let sorted = params.sorted { $0.key.utf8.lexicographicallyPrecedes($1.key.utf8) }
+        // format / callback 按 Last.fm 规则不进签名:在这里滤掉,调用方整包传进来也签得对。
+        let sorted = params.filter { $0.key != "format" && $0.key != "callback" }
+            .sorted { $0.key.utf8.lexicographicallyPrecedes($1.key.utf8) }
         var s = ""
         for (k, v) in sorted {
             s += k + v

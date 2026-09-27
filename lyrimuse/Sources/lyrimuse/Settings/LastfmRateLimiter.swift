@@ -97,6 +97,9 @@ actor LastfmRateLimiter {
             let wait = gate.waitBeforeRelease(now: now)
             if wait > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                // 睡着的时候冷却可能被推后了(别处报了限流、collector 写了共享窗口):回到开头重新算,
+                // 不然醒来照样放一个出去,再撞一次 429。
+                continue
             }
             guard let id = gate.popNext() else {
                 pumpTask = nil

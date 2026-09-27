@@ -459,6 +459,9 @@ func runCacheKeyTests() {
         // 本次修的就是这一条:只差 4 小时、TTL 远没到期,但已经是第二天了。
         expectEqual(needs(fetched: at(8, 16, 22), day: at(8, 16, 22), now: at(8, 17, 2)), true,
                     "跨天缓存: 跨过零点即使 TTL 没到期也要拉")
+        // 系统时钟往回拨:上次取数「在未来」,不可信,当作过期。
+        expectEqual(needs(fetched: at(8, 17, 14), day: at(8, 17, 14), now: at(8, 17, 10)), true,
+                    "跨天缓存: 时钟回拨(上次取数晚于现在)要拉")
         // 边界:同一天的 23:59 → 次日 00:00,只隔一分钟也算跨天。
         expectEqual(needs(fetched: at(8, 16, 23, 59), day: at(8, 16, 23, 59), now: at(8, 17, 0, 0)),
                     true, "跨天缓存: 零点前后只差一分钟也算跨天")
@@ -484,6 +487,11 @@ func runCacheKeyTests() {
         expectEqual(ArtistCredit.primary("Daniel Caesar & Mustafa"), "Daniel Caesar",
                     "合唱 credit: & 分隔取第一位")
         expectEqual(ArtistCredit.primary("陶喆、卢广仲"), "陶喆", "合唱 credit: 顿号分隔")
+        // 中文「和」跟 collector normalizeArtistCreditHanAnd 同一条判据。
+        expectEqual(ArtistCredit.primary("陶喆和盧廣仲"), "陶喆", "合唱 credit: 两侧各 ≥2 个汉字的「和」是分隔符")
+        expectEqual(ArtistCredit.primary("Tom和Jerry"), "Tom", "合唱 credit: 两侧是字母的「和」是分隔符")
+        expectEqual(ArtistCredit.primary("李和平"), nil, "合唱 credit: 「李和平」是人名,不切")
+        expectEqual(ArtistCredit.primary("周杰伦和"), nil, "合唱 credit: 结尾的「和」不切")
         expectEqual(ArtistCredit.primary("UMI, 金泰亨"), "UMI", "合唱 credit: 逗号分隔")
         expectEqual(ArtistCredit.primary("Daniel Caesar feat. Mustafa"), "Daniel Caesar",
                     "合唱 credit: feat. 也算多人")

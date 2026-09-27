@@ -1355,6 +1355,15 @@ func runOverlayTests() {
         expectEqual(L.prefersLightText(hexes: ["#000000FF", "#333333FF"], darkAppearance: false), true,
                     "背景色: 黑到深灰渐变 → 主体仍是暗的,白字")
 
+        // ---- 透明窗口下给了壁纸亮度:按壁纸混,不按系统外观猜 ----
+        // 深色外观配一张浅色壁纸,20% 黑背景:按窗口底色猜会判成暗底配白字,实际是浅壁纸上的白字、看不见。
+        expectEqual(L.prefersLightText(hexes: ["#00000033"], darkAppearance: true, backdropLuma: 0.8), false,
+                    "背景色: 半透明黑 + 深色外观 + 浅色壁纸 → 深色字")
+        expectEqual(L.prefersLightText(hexes: ["#FFFFFF33"], darkAppearance: false, backdropLuma: 0.02), true,
+                    "背景色: 半透明白 + 浅色外观 + 深色壁纸 → 白字")
+        expectEqual(L.prefersLightText(hexes: ["#FFFFFFFF"], darkAppearance: false, backdropLuma: 0.02), false,
+                    "背景色: 不透明色不受壁纸影响")
+
         // ---- 认不出来时维持这扇窗原来的样子,不要翻转 ----
         expectEqual(L.prefersLightText(hexes: ["坏值"], darkAppearance: false), true,
                     "背景色: 颜色认不出来 → 维持白字(不拿坏配置去翻转文字)")

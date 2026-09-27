@@ -927,8 +927,11 @@ struct SettingsFlowRow: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        let rows = ChipFlowGeometry.rows(widths: sizes.map(\.width), spacing: spacing,
-                                         limit: proposal.width ?? .greatestFiniteMagnitude)
+        // 提议宽度 0 是父布局在问「最窄能到多少」:按每行一枚算(报最宽那枚的宽度)。交给 rows 的话 ≤0 会被
+        // 当成「不限宽」(那是给 placeSubviews 首帧没量到宽度用的),报成全部排一行的宽度,等于声明自己
+        // 一点都压不窄,HStack 只好去挤旁边的标题。
+        let limit: CGFloat = proposal.width.map { $0 > 0 ? $0 : 1 } ?? .greatestFiniteMagnitude
+        let rows = ChipFlowGeometry.rows(widths: sizes.map(\.width), spacing: spacing, limit: limit)
         return ChipFlowGeometry.size(rows: rows, rowHeight: sizes.map(\.height).max() ?? 0, spacing: spacing)
     }
 

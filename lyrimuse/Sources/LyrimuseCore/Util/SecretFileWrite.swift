@@ -18,16 +18,26 @@ public extension Data {
     /// 归 `LogRedactor`(日志出口脱敏)和导出前的那句警告文案管。至于"任何以当前用户身份
     /// 运行的进程"(你装的任意 CLI、npm postinstall),权限位同样拦不住。
     ///
-    /// 权限设置失败只记日志、不抛错:文件本身已经写成功了,为了权限没收紧就把整个保存
-    /// 操作判失败、让用户以为配置没存上,是更糟的结果。
+    /// 不能先 `.atomic` 写完再 chmod:那样新文件先按 umask 落成 0644,到 chmod 之前那一小段里同机其他账号
+    /// 读得到。这里临时文件用 `open(O_CREAT|O_EXCL, 0600)` 建,一出生就只有属主可读写,写完再 `rename` 顶替
+    /// 目标 —— rename 是原子的,顶替后的 inode 就是这个 0600 的临时文件。
     func writeSecurely(to url: URL) throws {
-        try write(to: url, options: .atomic)
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        let fd = open(tmp.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tmp.path]) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         do {
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path
-            )
+            try handle.write(contentsOf: self)
+            try handle.synchronize()
+            try handle.close()
+            guard rename(tmp.path, url.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+            }
         } catch {
-            logger.error("could not tighten permissions on \(url.lastPathComponent, privacy: .public) — \(String(describing: error), privacy: .public)")
+            try? FileManager.default.removeItem(at: tmp)
+            logger.error("secure write of \(url.lastPathComponent, privacy: .public) failed — \(String(describing: error), privacy: .public)")
+            throw error
         }
     }
 }
