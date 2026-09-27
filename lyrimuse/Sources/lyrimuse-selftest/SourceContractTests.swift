@@ -1944,21 +1944,6 @@ func runSourceContractTests() {
             // 默认折叠的全部设置抽屉,外观行只有一份、两处共用(07 章决策 44、45)。
             expectEqual(settings.contains("lyricsWindowToolbar\n            LyricsWindowPreviewStage {"), true,
                         "歌词窗口设置: 工具栏在预览上面")
-            expectEqual(settings.contains("LyricsWindowAllSettingsDrawer {"), true,
-                        "歌词窗口设置: 全量配置收进「全部设置」抽屉")
-            expectEqual(settings.contains("Button(L10n.t(\"打开\")) { AppActions.shared.openLyricsWindow?() }"), true,
-                        "歌词窗口设置: 预览下面那张卡里有打开窗口的按钮,走 AppActions 那个统一入口")
-            expectEqual(settings.contains("LyricsWindowStyleDefaults.restoreDefaults(mini: lyricsWindowPreviewShowsMini)"), true,
-                        "歌词窗口设置: 工具栏「重置 ▾」只恢复当前预览的那个尺寸")
-            expectEqual(settings.contains("private func lyricsWindowAppearanceCard("), false,
-                        "歌词窗口设置: 外观行只有 lyricsWindowAppearanceRowsImpl 一份,别再长回整张卡")
-        }
-        if let settings = read("SettingsView.swift") {
-            for forwarded in ["BrowserPairing.trustAndPair(", "BrowserPairing.pair(",
-                              "BrowserPairing.unpair(", "BrowserPairing.addableBrowsers(",
-                              "BrowserPairing.rememberManualBrowser(",
-                              "BrowserPairing.chooseFromApplications(",
-                              "BrowserPairing.forgetManualBrowserIfUnpaired("] {
             expectEqual(settings.contains("LyricsWindowPreviewStage { lyricsWindowPopoverContent(.info) }"), true,
                         "歌词窗口设置: 预览里顶部信息那块点开的浮层跟工具栏「顶部信息」是同一份")
             if let stage = read("UI/LyricsWindowPreviewStage.swift"), let view = read("UI/LyricsWindowView.swift") {
@@ -1992,6 +1977,21 @@ func runSourceContractTests() {
             } else {
                 expectEqual(true, false, "歌词窗口预览: 读不到 LyricsWindowPreviewStage.swift / LyricsWindowView.swift")
             }
+            expectEqual(settings.contains("LyricsWindowAllSettingsDrawer {"), true,
+                        "歌词窗口设置: 全量配置收进「全部设置」抽屉")
+            expectEqual(settings.contains("Button(L10n.t(\"打开\")) { AppActions.shared.openLyricsWindow?() }"), true,
+                        "歌词窗口设置: 预览下面那张卡里有打开窗口的按钮,走 AppActions 那个统一入口")
+            expectEqual(settings.contains("LyricsWindowStyleDefaults.restoreDefaults(mini: lyricsWindowPreviewShowsMini)"), true,
+                        "歌词窗口设置: 工具栏「重置 ▾」只恢复当前预览的那个尺寸")
+            expectEqual(settings.contains("private func lyricsWindowAppearanceCard("), false,
+                        "歌词窗口设置: 外观行只有 lyricsWindowAppearanceRowsImpl 一份,别再长回整张卡")
+        }
+        if let settings = read("SettingsView.swift") {
+            for forwarded in ["BrowserPairing.trustAndPair(", "BrowserPairing.pair(",
+                              "BrowserPairing.unpair(", "BrowserPairing.addableBrowsers(",
+                              "BrowserPairing.rememberManualBrowser(",
+                              "BrowserPairing.chooseFromApplications(",
+                              "BrowserPairing.forgetManualBrowserIfUnpaired("] {
                 expectEqual(settings.contains(forwarded), true,
                             "引导页一份实现: SettingsView 里 \(forwarded) 这条转发不见了(逻辑被抄回去了?)")
             }
