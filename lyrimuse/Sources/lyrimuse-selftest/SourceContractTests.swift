@@ -3882,6 +3882,10 @@ func runSourceContractTests() {
     // 合并当场失效 —— 而且不报错、不崩溃,只表现为"怎么又慢了",查起来极贵。
     // 这一行就是这么埋过坑的(那次的合并判据还错在看"上次跑完时间戳"、挡不住同时起跑的
     // 两次)。所以把这一行钉死在这里。
+    //
+    // 另一头也埋过坑:等在飞的那次时写成 `while let t = inFlightReload { await t.value }`,醒来时起跑方
+    // 还没轮到条件置空,引用仍指着已完成的 Task,await 已完成的 Task 立即返回、不让出主线程,于是主线程原地
+    // 空转、整个 App 卡死(一打开歌词管理就卡)。所以每个这样的等待循环都要自己把已完成的那个清掉。
     do {
         let packageDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -3891,16 +3895,37 @@ func runSourceContractTests() {
         expectEqual(text.isEmpty, false, "reload 合并: 读不到 EnrichCacheStore.swift,这道守卫成了摆设")
         var bare: [Int] = []
         var guarded = 0
-        for (n, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let t = String(raw).trimmingCharacters(in: .whitespaces)
+        var starterGuarded = 0
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+        for (n, t) in lines.enumerated() {
             // 注释里会引用这段代码讲为什么,不算数。
             guard !t.hasPrefix("//"), t.contains("inFlightReload = nil") else { continue }
-            if t.contains("if inFlightReload == task") { guarded += 1 } else { bare.append(n + 1) }
+            if t.range(of: #"^if inFlightReload == [A-Za-z]+ \{ inFlightReload = nil \}$"#, options: .regularExpression) != nil {
+                guarded += 1
+                if t.hasPrefix("if inFlightReload == task ") { starterGuarded += 1 }
+            } else {
+                bare.append(n + 1)
+            }
         }
         expectEqual(bare, [],
                     "reload 合并: 这些行是无条件的 inFlightReload = nil,会抹掉别人在飞的 Task(见 2026-09-04 教训)")
-        expectEqual(guarded, 1,
-                    "reload 合并: 期望恰好一处 `if inFlightReload == task { inFlightReload = nil }`")
+        expectEqual(starterGuarded, 1,
+                    "reload 合并: 起跑方恰好一处 `if inFlightReload == task { inFlightReload = nil }`")
+        // 每个 `while let x = inFlightReload {` 等待循环,体内都要有 `if inFlightReload == x { inFlightReload = nil }`。
+        var waitLoops = 0
+        for (n, t) in lines.enumerated() {
+            // 不锚行尾:单行写法 `while let t = inFlightReload { await t.value }` 正是出过事的那种,也要扫到。
+            guard let m = t.range(of: #"^while let [A-Za-z]+ = inFlightReload \{"#, options: .regularExpression) else { continue }
+            waitLoops += 1
+            let name = t[m].dropFirst("while let ".count).prefix { $0.isLetter }
+            let body = [String(t[m.upperBound...])] + lines[(n + 1)..<min(lines.count, n + 4)]
+            expectEqual(body.contains { $0.contains("if inFlightReload == \(name) { inFlightReload = nil }") }, true,
+                        "reload 合并: 第 \(n + 1) 行的等待循环没清掉已完成的 Task —— 主线程会原地空转卡死")
+        }
+        expectEqual(waitLoops >= 1, true, "reload 合并: 扫到了等待在飞读盘的 while 循环(扫不到 = 写法变了,先修这条闸)")
+        expectEqual(guarded, starterGuarded + waitLoops,
+                    "reload 合并: 条件置空只出现在起跑方和等待循环里")
     }
 
     // ---- 设置页判定走 Core ----

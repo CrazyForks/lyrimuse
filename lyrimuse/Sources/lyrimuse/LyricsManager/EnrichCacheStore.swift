@@ -312,7 +312,14 @@ public final class EnrichCacheStore: ObservableObject {
         }
         // 用 while 而不是 if:两个显式调用方同时在等同一次在飞的读盘时,先醒的那个已经起了新的一次,
         // 后醒的要接着等它,不能也起一次并发去解析同一份文件。
-        while let inFlight = inFlightReload { await inFlight.value }
+        //
+        // 等完必须顺手把**已经跑完**的那个引用清掉:醒来时起跑方可能还没轮到执行下面那行条件置空,
+        // inFlightReload 仍指着这个已完成的 Task,而 await 一个已完成的 Task 立即返回、不让出主线程 ——
+        // 不清就在主线程上原地空转,起跑方永远轮不到,整个 App 卡死。
+        while let inFlight = inFlightReload {
+            await inFlight.value
+            if inFlightReload == inFlight { inFlightReload = nil }
+        }
         let task = Task { await self.performReload(onlyIfChanged: onlyIfChanged) }
         inFlightReload = task
         await task.value
@@ -490,7 +497,11 @@ public final class EnrichCacheStore: ObservableObject {
     /// 等读盘要等到**没有**在飞的为止,再清 releaseTask:等的时候又起了一次读盘的话,那次读盘收尾时的
     /// scheduleReleaseIfUnheld 看到 releaseTask 还在就不会重新排,这里要是见到在飞的就放弃,快照就一直留着了。
     private func dropSnapshotIfIdle() async {
-        while let r = inFlightReload { await r.value }
+        // 等完顺手清掉已完成的引用,理由见 reload 里同一个循环 —— 不清会在主线程上空转卡死。
+        while let r = inFlightReload {
+            await r.value
+            if inFlightReload == r { inFlightReload = nil }
+        }
         releaseTask = nil
         guard !Task.isCancelled, snapshotHolders.isEmpty,
               editsInFlight == 0, !isReleased else { return }
