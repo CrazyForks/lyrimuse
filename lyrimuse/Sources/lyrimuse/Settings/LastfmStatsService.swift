@@ -104,6 +104,13 @@ final class LastfmStatsService: ObservableObject {
         return nil
     }
 
+    /// 简介兜底(`EditorialNotesStore`)的一次资料查询:`album.getInfo` / `artist.getInfo`,走同一条限速与退避通道。
+    /// 没连 Last.fm 账号返回 nil。`notFound` = Last.fm 明确没有这个条目(error 6)。
+    func fetchEditorialInfo(method: String, extra: [String: String]) async -> (json: [String: Any]?, notFound: Bool)? {
+        guard let cred = credentials else { return nil }
+        return await requestDetailed(method: method, cred: cred, extra: extra, priority: .interactive)
+    }
+
     /// 把一份 feed 并进界面状态。理由与流程见本节头注。
     private func ingestFeed(_ feed: LastfmRecentFeed) {
         guard let cred = credentials, feed.username == cred.user else { return }

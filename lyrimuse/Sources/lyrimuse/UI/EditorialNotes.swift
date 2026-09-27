@@ -7,6 +7,8 @@ import SwiftUI
 /// 专辑简介 / 歌手简介的一张卡片:标题 + 副标题 + 若干「标签:值」+ 正文。
 struct EditorialCard: Equatable {
     enum Kind: Equatable { case album, artist }
+    /// 正文从哪来。Last.fm 的是 CC BY-SA 授权的用户百科,卡片底部要注明出处。
+    enum Source: Equatable { case appleMusic, lastfm }
 
     struct Fact: Equatable, Hashable {
         let label: String
@@ -18,6 +20,7 @@ struct EditorialCard: Equatable {
     let subtitle: String
     let facts: [Fact]
     let text: String
+    var source: Source = .appleMusic
 }
 
 /// 当前曲目的 Apple Music 专辑简介与歌手简介(灵动岛展开态点专辑名 / 歌手名、歌词窗口点「歌手 — 专辑」
@@ -29,6 +32,9 @@ struct EditorialCard: Equatable {
 ///   - 歌手:从署名里挑出这首歌的歌手(`AlbumEditorialNotes.pickArtist`);这首自己的专辑页给不出时,从同歌手在
 ///     缓存里的别的专辑页找,按专辑 ID 升序最多试 3 张,对上一张就停。再按给出专辑页的那个店面请求歌手公开页
 ///     拿简介;出生日期 / 类型只有 Apple Music API 给,collector 缓存的 developer token 有效时顺带取,没有就不显示那两行。
+/// **Apple Music 明确没有时退到 Last.fm**(`album.getInfo` 的 wiki / `artist.getInfo` 的 bio,见 `LastfmEditorialInfo`):
+/// 只在 Apple 那条路**确定**没有(没有专辑链接 / 公开页没有简介 / 歌手页没有简介 / 同歌手的专辑都对不上)时才问,
+/// Apple 请求失败或 enrich 缓存还没加载好不算;要连着 Last.fm 账号(用它的 API key)。按「歌手|专辑」「歌手」记结论。
 /// 专辑按专辑 ID、歌手按歌手 ID 记住结果,同一个只取一次;所有店面都 404 记成「没有」,本次运行不再问;
 /// 网络失败 / 页面形状不对不记,下次换歌 / 消费方再来时重试。同一张专辑 / 同一位歌手在飞时不重复发,
 /// 请求回来时已经换歌,就按此刻在放的曲目再查一次(命中刚记下的结果,不多发请求)。
@@ -133,6 +139,7 @@ final class EditorialNotesStore: ObservableObject {
                                                         album: track.album) else {
             Self.logger.debug("no apple album for current track; artist via siblings")
             album = nil
+            fallbackAlbum(track)
             resolveArtistFromSiblings(track)
             return
         }
@@ -143,6 +150,7 @@ final class EditorialNotesStore: ObservableObject {
                 EditorialCard(kind: .album, title: $0.title.isEmpty ? track.album : $0.title,
                               subtitle: $0.subtitle, facts: [], text: $0.text)
             }
+            if self.album == nil { self.fallbackAlbum(track) }
             if let fetched, let link = AlbumEditorialNotes.pickArtist(fetched.page.artists, localArtist: track.artist) {
                 self.loadArtist(ResolvedArtist(link: link, storefront: fetched.storefront), for: track)
             } else {
@@ -160,7 +168,12 @@ final class EditorialNotesStore: ObservableObject {
             return
         }
         if let known = artistLinks[name] {
-            if let known { loadArtist(known, for: track) } else { artist = nil }
+            if let known {
+                loadArtist(known, for: track)
+            } else {
+                artist = nil
+                fallbackArtist(track)
+            }
             return
         }
         // 缓存还没加载好:这次先不显示,也不记成找不到(加载完会经 enrichContentVersion 再来)。
@@ -178,7 +191,10 @@ final class EditorialNotesStore: ObservableObject {
         guard let ref = refs.first else {
             Self.logger.debug("siblings: no album credits this artist")
             artistLinks[name] = .some(nil)
-            if currentKey == track.key { artist = nil }
+            if currentKey == track.key {
+                artist = nil
+                fallbackArtist(track)
+            }
             return
         }
         withAlbumPage(ref) { [weak self] fetched in
@@ -229,6 +245,7 @@ final class EditorialNotesStore: ObservableObject {
         let link = resolved.link
         if let cached = artistCards[link.id] {
             artist = cached
+            if cached == nil { fallbackArtist(track) }
             return
         }
         guard !artistsInFlight.contains(link.id) else { return }
@@ -246,7 +263,9 @@ final class EditorialNotesStore: ObservableObject {
             guard let text else { return }
             let card = text.isEmpty ? nil : Self.artistCard(name: link.name, bio: text, facts: extra)
             self.artistCards[link.id] = card
-            if self.currentKey == track.key { self.artist = card } else { self.refreshCurrent() }
+            guard self.currentKey == track.key else { return self.refreshCurrent() }
+            self.artist = card
+            if card == nil { self.fallbackArtist(track) }
         }
     }
 
@@ -272,6 +291,79 @@ final class EditorialNotesStore: ObservableObject {
             }
         }
         return EditorialCard(kind: .artist, title: name, subtitle: "", facts: rows, text: bio)
+    }
+
+    // MARK: - Last.fm 兜底
+
+    /// 按「album|歌手|专辑」「artist|歌手」(`cleanTag`)记结论;值为 nil = Last.fm 明确没有。
+    private var lastfmCards: [String: EditorialCard?] = [:]
+    private var lastfmInFlight: Set<String> = []
+
+    private func fallbackAlbum(_ track: Track) {
+        let artistName = track.artist, albumName = track.album
+        guard !artistName.isEmpty, !albumName.isEmpty else { return }
+        let key = "album|\(EnrichCacheKeys.cleanTag(artistName))|\(EnrichCacheKeys.cleanTag(albumName))"
+        lastfmCard(key: key, method: "album.getInfo", extra: ["artist": artistName, "album": albumName], for: track,
+                   parse: LastfmEditorialInfo.albumWiki(from:)) { text in
+            EditorialCard(kind: .album, title: albumName, subtitle: artistName, facts: [], text: text, source: .lastfm)
+        } apply: { [weak self] card in
+            if self?.album == nil { self?.album = card }
+        }
+    }
+
+    private func fallbackArtist(_ track: Track) {
+        let artistName = track.artist
+        guard !artistName.isEmpty else { return }
+        let key = "artist|\(EnrichCacheKeys.cleanTag(artistName))"
+        lastfmCard(key: key, method: "artist.getInfo", extra: ["artist": artistName], for: track,
+                   parse: LastfmEditorialInfo.artistBio(from:)) { text in
+            EditorialCard(kind: .artist, title: artistName, subtitle: "", facts: [], text: text, source: .lastfm)
+        } apply: { [weak self] card in
+            if self?.artist == nil { self?.artist = card }
+        }
+    }
+
+    /// 记过结论就地套用;没有就问一次。回来时已经换歌,按当前曲目重查(命中刚记下的结论,不多发请求)。
+    /// 失败(没连 Last.fm 账号 / 网络 / 形状不对)不记,下次换歌 / 消费方再来时重试。
+    private func lastfmCard(key: String, method: String, extra: [String: String], for track: Track,
+                            parse: @escaping ([String: Any]) -> LastfmEditorialInfo.Parsed?,
+                            make: @escaping (String) -> EditorialCard,
+                            apply: @escaping (EditorialCard?) -> Void) {
+        if let known = lastfmCards[key] {
+            apply(known)
+            return
+        }
+        guard !lastfmInFlight.contains(key) else { return }
+        lastfmInFlight.insert(key)
+        let lang = LastfmEditorialInfo.preferredLang(uiLanguage: L10n.current)
+        Self.logger.notice("lastfm fallback \(method, privacy: .public) lang \(lang ?? "default", privacy: .public)")
+        Task { [weak self] in
+            let text = await Self.lastfmText(method: method, extra: extra, lang: lang, parse: parse)
+            guard let self else { return }
+            self.lastfmInFlight.remove(key)
+            guard let text else { return }
+            let card = text.isEmpty ? nil : make(text)
+            self.lastfmCards[key] = .some(card)
+            Self.logger.notice("lastfm fallback \(method, privacy: .public): \(card == nil ? "none" : "\(text.count) chars", privacy: .public)")
+            guard self.currentKey == track.key else { return self.refreshCurrent() }
+            apply(card)
+        }
+    }
+
+    /// nil = 没问成;"" = Last.fm 明确没有。先问 `lang`(中文界面),正文为空再问默认那份。
+    private static func lastfmText(method: String, extra: [String: String], lang: String?,
+                                   parse: ([String: Any]) -> LastfmEditorialInfo.Parsed?) async -> String? {
+        let langs: [String?] = lang.map { [$0, nil] } ?? [nil]
+        for candidate in langs {
+            var params = extra
+            params["autocorrect"] = "1"
+            if let candidate { params["lang"] = candidate }
+            guard let result = await LastfmStatsService.shared.fetchEditorialInfo(method: method, extra: params) else { return nil }
+            if result.notFound { return "" }
+            guard let json = result.json, let parsed = parse(json) else { return nil }
+            if case .text(let text) = parsed { return text }
+        }
+        return ""
     }
 
     /// 系统地区,跟「前往专辑」同一口径。店面的最终顺序见 `AlbumEditorialNotes.storefronts`。
@@ -328,6 +420,12 @@ struct EditorialNotesContent: View {
                     .frame(height: maxTextHeight)
             } else {
                 paragraph(card.text)
+            }
+            // Last.fm 的正文是 CC BY-SA 授权的用户百科,出处必须注明。
+            if card.source == .lastfm {
+                Text(L10n.t("来自 Last.fm"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(secondary)
             }
         }
     }

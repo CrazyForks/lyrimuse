@@ -1241,15 +1241,15 @@ func runNotchTests() {
                     "专辑简介契约: 歌词窗口开着才预取,设置页预览不算")
         expectEqual(store.components(separatedBy: "AlbumEditorialNotes.fetchAlbumPage(").count - 1, 1,
                     "简介契约: 专辑页只有一处发请求")
-        expectEqual(store.contains("album = nil\n            resolveArtistFromSiblings(track)"), true,
-                    "歌手简介契约: 这首没有 Apple 链接时,从同歌手的别的专辑页找歌手")
+        expectEqual(store.contains("album = nil\n            fallbackAlbum(track)\n            resolveArtistFromSiblings(track)"), true,
+                    "歌手简介契约: 这首没有 Apple 链接时,专辑退 Last.fm、歌手从同歌手的别的专辑页找")
         expectEqual(store.contains("Timer") || store.contains("Task.sleep"), false,
                     "专辑简介契约: 只在换歌 / 消费方来要时取,不轮询")
         expectEqual(store.contains("guard demand > 0, !track.title.isEmpty else {"), true,
                     "专辑简介契约: 没有消费方挂着时一个请求都不发")
-        expectEqual(store.components(separatedBy: "guard self.currentKey == track.key else { return self.refreshCurrent() }").count - 1, 2,
-                    "简介契约: 专辑页回来时已经换歌,按当前曲目重查(同专辑连切时新歌不会整首拿不到)")
-        expectEqual(store.contains("if self.currentKey == track.key { self.artist = card } else { self.refreshCurrent() }"), true,
+        expectEqual(store.components(separatedBy: "guard self.currentKey == track.key else { return self.refreshCurrent() }").count - 1, 4,
+                    "简介契约: 专辑页 / 同歌手专辑页 / 歌手页 / Last.fm 回来时已经换歌,都按当前曲目重查(同专辑连切时新歌不会整首拿不到)")
+        expectEqual(store.contains("guard self.currentKey == track.key else { return self.refreshCurrent() }\n            self.artist = card"), true,
                     "简介契约: 歌手页回来时已经换歌,同样按当前曲目重查")
         expectEqual(store.contains("appleAlbumRefs(forArtist: track.artist, limit: 3)")
                     && store.contains("return self.trySiblings(refs.dropFirst(), name: name, track: track)"), true,

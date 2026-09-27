@@ -36347,6 +36347,23 @@
           }
         }
       }
+    },
+    "来自 Last.fm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From Last.fm"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "來自 Last.fm"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

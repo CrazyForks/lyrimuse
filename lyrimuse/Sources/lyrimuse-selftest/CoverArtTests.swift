@@ -1222,4 +1222,52 @@ func runCoverArtTests() {
         expectEqual(r.0, .failed, "换店面: 页面形状不对算失败")
         expectEqual(resolve([], [:]).0, .failed, "换店面: 没有店面可问算失败")
     }
+
+    // ---- 简介的 Last.fm 兜底:解析 artist.getInfo / album.getInfo ----
+    do {
+        typealias L = LastfmEditorialInfo
+        func json(_ s: String) -> [String: Any] {
+            (try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any]) ?? [:]
+        }
+        let tail = " <a href=\"https://www.last.fm/music/9m88\">Read more on Last.fm</a>. User-contributed text is available under the Creative Commons By-SA License; additional terms may apply."
+        expectEqual(L.cleaned("9m88 is a Taiwan-raised musician." + tail), "9m88 is a Taiwan-raised musician.",
+                    "Last.fm 简介: 末尾「Read more / 授权声明」整段去掉(出处由卡片注明)")
+        expectEqual(L.cleaned("R&amp;B &quot;soul&quot; it&#39;s"), "R&B \"soul\" it's", "Last.fm 简介: 解常见 HTML 实体")
+        expectEqual(L.cleaned("&amp;lt;"), "&lt;", "Last.fm 简介: &amp; 最后解,不多解一层")
+        expectEqual(L.cleaned(tail), "", "Last.fm 简介: 只有尾巴没有正文 = 空")
+
+        let artistJSON = json(#"{"artist":{"name":"9m88","bio":{"summary":"短","content":"9m88 is a musician. <a href=\"x\">Read more on Last.fm</a>."}}}"#)
+        expectEqual(L.artistBio(from: artistJSON), .text("9m88 is a musician."), "Last.fm 歌手: 取 content")
+        let summaryOnly = json(#"{"artist":{"name":"x","bio":{"summary":"Only summary.","content":""}}}"#)
+        expectEqual(L.artistBio(from: summaryOnly), .text("Only summary."), "Last.fm 歌手: content 空时退 summary")
+        let emptyBio = json(#"{"artist":{"name":"x","bio":{"summary":" <a href=\"x\">Read more on Last.fm</a>","content":""}}}"#)
+        expectEqual(L.artistBio(from: emptyBio), L.Parsed.none, "Last.fm 歌手: 只有尾巴 = 明确没有(不是失败)")
+        expectEqual(L.artistBio(from: json(#"{"artist":{"name":"x"}}"#)), L.Parsed.none, "Last.fm 歌手: 没有 bio 字段 = 没有")
+        expectEqual(L.artistBio(from: json(#"{"error":6,"message":"not found"}"#)), nil, "Last.fm 歌手: 形状不对是 nil(不记结论)")
+
+        let albumJSON = json(#"{"album":{"name":"HIT ME HARD AND SOFT","wiki":{"published":"04 Apr 2026","summary":"s","content":"The third studio album. <a href=\"x\">Read more on Last.fm</a>."}}}"#)
+        expectEqual(L.albumWiki(from: albumJSON), .text("The third studio album."), "Last.fm 专辑: 取 wiki.content")
+        expectEqual(L.albumWiki(from: json(#"{"album":{"name":"平庸之上","tracks":{}}}"#)), L.Parsed.none,
+                    "Last.fm 专辑: 没有 wiki 字段 = 这张没有介绍(实测《平庸之上》)")
+        expectEqual(L.albumWiki(from: json(#"{"artist":{}}"#)), nil, "Last.fm 专辑: 形状不对是 nil")
+
+        expectEqual(L.preferredLang(uiLanguage: "zh-hans"), "zh", "Last.fm 语言: 简体中文界面先要中文")
+        expectEqual(L.preferredLang(uiLanguage: "zh-Hant"), "zh", "Last.fm 语言: 繁体中文界面同样先要中文")
+        expectEqual(L.preferredLang(uiLanguage: "en"), nil, "Last.fm 语言: 英文界面只要默认那份")
+
+        // 源码契约:只在 Apple 那条路确定没有时退到 Last.fm;卡片注明出处;请求走带限速的那条通道。
+        let ui = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let store = (try? String(contentsOf: ui.appendingPathComponent("lyrimuse/UI/EditorialNotes.swift"), encoding: .utf8)) ?? ""
+        let service = (try? String(contentsOf: ui.appendingPathComponent("lyrimuse/Settings/LastfmStatsService.swift"), encoding: .utf8)) ?? ""
+        expectEqual(store.components(separatedBy: "fallbackAlbum(track)").count - 1, 2,
+                    "简介兜底契约: 专辑两处退 Last.fm —— 没有 Apple 专辑链接、公开页没有简介")
+        expectEqual(store.components(separatedBy: "fallbackArtist(track)").count - 1, 4,
+                    "简介兜底契约: 歌手四处退 Last.fm —— 记过找不到、同歌手专辑都对不上、缓存命中没简介、请求回来没简介")
+        expectEqual(store.contains("Self.logger.debug(\"siblings: enrich cache not loaded yet\")\n            artist = nil\n            return"), true,
+                    "简介兜底契约: enrich 缓存还没加载好不算「没有」,不退 Last.fm")
+        expectEqual(store.contains("if card.source == .lastfm {\n                Text(L10n.t(\"来自 Last.fm\"))"), true,
+                    "简介兜底契约: Last.fm 的卡片注明出处(CC BY-SA)")
+        expectEqual(service.contains("return await requestDetailed(method: method, cred: cred, extra: extra, priority: .interactive)"), true,
+                    "简介兜底契约: 查询走 LastfmStatsService 那条带限速与退避的通道")
+    }
 }
