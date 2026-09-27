@@ -336,10 +336,20 @@ struct PanelQuickSettings: View {
     @ViewBuilder private var rows: some View {
         switch target {
         case .surface(.overlay):
-            sliderRow(L10n.t("字号"), value: $settings.fontSize, range: AppSettings.overlayFontSizeRange)
+            // 三根滑杆都要「值没变就不写」(SteppedSlider 把守卫留给调用点,设置页 / 抽屉 / 编辑台都加了):
+            // 拖动时每个鼠标事件都会写一次,量化后多半是同一个值 —— 字号每写一次重建一轮字体,
+            // 宽度每写一次重启窗口的 frame 动画,还都整对象广播一次 AppSettings。
+            sliderRow(L10n.t("字号"), value: Binding(
+                get: { settings.fontSize },
+                set: { newValue in
+                    guard newValue != settings.fontSize else { return }
+                    settings.fontSize = newValue
+                }
+            ), range: AppSettings.overlayFontSizeRange)
             sliderRow(L10n.t("宽度"), value: Binding(
                 get: { settings.overlayWidth },
                 set: { newValue in
+                    guard newValue != settings.overlayWidth else { return }
                     settings.overlayWidth = newValue
                     // 关着的时候不碰控制器:没必要为一个看不见的窗口把它建出来
                     // (窗口本身不存在时 setWidth 也只是空转)。重新打开时 setVisible
@@ -430,7 +440,11 @@ struct PanelQuickSettings: View {
             }
             sliderRow(L10n.t("最大宽度"), value: Binding(
                 get: { Double(settings.menuBarLyricsWidth) },
-                set: { settings.menuBarLyricsWidth = CGFloat(($0 / 10).rounded() * 10) }
+                set: {
+                    let quantized = CGFloat(($0 / 10).rounded() * 10)
+                    guard quantized != settings.menuBarLyricsWidth else { return }
+                    settings.menuBarLyricsWidth = quantized
+                }
             ), range: 80...600, step: 10)
             // **只在固定宽度模式下出现**,判据跟设置页那一行一字不差
             // (`MenuBarLayoutRows` 里那个 `if`)——自适应模式下那一格的宽度就等于文字宽度,

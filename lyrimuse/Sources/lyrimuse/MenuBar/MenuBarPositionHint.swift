@@ -21,6 +21,9 @@ final class MenuBarPositionHintController {
     private var popover: NSPopover?
     private var closeObserver: NSObjectProtocol?
     private var autoDismissWorkItem: DispatchWorkItem?
+    /// 气泡开 / 关。它跟面板一样锚在状态栏按钮上:开着期间状态项一重建锚点就没了,气泡当场消失或者
+    /// 飘在旧位置 —— 而「已展示」早就记成真,用户以后再也看不到。状态项据此在开着期间不重建。
+    var onVisibilityChange: ((Bool) -> Void)?
 
     /// 展示到期自动收起的秒数。给够时间让用户看完两行字、犯不着的话也不用手动点掉,
     /// 但又不会像常驻面板一样一直杵在那儿。
@@ -39,6 +42,7 @@ final class MenuBarPositionHintController {
         ) { [weak self] _ in
             Task { @MainActor in self?.teardown() }
         }
+        onVisibilityChange?(true)
         pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         // 跟 MenuBarPanelController 同一处修法(那次"别的 App 全屏时面板打不开"):
         // NSPopover 自建窗口默认进不了别的 App 的全屏 Space,只能落在桌面 Space 上——
@@ -58,6 +62,7 @@ final class MenuBarPositionHintController {
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
         closeObserver = nil
         popover = nil
+        onVisibilityChange?(false)
     }
 }
 

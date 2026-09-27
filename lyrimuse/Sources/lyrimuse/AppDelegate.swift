@@ -682,7 +682,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionIsInactive = false
 
     private func applyScreenHidden() {
-        LocalPlaybackSource.shared.setScreenLocked(screenIsLocked || screensAreAsleep || sessionIsInactive)
+        let hidden = screenIsLocked || screensAreAsleep || sessionIsInactive
+        LocalPlaybackSource.shared.setScreenLocked(hidden)
+        ScreenVisibility.shared.setHidden(hidden)
     }
 
     private func startObservingScreenLock() {

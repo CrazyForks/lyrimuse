@@ -128,6 +128,8 @@ final class MenuBarScrollingLabel: NSView {
         var fontWeight: OverlayFontWeight
         /// 字号,0 = 跟随系统。同 fontWeight:位图、行高、滚动距离都随它变。
         var fontSize: CGFloat
+        /// 字体族,空串 = 跟随系统菜单栏。同 fontWeight:位图、宽度都随它变。
+        var fontFamily: String
         /// nil = 这一句装得下,静止显示。格子宽度照样是 windowWidth(固定宽度,见
         /// MenuBarMarqueeRenderer.presentation)。
         var pacing: MenuBarMarquee.ScrollPacing?
@@ -303,6 +305,7 @@ final class MenuBarScrollingLabel: NSView {
                         alignment: AppSettings.shared.menuBarLyricsAlignment,
                         fontWeight: AppSettings.shared.menuBarLyricsFontWeight,
                         fontSize: AppSettings.shared.menuBarLyricsFontSize,
+                        fontFamily: AppSettings.shared.menuBarLyricsFontFamily,
                         pacing: pacing, fillPath: fillPath, followPath: followPath, icon: icon,
                         secondaryText: secondaryText, secondaryKind: secondaryKind,
                         gapWindow: gapWindow)
@@ -322,6 +325,7 @@ final class MenuBarScrollingLabel: NSView {
             && plan?.icon == next.icon
             && plan?.fontWeight == next.fontWeight
             && plan?.fontSize == next.fontSize
+            && plan?.fontFamily == next.fontFamily
             // 副行文字 / 档位变了要重出位图(副行那张,以及单双排切换时主行那张 —— 字号变了)。
             && plan?.secondaryText == next.secondaryText
             && plan?.secondaryKind == next.secondaryKind
@@ -337,6 +341,7 @@ final class MenuBarScrollingLabel: NSView {
             $0.text == next.text && $0.windowWidth == next.windowWidth && $0.pacing == next.pacing
                 && $0.followPath == next.followPath
                 && $0.fontWeight == next.fontWeight && $0.fontSize == next.fontSize
+                && $0.fontFamily == next.fontFamily
                 // 单双排切换主行字体从 13 变 10,滚动距离跟着变 → 算滚动参数;只换副行文字 / 在译文和
                 // 罗马音之间切档不算 —— 主行一个数都没动,别把正在滚的句子打回开头。
                 && $0.secondaryKind.showsSecondaryRow == next.secondaryKind.showsSecondaryRow
@@ -430,6 +435,12 @@ final class MenuBarScrollingLabel: NSView {
         applyProgressFill()
     }
 
+    /// 看不见的时候把整棵图层树上的动画冻住,恢复时接着走(见 `MenuBarAnimation`)。跟播放进度绑定的
+    /// 染色 / 进度图标恢复后要由调用方强制对一次表(`updateKaraokeClock` / `updateProgressClock` 传 force)。
+    func setAnimationsPaused(_ paused: Bool) {
+        if paused { layer?.pauseMenuBarAnimations() } else { layer?.resumeMenuBarAnimations() }
+    }
+
     /// 退出滚动模式(这一句装得下、菜单栏歌词关掉、或者没在播放)。
     /// 必须真的把动画摘掉:留一条 repeatCount = .infinity 的动画在隐藏图层上,
     /// 渲染层会一直为它做无用功。
@@ -484,6 +495,8 @@ final class MenuBarScrollingLabel: NSView {
         fillClipLayer.removeAnimation(forKey: Self.fillAnimationKey)
         baseClipLayer.removeAnimation(forKey: Self.basePositionAnimationKey)
         baseClipLayer.removeAnimation(forKey: Self.baseBoundsAnimationKey)
+        // 三点那条呼吸是无限循环,图层藏起来它也照跑(同 clear() 头注那条理由)。
+        removeGapDotsAnimations()
         preparedSecondary = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -503,6 +516,7 @@ final class MenuBarScrollingLabel: NSView {
     func setHighlighted(_ on: Bool) {
         guard on != highlighted else { return }
         highlighted = on
+        lastColorKey = nil // 反白换的是文字色,绕过了 refreshColors 的判重键
         rebuildImage()
         applyKaraokeFill()
         // 反白期间进度填色也整个隐掉(同逐字染色:基础图已换成选中色,强调色叠在选中
@@ -740,10 +754,26 @@ final class MenuBarScrollingLabel: NSView {
     /// 颜色设置(文字色/染色色)变了:重排位图 + 重放填色几何,**不碰**滚动动画 ——
     /// 跟 setHighlighted 同一套安全边界。
     func refreshColors() {
+        // 颜色没变就什么都不做:设置页预览每次重算 body 都会调到这里,原来无条件把填色和进度动画摘掉重装,
+        // 紧随其后的漂移门就形同虚设,预览里每 ~2 秒小跳一下。
+        // 位图比例也进键:换到不同 DPI 的屏幕时 rebuildIfScaleChanged 也走这里。
+        let key = ColorKey(tint: tintColor, fill: karaokeFillColor, appearance: effectiveAppearance.name,
+                           scale: menuBarBitmapScale)
+        guard key != lastColorKey else { return }
+        lastColorKey = key
         rebuildImage()
         applyKaraokeFill()
         applyProgressFill()
     }
+
+    private struct ColorKey: Equatable {
+        var tint: NSColor
+        var fill: NSColor
+        var appearance: NSAppearance.Name
+        var scale: CGFloat
+    }
+
+    private var lastColorKey: ColorKey?
 
     /// 上一次 `rebuildImage()` 真正排出来那张图对应的全部输入。
     ///
@@ -755,6 +785,7 @@ final class MenuBarScrollingLabel: NSView {
         var icon: IconBadge?
         var fontWeight: OverlayFontWeight
         var fontSize: CGFloat
+        var fontFamily: String
         var secondaryText: String?
         var secondaryKind: LyricSecondaryLine
         var tint: NSColor
@@ -786,7 +817,7 @@ final class MenuBarScrollingLabel: NSView {
         guard let plan else { return nil }
         return BitmapInputs(
             text: plan.text, hasFill: plan.fillPath != nil, icon: plan.icon,
-            fontWeight: plan.fontWeight, fontSize: plan.fontSize,
+            fontWeight: plan.fontWeight, fontSize: plan.fontSize, fontFamily: plan.fontFamily,
             secondaryText: plan.secondaryText, secondaryKind: plan.secondaryKind,
             tint: tintColor, fill: karaokeFillColor, scale: menuBarBitmapScale,
             appearance: effectiveAppearance.name)
@@ -860,8 +891,10 @@ final class MenuBarScrollingLabel: NSView {
         guard let built else {
             // 排版失败(宽度算成 0、内存分配失败)——宁可什么都不显示,也不要留半张旧图。
             isHidden = true
-            // 这一次没排出来,判重记录必须清掉,否则下一次同样输入会被挡在门外、永远不重试。
+            // 这一次没排出来,判重记录必须清掉,否则下一次同样输入会被挡在门外、永远不重试。plan 也要清:
+            // 留着的话下一次同参数 present() 在 `next != plan` 那道去重就早退、只取消隐藏,一直空白到换句。
             lastBitmapInputs = nil
+            self.plan = nil
             return
         }
         prepared = built
@@ -1032,6 +1065,7 @@ final class MenuBarScrollingLabel: NSView {
         animation.duration = frames.duration
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
+        MenuBarAnimation.capped(animation, fps: MenuBarAnimation.scrollFPS)
         contentLayer.add(animation, forKey: Self.scrollAnimationKey)
     }
 
@@ -1082,6 +1116,7 @@ final class MenuBarScrollingLabel: NSView {
             animation.beginTime = contentLayer.convertTime(CACurrentMediaTime(), from: nil)
             animation.isRemovedOnCompletion = false
             animation.fillMode = .forwards
+            MenuBarAnimation.capped(animation, fps: MenuBarAnimation.scrollFPS)
             contentLayer.add(animation, forKey: Self.scrollAnimationKey)
         } else {
             rest(at: MenuBarMarquee.followScrollOffset(atMs: nowMs, path: path))
@@ -1152,6 +1187,7 @@ final class MenuBarScrollingLabel: NSView {
                 animation.beginTime = start
                 animation.isRemovedOnCompletion = false
                 animation.fillMode = .forwards
+                MenuBarAnimation.capped(animation, fps: MenuBarAnimation.decorativeFPS)
                 layer.add(animation, forKey: key)
             }
             install("bounds.size.width",
@@ -1270,6 +1306,7 @@ final class MenuBarScrollingLabel: NSView {
             breathe.repeatCount = .infinity
             breathe.beginTime = begin - phase * duration
             breathe.isRemovedOnCompletion = false
+            MenuBarAnimation.capped(breathe, fps: MenuBarAnimation.decorativeFPS)
             // 同一条动画对象 add 给三个图层没问题 —— CALayer.add 收的时候会自己拷一份。
             for dot in gapDotLayers { dot.add(breathe, forKey: Self.gapDotsBreatheAnimationKey) }
         }
@@ -1289,6 +1326,7 @@ final class MenuBarScrollingLabel: NSView {
             // 走完停在最后一帧:间奏尾巴那一小段(窗口已满、还没切到下一句)不能闪回地板亮度。
             lighting.fillMode = .forwards
             lighting.isRemovedOnCompletion = false
+            MenuBarAnimation.capped(lighting, fps: MenuBarAnimation.decorativeFPS)
             dot.add(lighting, forKey: Self.gapDotsOpacityAnimationKey)
         }
     }
@@ -1344,6 +1382,7 @@ final class MenuBarScrollingLabel: NSView {
                 animation.timingFunction = CAMediaTimingFunction(name: .linear)
                 animation.isRemovedOnCompletion = false
                 animation.fillMode = .forwards
+                MenuBarAnimation.capped(animation, fps: MenuBarAnimation.progressFPS)
                 layer.add(animation, forKey: key)
             }
             install("bounds.size.height",

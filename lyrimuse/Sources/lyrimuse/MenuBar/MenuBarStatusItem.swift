@@ -80,12 +80,34 @@ final class MenuBarStatusItem: NSObject {
         // (macOS 26 只认出生宽度,见 buttonForDisplayClass 头注)。原来"先 variableLength
         // 出生、refresh 再拆掉重建"等于启动就白白多一次邻居重排。
         panelController.onVisibilityChange = { [weak self] on in
+            self?.setButtonHighlighted(on)
             self?.scrollingLabel.setHighlighted(on)
             self?.liveIconView.setHighlighted(on)
             self?.hoverControls.setHighlighted(on)
             self?.setPanelOpen(on)
         }
         hoverControls.onHoverChange = { [weak self] inside in self?.handleHoverChange(inside) }
+        positionHintController.onVisibilityChange = { [weak self] open in
+            self?.positionHintIsOpen = open
+            if !open { self?.refresh() }
+        }
+
+        // 看不见就冻住常驻动画(见 MenuBarAnimation):锁屏 / 熄屏 / 切到别的用户,或者状态项所在的窗口
+        // 不可见(别的 App 全屏把菜单栏收起、菜单栏自动隐藏)。@Published 在 willSet 时发布,用参数值。
+        ScreenVisibility.shared.$isHidden.removeDuplicates()
+            .sink { [weak self] hidden in
+                self?.screensHidden = hidden
+                self?.applyAnimationPause()
+            }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)
+            .sink { [weak self] note in
+                guard let self, let window = note.object as? NSWindow,
+                      window === self.statusItem?.button?.window else { return }
+                self.applyAnimationPause()
+            }.store(in: &cancellables)
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .sink { [weak self] _ in self?.applyAnimationPause() }.store(in: &cancellables)
 
         let settings = AppSettings.shared
         let coordinator = PlaybackCoordinator.shared
@@ -202,6 +224,10 @@ final class MenuBarStatusItem: NSObject {
         // Plan.fontSize 保证重排。
         settings.$menuBarLyricsFontSize.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &cancellables)
+        // 字体族:同粗细,宽度和位图都跟着变(删掉一款自定义字体时它会被重置成空串,也走这里)。
+        // 图层那条路由 Plan.fontFamily 参与 present 判定与位图缓存键。
+        settings.$menuBarLyricsFontFamily.dropFirst().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &cancellables)
         // 副行(双排):档位一变,主行字体、显示哪一句(currentLine / compactLine)、槽宽都变 ——
         // 必须走 refresh()。下一句文本只在副行选「下一句」时有用,其余档位到 present() 是同参数空操作。
         settings.$menuBarSecondaryLine.dropFirst().receive(on: RunLoop.main)
@@ -276,6 +302,34 @@ final class MenuBarStatusItem: NSObject {
         }
     }
 
+    private var screensHidden = false
+    private var labelAnimationsPaused = false
+
+    /// 按钮此刻反白没有(右键菜单或面板开着)。只有「自定义文字色 + 文字直接画在按钮上」那条路要知道它,
+    /// 图层那条路自己有 setHighlighted。
+    private var buttonHighlighted = false
+
+    private func setButtonHighlighted(_ on: Bool) {
+        guard on != buttonHighlighted else { return }
+        buttonHighlighted = on
+        if !AppSettings.shared.menuBarLyricsTextColorHex.isEmpty { scheduleRefresh() }
+    }
+
+    /// 常驻动画该不该冻住。滚动歌词只看「看不看得见」;活体图标是纯装饰,系统开了「减弱动态效果」也冻住,
+    /// 停在当前一帧。冻住过的染色 / 进度图标恢复时强制对一次表 —— 冻结期间它们落后了多久就差多久。
+    private func applyAnimationPause() {
+        let windowVisible = statusItem?.button?.window?.occlusionState.contains(.visible) ?? true
+        let paused = screensHidden || !windowVisible
+        liveIconView.setAnimationsPaused(paused || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        guard paused != labelAnimationsPaused else { return }
+        labelAnimationsPaused = paused
+        scrollingLabel.setAnimationsPaused(paused)
+        if !paused {
+            syncKaraokeClock(force: true)
+            syncProgressClock(force: true)
+        }
+    }
+
     /// 把播放时钟(外推位置 + 歌词时间轴校准)喂给标签的填色动画。位置公式与歌词窗口
     /// KaraokeWordText 逐字填色完全同一条:anchor 外推 ?? 暂停位置,再加偏移校准。
     private func syncKaraokeClock(force: Bool = false) {
@@ -328,6 +382,16 @@ final class MenuBarStatusItem: NSObject {
                                                position: position)
     }
 
+    /// 菜单栏此刻显示的那一句是不是就是 currentLine —— 光比文字不够:副歌里相邻两行**同词不同时**,
+    /// 提前量那几秒里显示的已经是下一句(compactLine),文字却跟刚唱完的 currentLine 一模一样,拿后者的
+    /// 逐字时间轴去染,新句子一出场就是整句强调色、开唱时又退回去重染。按首词时间戳认是不是同一行。
+    private func displayedLineIsCurrent(_ current: SyncedLyricLine) -> Bool {
+        let coordinator = PlaybackCoordinator.shared
+        let displayed = AppSettings.shared.menuBarSecondaryLine.displayedLine(
+            compactLine: coordinator.compactLine, currentLine: coordinator.currentLine)
+        return displayed?.words?.first?.startMs == current.words?.first?.startMs
+    }
+
     /// 当前句的逐字填色路径。nil = 不染:开关关着、这句没有逐字数据、或标签文本跟逐字
     /// 数据对不上号(理论上 plainText 就是 words 拼接,这层守卫防的是两者在换句瞬间
     /// 读到不同代的数据 —— 对不上宁可不染,染错位置比不染难看得多)。
@@ -335,7 +399,7 @@ final class MenuBarStatusItem: NSObject {
         guard AppSettings.shared.menuBarLyricsKaraoke else { return nil }
         guard let line = PlaybackCoordinator.shared.currentLine,
               let words = line.words, !words.isEmpty,
-              line.plainText == text else { return nil }
+              line.plainText == text, displayedLineIsCurrent(line) else { return nil }
         let path = MenuBarMarquee.karaokeFillPath(
             words: words, wordEndXs: MenuBarMarqueeRenderer.wordEndXs(for: words, font: rowState.mainFont))
         return path.isEmpty ? nil : path
@@ -347,7 +411,7 @@ final class MenuBarStatusItem: NSObject {
     private func followReadingPath(for text: String) -> [MenuBarMarquee.KaraokeFillPoint]? {
         guard let line = PlaybackCoordinator.shared.currentLine,
               let words = line.words, !words.isEmpty,
-              line.plainText == text else { return nil }
+              line.plainText == text, displayedLineIsCurrent(line) else { return nil }
         let path = MenuBarMarquee.followReadingPath(
             words: words, wordEndXs: MenuBarMarqueeRenderer.wordEndXs(for: words, font: rowState.mainFont))
         return path.isEmpty ? nil : path
@@ -490,6 +554,13 @@ final class MenuBarStatusItem: NSObject {
     /// 左键面板(popover)开着没有。开着期间**一律不重建**状态栏项 —— 详见 present()
     /// 里那段分支。收起时补一次 refresh(),把期间挡下来的几何变化一次性落地。
     private var panelIsOpen = false
+    /// 右键菜单 / 首次「⌘ 拖拽」提示气泡开着没有。跟面板同一个理由:它们都锚在状态栏按钮上,开着期间
+    /// 重建会把锚拆掉。右键菜单借 performClick 弹出、追踪循环里 GCD 主队列照样会跑,推迟的重建
+    /// (pendingRefresh 走 asyncAfter)不挡就会在菜单开着时落地。
+    private var statusMenuIsOpen = false
+    private var positionHintIsOpen = false
+    /// 状态栏按钮此刻有东西锚在上面,不许重建(present() 里那道闸)。
+    private var anchorIsBusy: Bool { panelIsOpen || statusMenuIsOpen || positionHintIsOpen }
 
     private func setPanelOpen(_ open: Bool) {
         panelIsOpen = open
@@ -632,8 +703,8 @@ final class MenuBarStatusItem: NSObject {
         // 不排期补做,交给 setPanelOpen(false) 收面板那一刻的 refresh() —— 面板还开着就
         // 重建这件事本身没有安全的时机。期间内容照旧就地换(目标是图标才换,理由同下面
         // 那条推迟分支),歌词最多晚到面板收起。
-        if panelIsOpen, statusItem != nil {
-            logger.notice("slot rebuild suppressed (panel open): \(self.displayClass, privacy: .public) -> \(cls, privacy: .public)(\(length, privacy: .public))")
+        if anchorIsBusy, statusItem != nil {
+            logger.notice("slot rebuild suppressed (anchor busy): \(self.displayClass, privacy: .public) -> \(cls, privacy: .public)(\(length, privacy: .public))")
             // 内容不等几何(补,与下面推迟分支对齐):目标是图标就地画;目标是
             // 歌词就按当前(被锚住不许动的)槽宽画一版过渡 —— renderInterimLyrics 只改
             // button 内容、零重建零碰锚点,面板开着时调用同样安全。原来 text/fixed 直接
@@ -765,9 +836,17 @@ final class MenuBarStatusItem: NSObject {
                         interim?(button)
                     }
                 }
+                // 目标是图标、内容还没保持满 iconContentHoldSecs:在「满了」那一刻先醒一次把图标画上,
+                // 别等到几何那一半(slotReleaseSecs,8 秒)才一起醒 —— 那样暂停后要 8 秒才换图标;悬停三键
+                // 接管时歌词层已经清空,这 8 秒里槽位就是一块空白。
+                var wake = delay
+                if cls == "icon", let began = collapseObserveBegan {
+                    let holdLeft = Self.iconContentHoldSecs - now.timeIntervalSince(began)
+                    if holdLeft > 0 { wake = min(wake, holdLeft) }
+                }
                 let work = DispatchWorkItem { [weak self] in self?.refresh() }
                 pendingRefresh = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.05, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + wake + 0.05, execute: work)
                 return
             }
         }
@@ -813,12 +892,16 @@ final class MenuBarStatusItem: NSObject {
         let item = NSStatusBar.system.statusItem(withLength: length)
         statusItem = item
         attachButtonChrome(to: item) // 用的是换代后的 currentAutosaveName
+        // 新的状态项挂在新的窗口上,可见性按它重新判一次(之后靠遮挡通知跟着变)。
+        applyAnimationPause()
         // 上一代及更早的键过几秒清掉(旧项 dealloc 多半已经删了自己那条,这里兜底),别让每次
         // 重建都往 plist 里多留一条。当前代的键不动。
         if preservedPosition != nil {
-            let keep = Self.preferredPositionDefaultsKey(for: Self.currentAutosaveName)
             let prefix = Self.preferredPositionDefaultsKey(for: Self.statusItemAutosaveBaseName)
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                // 「当前代」在执行时才取:这 3 秒里可能又重建过一次,捕获重建当时的那一代会把新一代的键删掉,
+                // 状态项下次重建就跳到最左。
+                let keep = Self.preferredPositionDefaultsKey(for: Self.currentAutosaveName)
                 for key in UserDefaults.standard.dictionaryRepresentation().keys
                 where key.hasPrefix(prefix) && key != keep {
                     UserDefaults.standard.removeObject(forKey: key)
@@ -882,6 +965,7 @@ final class MenuBarStatusItem: NSObject {
         guard let item = statusItem else { return }
         let menu = menuController.makeMenu(
             onHighlightChange: { [weak self] on in
+                self?.setButtonHighlighted(on)
                 self?.scrollingLabel.setHighlighted(on)
                 self?.liveIconView.setHighlighted(on)
                 // 右键菜单是**可以**跟悬停接管同时在场的(指针停在这一项上按右键):反白
@@ -889,8 +973,12 @@ final class MenuBarStatusItem: NSObject {
                 self?.hoverControls.setHighlighted(on)
             })
         item.menu = menu
-        item.button?.performClick(nil)
+        statusMenuIsOpen = true
+        item.button?.performClick(nil) // 菜单追踪期间一直阻塞在这里,关掉才返回
+        statusMenuIsOpen = false
         item.menu = nil
+        // 菜单开着时挡下来的几何变化,收起这一刻一次性落地(同面板收起)。
+        refresh()
     }
 
     // MARK: - 悬停三键
@@ -1016,9 +1104,9 @@ final class MenuBarStatusItem: NSObject {
     ///  - 三个动作都套"点了才校验权限"的守卫。
     private func performTransportControl(_ control: MenuBarTransportControl) {
         switch control {
-        case .previous: withMusicPermission { MusicPlaybackController.previousTrack() }
-        case .playPause: withMusicPermission { PlaybackCoordinator.shared.userTogglePlayPause() }
-        case .next: withMusicPermission { MusicPlaybackController.nextTrack() }
+        case .previous: Self.withMusicPermission { MusicPlaybackController.previousTrack() }
+        case .playPause: Self.withMusicPermission { PlaybackCoordinator.shared.userTogglePlayPause() }
+        case .next: Self.withMusicPermission { MusicPlaybackController.nextTrack() }
         }
     }
 
@@ -1029,7 +1117,9 @@ final class MenuBarStatusItem: NSObject {
     /// 这已经是这段守卫的第四份(另三份在 LyricsOverlayWindowController.withMusicPermission、
     /// NotchLyricsView.controlButton、GlobalHotkeys)。抽成公共函数要同时动那三个文件、且它们
     /// 各自的 Task 隔离标注不同 —— 记一笔,下次碰到这三处之一时一起收。
-    private func withMusicPermission(_ action: @escaping @MainActor () -> Void) {
+    ///
+    /// 面板里的三个播放键也走这一份(MenuBarPanel)。
+    static func withMusicPermission(_ action: @escaping @MainActor () -> Void) {
         Task { @MainActor in
             guard await MusicAutomationPermission.checkForCurrentPlayerSafely(askIfNeeded: true) else {
                 NSSound.beep()
@@ -1300,8 +1390,9 @@ final class MenuBarStatusItem: NSObject {
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !next.isEmpty
         else { return 0 }
+        // 按这一刻的排法量:双排时主行是 10pt,按单行的 13pt 量会把槽撑大,歌词一来又缩回去,多一次重建。
         return MenuBarMarqueeRenderer.width(
-            of: next, font: MenuBarMarqueeRenderer.mainFont(for: next, twoRows: false))
+            of: next, font: MenuBarMarqueeRenderer.mainFont(for: next, twoRows: rowState.twoRows))
     }
 
     private func renderInterimLyrics(_ button: NSStatusBarButton, text: String) {
@@ -1388,7 +1479,9 @@ final class MenuBarStatusItem: NSObject {
         // attachButtonChrome 里那一次赋值只是出生值,这里每次显示都重设,换粗细才能立刻生效。
         button.font = MenuBarMarqueeRenderer.font(for: visible)
         let textHex = AppSettings.shared.menuBarLyricsTextColorHex
-        if textHex.isEmpty {
+        // 右键菜单 / 面板开着(按钮反白)时交给 AppKit 画选中色,跟图层那条路「高亮优先」同一口径 ——
+        // 富文本里写死的自定义色在蓝底上不会自己换。
+        if textHex.isEmpty || buttonHighlighted {
             button.title = visible
         } else {
             button.attributedTitle = NSAttributedString(string: visible, attributes: [

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import LyrimuseCore
 
 // 状态栏那个下拉菜单(从 SwiftUI 搬到 AppKit)。
@@ -49,8 +50,27 @@ final class MenuBarStatusMenu: NSObject, NSMenuDelegate {
         AutomationAlertMonitor.shared.refresh()
     }
 
-    func menuWillOpen(_ menu: NSMenu) { onHighlightChange?(true) }
-    func menuDidClose(_ menu: NSMenu) { onHighlightChange?(false) }
+    /// 菜单开着时盯权限提示:menuNeedsUpdate 里先用缓存的结果建菜单、再发起一次异步刷新,结果回来时菜单
+    /// 多半还开着 —— 当场重建一次,别让这次打开看到的是上一次的结论(刚撤销权限时第一次打开看不到提示)。
+    private var alertObservation: AnyCancellable?
+
+    func menuWillOpen(_ menu: NSMenu) {
+        onHighlightChange?(true)
+        alertObservation = AutomationAlertMonitor.shared.$alert.dropFirst()
+            .sink { [weak self, weak menu] _ in
+                // @Published 在 willSet 时发布,rebuild 读的是 shared.alert:排到下一拍再读。菜单追踪期间
+                // GCD 主队列照样会跑(RunLoop.main 的 default 模式不跑,所以不用 receive(on:))。
+                DispatchQueue.main.async {
+                    guard let self, let menu else { return }
+                    self.rebuild(menu)
+                }
+            }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        alertObservation = nil
+        onHighlightChange?(false)
+    }
 
     // MARK: - 构建
 

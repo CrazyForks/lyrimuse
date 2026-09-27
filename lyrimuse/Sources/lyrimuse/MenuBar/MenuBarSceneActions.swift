@@ -86,7 +86,9 @@ enum MenuBarSceneActions {
 
 /// 空视图,只干两件事:把环境 action 存进 AppActions;首次启动时把引导向导拉起来。
 private struct SceneActionRegistrar: View {
-    @ObservedObject private var settings = AppSettings.shared
+    // 不整对象订阅 AppSettings:这里只在 onAppear 读一次 hasCompletedOnboarding,订了的话任何一次设置写入
+    // (拖滑杆时每个鼠标事件一次)都让这块隐形视图的 body 白算一遍。
+    private var settings: AppSettings { AppSettings.shared }
     @Environment(\.openSettings) private var openSettingsAction
     @Environment(\.openWindow) private var openWindowAction
 

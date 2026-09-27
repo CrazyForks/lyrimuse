@@ -163,11 +163,26 @@ final class MenuBarLiveIconView: NSView {
     /// 上一次给图层灌位图时用的比例(0 = 还没灌过);换屏后跟 menuBarBitmapScale 对不上就重灌。
     private var lastBitmapScale: CGFloat = 0
 
+    /// 染好的位图,按「哪张图稿 × 比例 × 外观 × 高亮」记住。外观回调会被状态项的多份副本重绘连着触发
+    /// (见 MenuBarScrollingLabel 外观回调那段),每次都重画一遍 1~2 张位图、换掉图层内容是白干;
+    /// 命中时连图稿都不用画。键空间很小(几张图稿 × 两种外观 × 两档高亮),满了整张清掉。
+    private var tintCache: [String: CGImage] = [:]
+
     /// contents 与 contentsScale 必须是同一个比例,所以永远一起设(见 NSView.menuBarBitmapScale)。
-    private func setTinted(_ target: CALayer, _ image: NSImage) {
+    private func setTinted(_ target: CALayer, key: String, _ artwork: () -> NSImage) {
         let scale = menuBarBitmapScale
+        let cacheKey = "\(key)|\(scale)|\(effectiveAppearance.name.rawValue)|\(highlighted)"
+        let image: CGImage?
+        if let hit = tintCache[cacheKey] {
+            image = hit
+        } else {
+            image = tintedContents(artwork(), scale: scale)
+            if tintCache.count > 32 { tintCache.removeAll() }
+            tintCache[cacheKey] = image
+        }
         target.contentsScale = scale
-        target.contents = tintedContents(image, scale: scale)
+        // 同一张就不换:换 contents 会让状态项副本再重绘一轮,又把外观回调叫回来。
+        if (target.contents as CFTypeRef?) !== image { target.contents = image }
         lastBitmapScale = scale
     }
 
@@ -186,7 +201,7 @@ final class MenuBarLiveIconView: NSView {
     private func retintIfScaleChanged() {
         guard currentStyle != nil, lastBitmapScale != 0, lastBitmapScale != menuBarBitmapScale else { return }
         if currentStyle == .classic {
-            setTinted(classicLinesMask, MenuBarIconStyle.classicLinesMaskArtwork())
+            setTinted(classicLinesMask, key: "classicLinesMaskArtwork") { MenuBarIconStyle.classicLinesMaskArtwork() }
         }
         applyColor()
     }
@@ -227,13 +242,32 @@ final class MenuBarLiveIconView: NSView {
         imageView.isHidden = false
         imageView.image = MenuBarIconStyle.cachedImage(for: .waveform)
         applyColor()
-        // SF 原生的 variable-color 流动。 必须显式给 repeat 选项:variableColor 同时
-        // 是 Discrete/Indefinite 两种效果,addSymbolEffect 默认按"播一轮就停"处理 ——
-        // 实测:不带选项时流动一轮之后就冻住了。
+        if !animationsPaused { addWaveformEffect() }
+    }
+
+    /// SF 原生的 variable-color 流动。 必须显式给 repeat 选项:variableColor 同时
+    /// 是 Discrete/Indefinite 两种效果,addSymbolEffect 默认按"播一轮就停"处理 ——
+    /// 实测:不带选项时流动一轮之后就冻住了。它不走图层动画,冻图层时间停不住它,暂停时单独摘、恢复时再加。
+    private func addWaveformEffect() {
         if #available(macOS 15.0, *) {
             imageView.addSymbolEffect(.variableColor.iterative, options: .repeat(.continuous))
         } else {
             imageView.addSymbolEffect(.variableColor.iterative, options: .repeating)
+        }
+    }
+
+    /// 看不见、或者系统开了「减弱动态效果」时把律动冻住,停在当前这一帧(图标本身照常显示)。
+    private var animationsPaused = false
+
+    func setAnimationsPaused(_ paused: Bool) {
+        guard paused != animationsPaused else { return }
+        animationsPaused = paused
+        if paused {
+            layer?.pauseMenuBarAnimations()
+            if currentStyle == .waveform { imageView.removeAllSymbolEffects() }
+        } else {
+            layer?.resumeMenuBarAnimations()
+            if currentStyle == .waveform { addWaveformEffect() }
         }
     }
 
@@ -288,6 +322,7 @@ final class MenuBarLiveIconView: NSView {
             animation.duration = period
             animation.repeatCount = .infinity
             animation.isRemovedOnCompletion = false
+            MenuBarAnimation.capped(animation, fps: MenuBarAnimation.decorativeFPS)
             key.add(animation, forKey: Self.animationKey)
         }
     }
@@ -333,7 +368,7 @@ final class MenuBarLiveIconView: NSView {
         if classicLinesMask.contents == nil {
             // 蒙版只看 alpha、与外观无关,首次搭台时灌一次就够。
             classicLinesMask.frame = classicLinesHost.bounds
-            setTinted(classicLinesMask, MenuBarIconStyle.classicLinesMaskArtwork())
+            setTinted(classicLinesMask, key: "classicLinesMaskArtwork") { MenuBarIconStyle.classicLinesMaskArtwork() }
         }
         applyColor()
         for (i, bar) in classicLineBars.enumerated() {
@@ -357,7 +392,7 @@ final class MenuBarLiveIconView: NSView {
         spin.duration = secondsPerTurn
         spin.repeatCount = .infinity
         spin.isRemovedOnCompletion = false
-        return spin
+        return MenuBarAnimation.capped(spin, fps: MenuBarAnimation.decorativeFPS)
     }
 
     /// 一条按曲线密集采样(48 点/轮)的无缝循环动画 —— 渲染层在采样点之间继续插值,
@@ -374,7 +409,7 @@ final class MenuBarLiveIconView: NSView {
         animation.duration = duration
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
-        return animation
+        return MenuBarAnimation.capped(animation, fps: MenuBarAnimation.decorativeFPS)
     }
 
     // MARK: - 摆位 / 颜色
@@ -452,18 +487,18 @@ final class MenuBarLiveIconView: NSView {
         // 位图渲染,别让其它款换色也白付这个钱。
         switch currentStyle {
         case .vinyl:
-            setTinted(movingPart, MenuBarIconStyle.vinylDiscArtwork())
-            setTinted(staticPart, MenuBarIconStyle.vinylArmArtwork())
+            setTinted(movingPart, key: "vinylDiscArtwork") { MenuBarIconStyle.vinylDiscArtwork() }
+            setTinted(staticPart, key: "vinylArmArtwork") { MenuBarIconStyle.vinylArmArtwork() }
         case .disc:
-            setTinted(movingPart, MenuBarIconStyle.discArtwork())
+            setTinted(movingPart, key: "discArtwork") { MenuBarIconStyle.discArtwork() }
         case .metronome:
-            setTinted(movingPart, MenuBarIconStyle.metronomeNeedleArtwork())
-            setTinted(staticPart, MenuBarIconStyle.metronomeBodyArtwork())
+            setTinted(movingPart, key: "metronomeNeedleArtwork") { MenuBarIconStyle.metronomeNeedleArtwork() }
+            setTinted(staticPart, key: "metronomeBodyArtwork") { MenuBarIconStyle.metronomeBodyArtwork() }
         case .pianokeys:
-            setTinted(staticPart, MenuBarIconStyle.pianoKeysArtwork())
+            setTinted(staticPart, key: "pianoKeysArtwork") { MenuBarIconStyle.pianoKeysArtwork() }
             pressKeys.forEach { $0.backgroundColor = solid }
         case .classic:
-            setTinted(staticPart, MenuBarIconStyle.classicNoteArtwork())
+            setTinted(staticPart, key: "classicNoteArtwork") { MenuBarIconStyle.classicNoteArtwork() }
             classicLineBars.forEach { $0.backgroundColor = solid }
         default:
             break

@@ -22,10 +22,11 @@ private final class PanelPlayback: ObservableObject {
     @Published private(set) var title = ""
     @Published private(set) var artist = ""
     @Published private(set) var displayArtist = ""
-    @Published private(set) var album = ""
     @Published private(set) var displayAlbum = ""
     @Published private(set) var isPlayingNow = false
-    @Published private(set) var currentLine: SyncedLyricLine?
+    /// 播放键图标用的乐观状态(点了当场翻,见 PlaybackCoordinator.userTogglePlayPause)。isPlayingNow 要等
+    /// 0.5~1 秒回读才翻,容易被当成没点上而连点,媒体层假暂停那几秒还会闪成 ▶。
+    @Published private(set) var isPlayingSmoothed = false
     /// 单行展示面取这一行,见 CompactLyricLead。面板那一格也是**定高单行**,跟灵动岛/
     /// 菜单栏文字同一处境,所以一起走这套。
     @Published private(set) var compactLine: SyncedLyricLine?
@@ -79,10 +80,10 @@ private final class PanelPlayback: ObservableObject {
             // 两份都要:`artist` 给「有没有曲目」那道判断用(它问的是载荷里有没有东西),
             // `displayArtist` 只画在卡片上。判据见 `PlayerArtistFix.displayArtist`。
             p.$displayArtist.removeDuplicates().sink { [weak self] in self?.displayArtist = $0 },
-            p.$album.removeDuplicates().sink { [weak self] in self?.album = $0 },
             p.$displayAlbum.removeDuplicates().sink { [weak self] in self?.displayAlbum = $0 },
             p.$isPlayingNow.removeDuplicates().sink { [weak self] in self?.isPlayingNow = $0 },
-            p.$currentLine.removeDuplicates().sink { [weak self] in self?.currentLine = $0 },
+            // 面板只读 compactLine、不读 currentLine:两者每句各变一次、不同步,订后者等于每句多重绘一次整个面板。
+            p.$isPlayingSmoothed.removeDuplicates().sink { [weak self] in self?.isPlayingSmoothed = $0 },
             // 面板里那一行歌词跟状态栏项是同一个展示面(菜单栏),吃同一颗「卡拉OK效果」
             // (`menuBarLyricsKaraoke`,是它唯一的闸——此前还叠着一颗全局开关):关着时把行
             // 压成整行(`SyncedLyricLine.lineLevel`),`lyricContent` 的判定链自然落到 `.plain`。
@@ -142,6 +143,7 @@ final class MenuBarPanelController {
     /// 那段),不收的话切走之后它还挂在那儿。 挂在 NSWorkspace 的通知中心,不是
     /// NotificationCenter.default,拆的时候也要从那边拆。
     private var spaceChangeObserver: NSObjectProtocol?
+    private var appActivationObserver: NSObjectProtocol?
     /// 面板开/关 —— 状态栏那行滚动歌词要跟着反白,跟 NSMenu 的 delegate 回调同一件事。
     var onVisibilityChange: ((Bool) -> Void)?
 
@@ -150,6 +152,9 @@ final class MenuBarPanelController {
             popover.performClose(nil)
             return
         }
+        // 上一个面板的收尾还排在队里没跑(它推迟到下一拍,见下面 didClose 那段)时就又点了一次:先把它的
+        // 三道失焦监听拆掉,不然下面给新面板装的会把句柄覆盖掉、旧的永远拆不掉。
+        teardownDismissWatchers()
         let pop = NSPopover()
         pop.behavior = .transient
         // 「点了马上弹出」:NSPopover 默认那段弹出/收起动画本身就有
@@ -161,11 +166,14 @@ final class MenuBarPanelController {
         pop.contentViewController = FirstMouseHostingController(rootView: content)
         popover = pop
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        let popID = ObjectIdentifier(pop)
         closeObserver = NotificationCenter.default.addObserver(
             forName: NSPopover.didCloseNotification, object: pop, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
+                // 收尾推迟到了下一拍,这期间可能已经开了一个新面板:收的必须还是关掉的这一个,
+                // 否则会把新面板的失焦监听拆掉、把它的引用置空、还提前告诉状态栏「面板关了」。
+                guard let self, let current = self.popover, ObjectIdentifier(current) == popID else { return }
                 self.teardownDismissWatchers()
                 self.onVisibilityChange?(false)
                 // 面板收起即整树释放:下次 toggle 本来就是全新建
@@ -198,6 +206,15 @@ final class MenuBarPanelController {
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak pop] _ in
+            Task { @MainActor in pop?.performClose(nil) }
+        }
+        // 别的 App 被激活也收起:空闲卡片上点「打开 X」把播放器带到前台时,面板不会自己关(本 App 从没活跃过,
+        // 不会 resign;也没有落在别的 App 上的鼠标按下),不收就一直挂在播放器上面。Cmd-Tab 同理。
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak pop] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
             Task { @MainActor in pop?.performClose(nil) }
         }
         onVisibilityChange?(true)
@@ -237,6 +254,10 @@ final class MenuBarPanelController {
             NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver)
         }
         spaceChangeObserver = nil
+        if let appActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(appActivationObserver)
+        }
+        appActivationObserver = nil
     }
 }
 
@@ -529,7 +550,7 @@ private struct MenuBarPanelView: View {
                         .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
-                .help(PlaybackCoordinator.shared.resolvedPlayerDisplayName ?? "")
+                .modifier(OptionalHelp(text: PlaybackCoordinator.shared.resolvedPlayerDisplayName))
             }
     }
     }
@@ -557,12 +578,17 @@ private struct MenuBarPanelView: View {
                     trackLyricsOffsetMs: playback.trackLyricsOffsetMs,
                     lyricsOffsetStepMs: playback.lyricsOffsetStepMs)
                 HStack(spacing: 28) {
-                    controlButton("backward.fill", size: 13) { MusicPlaybackController.previousTrack() }
-                    controlButton(playback.isPlayingNow ? "pause.fill" : "play.fill", size: 18) {
-                        // 乐观回声版:歌词窗封面缩放/图标点击即动(见 userTogglePlayPause)。
-                        PlaybackCoordinator.shared.userTogglePlayPause()
+                    // 三个键跟状态栏悬停三键同一道「点了才校验权限」(没授权时响一声,不是静默失败)。
+                    controlButton("backward.fill", size: 13) {
+                        MenuBarStatusItem.withMusicPermission { MusicPlaybackController.previousTrack() }
                     }
-                    controlButton("forward.fill", size: 13) { MusicPlaybackController.nextTrack() }
+                    controlButton(playback.isPlayingSmoothed ? "pause.fill" : "play.fill", size: 18) {
+                        // 乐观回声版:歌词窗封面缩放/图标点击即动(见 userTogglePlayPause)。
+                        MenuBarStatusItem.withMusicPermission { PlaybackCoordinator.shared.userTogglePlayPause() }
+                    }
+                    controlButton("forward.fill", size: 13) {
+                        MenuBarStatusItem.withMusicPermission { MusicPlaybackController.nextTrack() }
+                    }
                 }
             }
         }
@@ -835,6 +861,14 @@ private struct MenuBarPanelView: View {
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
+                // 点击全走盖在上面的 AppKit 视图(TileMouseRouter)的鼠标事件,VoiceOver 的「按下」到不了那里:
+                // 把主动作和「长按 / 右键」那一下各挂成一个无障碍动作。
+                .accessibilityAction { action() }
+                .accessibilityActions {
+                    if let openQuick {
+                        Button(L10n.t("打开设置"), action: openQuick)
+                    }
+                }
         }
 
         /// 静止 → 悬停 → 按下三档系统填充色,一档比一档实一点点——默认的 Button + buttonStyle
