@@ -499,6 +499,32 @@ func runNotchTests() {
         expectEqual(S.gateRetryDelay(after: .never, round: S.fastStartRounds), YouTubeMusicAdProbe.adRefreshInterval,
                     "门槛节奏: 出了快探窗口,「不给跳」才当真、退回心跳")
 
+        // 卡片外轮廓:照机器刘海 —— 跟刘海一样高时底部圆角 = 高 × 0.25,展开封顶 20;顶边两侧 4pt 内凹肩膀。
+        typealias O = NotchOutline
+        expectEqual(O.bottomRadius(height: 32, bodyWidth: 300), 8, "外轮廓: 32pt 高(14 寸刘海)底部圆角 8pt")
+        expectEqual(O.bottomRadius(height: 38, bodyWidth: 300), 9.5, "外轮廓: 38pt 高(16 寸刘海)按比例 9.5pt")
+        expectEqual(O.bottomRadius(height: 190, bodyWidth: 460), O.maxBottomRadius, "外轮廓: 展开态封顶 20pt")
+        expectEqual(O.bottomRadius(height: 60, bodyWidth: 300), 15, "外轮廓: 介于两者之间按高度连续变,展开/收起动画里不跳")
+        expectEqual(O.bottomRadius(height: 32, bodyWidth: 10), 5, "外轮廓: 主体太窄时半径不超过半宽(出场动画起始那条缝)")
+        expectEqual(O.shoulder(width: 256, height: 32), O.shoulderRadius, "外轮廓: 常规尺寸肩膀 4pt")
+        expectEqual(O.shoulder(width: 8, height: 32), 2, "外轮廓: 太窄时肩膀收小,不把主体吃没")
+        expectEqual(O.shoulder(width: 256, height: 4), 2, "外轮廓: 太矮时肩膀收小")
+        expectEqual(O.shoulder(width: 0, height: 0), 0, "外轮廓: 零尺寸不出负数")
+        do {
+            let uiDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("lyrimuse/UI")
+            func src(_ n: String) -> String { (try? String(contentsOf: uiDir.appendingPathComponent(n), encoding: .utf8)) ?? "" }
+            let v = src("NotchLyricsView.swift"), reveal = src("NotchRevealShape.swift"), stageSrc = src("NotchEditorStage.swift")
+            expectEqual(v.contains("content.clipShape(NotchHangingShape.card)"), true, "外轮廓契约: 卡片自己那道裁剪用 .card")
+            expectEqual(v.contains("NotchHangingShape.card\n                .fill(playback.notchCardStyle.fill)"), true, "外轮廓契约: 纯色底用 .card")
+            expectEqual(reveal.contains("return NotchHangingShape.card.path(in: visible)"), true,
+                        "外轮廓契约: 出场裁剪终态与卡片同形(真窗口里只留这一道)")
+            expectEqual(stageSrc.contains("NotchHangingShape.card\n            .stroke("), true, "外轮廓契约: 编辑台拖宽度那圈虚线跟卡片同形")
+            expectEqual(v.contains("NotchHangingShape(bottomCornerRadius: 20)") || reveal.contains("NotchHangingShape(bottomCornerRadius: 20)")
+                        || stageSrc.contains("NotchHangingShape(bottomCornerRadius: 20)"), false,
+                        "外轮廓契约: 卡片不再有写死 20pt 圆角的那一份")
+        }
+
         // 自动跳过:只在页面确认能跳时按,一条广告最多两次,跳过了 / 缺权限就不再试。
         typealias A = YouTubeMusicAdAutoSkip
         expectEqual(A.shouldAttempt(enabled: true, state: .ready, attempts: 0, stopped: false), true, "自动跳过: 开着 + 能跳 = 按")
@@ -767,17 +793,21 @@ func runNotchTests() {
         let barsWidth: CGFloat = 16      // EqualizerBars.width = 5×2.0 + 4×1.5
         let cardPadding: CGFloat = 10    // NotchMetrics.cardHorizontalPadding
         let earWidth: CGFloat = 29.5
+        let shoulder = NotchOutline.shoulderRadius   // 卡片主体两侧各收的那一截,可视耳朵外沿跟着往里 4pt
 
-        // 宽度下限(最小宽):保持居中,往里推 (earWidth − barsWidth − cardPadding) / 2 = 2.25pt。
+        // 宽度下限(最小宽):保持居中,往里推 (earWidth − barsWidth − cardPadding + shoulder) / 2。
         let inset = B.soloEqualizerInset(
-            earWidth: earWidth, barsWidth: barsWidth, cardPadding: cardPadding,
+            earWidth: earWidth, barsWidth: barsWidth, cardPadding: cardPadding, shoulder: shoulder,
             expanded: false, atMinimumWidth: true)
-        expectEqual(inset, 1.75, "音浪(最小宽): 实测那组几何要往里推 (29.5 − 16 − 10) / 2 = 1.75pt")
+        expectEqual(inset, 3.75, "音浪(最小宽): 实测那组几何要往里推 (29.5 − 16 − 10 + 4) / 2 = 3.75pt")
+        expectEqual(B.soloEqualizerInset(earWidth: earWidth, barsWidth: barsWidth, cardPadding: cardPadding, shoulder: 0,
+                                         expanded: false, atMinimumWidth: true), 1.75,
+                    "音浪(最小宽): 不算肩膀会少推 2pt —— 音浪偏外(右耳即偏右)正是加肩膀后漏算的这一截")
 
         // 这条才是目的:推完之后音浪中心必须落在「刘海边沿 → 卡片外沿」正中。
         // 以耳朵容器左沿(= 刘海边沿)为原点。
         let leadingAfter = earWidth - barsWidth - inset
-        let visibleCenter = (earWidth + cardPadding) / 2
+        let visibleCenter = (earWidth + cardPadding - shoulder) / 2
         expectEqual(leadingAfter + barsWidth / 2, visibleCenter,
                     "音浪(最小宽): 推完之后音浪中心 == 可视耳朵中心")
 
@@ -786,33 +816,33 @@ func runNotchTests() {
         let centerInContainer = (earWidth - barsWidth) / 2 + barsWidth / 2
         expectNotEqual(centerInContainer, visibleCenter,
                        "音浪(最小宽反例): 居中于 earWidth 不等于居中于可视耳朵")
-        expectEqual(visibleCenter - centerInContainer, cardPadding / 2,
-                    "音浪(最小宽反例): 两者正好差半个 cardHorizontalPadding")
+        expectEqual(visibleCenter - centerInContainer, (cardPadding - shoulder) / 2,
+                    "音浪(最小宽反例): 两者正好差 (cardHorizontalPadding − 肩膀) 的一半")
 
         // 窄耳朵兜底:装不下音浪 + 那半截边距时退回贴外缘,不许变成负 padding 把音浪推出卡片。
-        expectEqual(B.soloEqualizerInset(earWidth: barsWidth + cardPadding, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+        expectEqual(B.soloEqualizerInset(earWidth: barsWidth + cardPadding - shoulder, barsWidth: barsWidth,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: false, atMinimumWidth: true), 0,
                     "音浪(最小宽): 刚好装下时不推")
         expectEqual(B.soloEqualizerInset(earWidth: 20, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: false, atMinimumWidth: true), 0,
                     "音浪(最小宽): 窄耳朵夹 0")
 
         // 比下限宽:一律贴外缘,不再居中 —— 同一组几何,顶不顶在下限给出不同答案。
         expectEqual(B.soloEqualizerInset(earWidth: earWidth, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: false, atMinimumWidth: false), 0,
                     "音浪(稳态): 不顶在下限就贴外缘 —— 居中只在最小宽那一档成立")
         expectEqual(B.soloEqualizerInset(earWidth: 60, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: false, atMinimumWidth: false), 0,
                     "音浪(稳态): 耳朵再宽也是贴外缘,不会越推越多")
         expectNotEqual(B.soloEqualizerInset(earWidth: earWidth, barsWidth: barsWidth,
-                                            cardPadding: cardPadding,
+                                            cardPadding: cardPadding, shoulder: shoulder,
                                             expanded: false, atMinimumWidth: true),
                        B.soloEqualizerInset(earWidth: earWidth, barsWidth: barsWidth,
-                                            cardPadding: cardPadding,
+                                            cardPadding: cardPadding, shoulder: shoulder,
                                             expanded: false, atMinimumWidth: false),
                        "音浪: 同一组几何,顶不顶在下限给出不同答案(判据是「卡片是否最小宽」这个定义性宽度)")
 
@@ -824,11 +854,11 @@ func runNotchTests() {
         let expandedEarWidth = (482 - 179 - 20) / 2.0        // 展开默认宽 482,实测刘海 179
         expectEqual(expandedEarWidth, 141.5, "音浪(展开): 展开态单耳 141.5pt")
         expectEqual(B.soloEqualizerInset(earWidth: expandedEarWidth, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: true, atMinimumWidth: false), 0,
                     "音浪(展开): 展开一律贴外缘")
         expectEqual(B.soloEqualizerInset(earWidth: expandedEarWidth, barsWidth: barsWidth,
-                                         cardPadding: cardPadding,
+                                         cardPadding: cardPadding, shoulder: shoulder,
                                          expanded: true, atMinimumWidth: true), 0,
                     "音浪(展开): 稳态顶在下限时 hover 展开,展开仍然贴外缘(guard 先看展开)")
 
@@ -856,6 +886,8 @@ func runNotchTests() {
         expectEqual(viewSrc.contains("&& leftModule == .none")
                     && viewSrc.contains("equalizerOnRight && rightModule == .none"), true,
                     "音浪居中(契约): 边界是「这只耳朵没有模块」——有模块时仍跟模块一起贴外缘")
+        expectEqual(viewSrc.contains("shoulder: NotchOutline.shoulderRadius,"), true,
+                    "音浪居中(契约): 顶行把卡片肩膀传进公式(漏传 = 最小宽时音浪偏外 2pt)")
         expectEqual(viewSrc.contains("atMinimumWidth: controller.isCardAtMinimumWidth"), true,
                     "音浪居中(契约): 「顶在下限」判据确实从 chrome 传进来了 —— 漏传等于最小宽那档也贴外缘")
         expectEqual(viewSrc.contains("expanded: controller.isExpanded"), true,

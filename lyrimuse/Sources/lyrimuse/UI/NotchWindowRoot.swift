@@ -141,7 +141,7 @@ struct NotchWindowRoot: View {
         // prompt 只有真窗口传 `.shared`(「发现新播放器」提示);编辑台预览拿默认的惰性替身。
         NotchLyricsView(controller: controller, prompt: .shared)
             // 卡片外形的裁剪由下面 keyframeAnimator 里那道 NotchRevealShape 统一负责(终态与
-            // NotchHangingShape(20) 重合,见 NotchRevealShape 头注),NotchLyricsView 自己那道
+            // NotchHangingShape.card 重合,见 NotchRevealShape 头注),NotchLyricsView 自己那道
             // 就不再裁了 —— 两道 clipShape 是两层 mask,尺寸动画期间每帧都要各重设一次路径
             // (Time Profiler:mask/clip 更新约占动画期间主线程忙时的 10%)。
             // 设置页编辑台没有这层壳,那边照旧由 NotchLyricsView 自己裁。

@@ -12,8 +12,8 @@ struct NotchRevealState {
 }
 
 /// 出场动画用的裁剪形状:卡片顶部居中的一块「挂着的胶囊」—— 宽 = 卡宽 × widthFraction、高 = 卡高 ×
-/// heightFraction、顶边贴刘海、底部两角圆角(半径随可见高度收:矮的时候是半圆,长满时回到卡片自己的 20)。
-/// 终态 (1, 1) 与 `NotchLyricsView` 自己那道 `NotchHangingShape(bottomCornerRadius: 20)` 完全重合 —— 所以
+/// heightFraction、顶边贴刘海,外形就是 `NotchHangingShape.card`(圆角与肩膀按可见矩形的尺寸算)。
+/// 终态 (1, 1) 与 `NotchLyricsView` 自己那道 `NotchHangingShape.card` 完全重合 —— 所以
 /// 真窗口里**只留这一道**:`NotchWindowRoot` 通过环境值 `notchHostClipsCard` 让卡片自己那道
 /// 不再裁(两层同形状的 mask 在尺寸动画里每帧各重设一次路径,是白付的),平时这道裁剪就是卡片的外形。
 ///
@@ -24,14 +24,11 @@ struct NotchRevealShape: Shape {
     var widthFraction: CGFloat
     var heightFraction: CGFloat
 
-    static let bottomCornerRadius: CGFloat = 20
-
     func path(in rect: CGRect) -> Path {
         let width = rect.width * min(1, max(0, widthFraction))
         let height = rect.height * min(1, max(0, heightFraction))
         let visible = CGRect(x: rect.midX - width / 2, y: rect.minY, width: width, height: height)
-        // NotchHangingShape 自己会把圆角半径夹到 min(r, w/2, h/2),矮的时候自然是半圆底。
-        return NotchHangingShape(bottomCornerRadius: Self.bottomCornerRadius).path(in: visible)
+        return NotchHangingShape.card.path(in: visible)
     }
 }
 
@@ -56,7 +53,7 @@ extension EnvironmentValues {
     }
 
     /// 宿主是否已经替卡片裁好了外形。`NotchWindowRoot` 设 true:它挂在卡片外面的那道
-    /// `NotchRevealShape` 终态就是 `NotchHangingShape(20)`,`NotchLyricsView` 再裁一遍是重复的一层 mask,
+    /// `NotchRevealShape` 终态就是 `NotchHangingShape.card`,`NotchLyricsView` 再裁一遍是重复的一层 mask,
     /// 尺寸动画期间每帧多重设一次路径。默认 false —— 设置页编辑台等没有这层壳的宿主,卡片自己裁。
     /// 这个值对某个宿主是**常量**,不要在运行期切换:`NotchLyricsView` 按它选 clipShape 分支,切换会
     /// 重建子树、丢掉跑马灯等 @State。

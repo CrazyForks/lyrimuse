@@ -1,0 +1,30 @@
+import CoreGraphics
+
+/// 灵动岛卡片外轮廓的两个尺寸(纯函数,selftest 钉着)。形状本身在 App 侧 `NotchHangingShape.card`。
+///
+/// 照着机器刘海画:刘海底部两角是约 8pt 的圆角(32pt 高的刘海)、跟屏幕上沿相接处有约 4pt 的内凹圆角
+/// (「肩膀」),见 05 章决策 #46。
+///
+/// **底部圆角随卡片高度走**(`bottomRadius`):卡片跟刘海一样高时(常驻 / 收起)按刘海的比例
+/// (高 × `bottomRadiusPerHeight`,32pt → 8pt、16 寸 38pt → 9.5pt),高了就跟着变大、封顶
+/// `maxBottomRadius`(展开态)。半径只由路径所在矩形的高度决定,展开 / 收起的尺寸动画里每一帧都按
+/// 当时的高度重算,不用另给动画插值。
+///
+/// **肩膀往里收、不往外扩**(`shoulderRadius`):顶边保持卡片全宽,顶边以下两侧各往里收一个肩膀半径,
+/// 中间用内凹圆弧接上。轮廓因此从不越出卡片矩形 —— 窗口尺寸、悬停区域都不用动;代价是卡片主体两侧
+/// 各窄 4pt,那里只有背景(两耳内容离边都不止 4pt)。
+public enum NotchOutline {
+    public static let bottomRadiusPerHeight: CGFloat = 0.25
+    public static let maxBottomRadius: CGFloat = 20
+    public static let shoulderRadius: CGFloat = 4
+
+    /// 肩膀半径:矩形太窄 / 太矮时收小(出场动画起始那一帧只有一条缝)。
+    public static func shoulder(width: CGFloat, height: CGFloat) -> CGFloat {
+        max(0, min(shoulderRadius, width / 4, height / 2))
+    }
+
+    /// 底部圆角半径。`bodyWidth` 是两侧收完肩膀之后的主体宽度。
+    public static func bottomRadius(height: CGFloat, bodyWidth: CGFloat) -> CGFloat {
+        max(0, min(maxBottomRadius, height * bottomRadiusPerHeight, bodyWidth / 2, height / 2))
+    }
+}

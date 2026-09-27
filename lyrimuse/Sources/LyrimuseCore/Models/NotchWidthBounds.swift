@@ -33,8 +33,9 @@ public enum NotchWidthBounds {
     /// 文字跑马灯溢出时必须从外缘起排,居中会让开头几个字挂到容器外面。
     ///
     /// 居中那一档的算法,推导(以耳朵容器左沿 = 刘海边沿为原点,E = earWidth,
-    /// W = barsWidth,P = cardPadding):可视区 = `[0, E + P]`,居中时音浪左沿 =
-    /// `(E + P − W) / 2`;贴外缘时是 `E − W`。两者之差 `(E − W − P) / 2` 就是要往里推的量。
+    /// W = barsWidth,P = cardPadding,S = shoulder):可视区 = `[0, E + P − S]`(卡片主体在顶边以下
+    /// 两侧各收了一个肩膀半径,见 `NotchOutline`;音浪在顶行垂直居中,早在肩膀那几 pt 之下),居中时音浪
+    /// 左沿 = `(E + P − S − W) / 2`;贴外缘时是 `E − W`。两者之差 `(E − W − P + S) / 2` 就是要往里推的量。
     /// 夹 0 是给窄卡片兜底 —— 耳朵窄到装不下音浪 + 那半截边距时宁可退回贴外缘,也不能变成
     /// 负 padding 把音浪推出卡片。
     ///
@@ -49,11 +50,11 @@ public enum NotchWidthBounds {
     /// 就结束了,外面还有 `topRow` 那层 `cardHorizontalPadding` 才到卡片外沿,贴外缘 = 贴内容区
     /// 边界,于是外侧看起来多留了那一截的一半。
     public static func soloEqualizerInset(
-        earWidth: CGFloat, barsWidth: CGFloat, cardPadding: CGFloat,
+        earWidth: CGFloat, barsWidth: CGFloat, cardPadding: CGFloat, shoulder: CGFloat,
         expanded: Bool, atMinimumWidth: Bool
     ) -> CGFloat {
         guard !expanded, atMinimumWidth else { return 0 }
-        return max(0, (earWidth - barsWidth - cardPadding) / 2)
+        return max(0, (earWidth - barsWidth - cardPadding + shoulder) / 2)
     }
 
     /// 展开态卡片的**真实**宽度:展开设定值和稳态真实宽取大者。

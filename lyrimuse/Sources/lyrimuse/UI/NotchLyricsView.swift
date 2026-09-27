@@ -1040,7 +1040,7 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                     .animation(.easeInOut(duration: 0.5), value: playback.blurredArtworkImage)
             }
         } else {
-            NotchHangingShape(bottomCornerRadius: 20)
+            NotchHangingShape.card
                 .fill(playback.notchCardStyle.fill)
         }
     }
@@ -1172,6 +1172,7 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         let soloInset = NotchWidthBounds.soloEqualizerInset(
             earWidth: earWidth, barsWidth: EqualizerBars.width,
             cardPadding: NotchMetrics.cardHorizontalPadding,
+            shoulder: NotchOutline.shoulderRadius,
             expanded: controller.isExpanded,
             atMinimumWidth: controller.isCardAtMinimumWidth)
         return HStack(spacing: 0) {
@@ -3258,37 +3259,58 @@ struct NotchCardClip: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if enabled {
-            content.clipShape(NotchHangingShape(bottomCornerRadius: 20))
+            content.clipShape(NotchHangingShape.card)
         } else {
             content
         }
     }
 }
 
+/// 挂在屏幕上沿的卡片外形:顶边贴死屏幕顶、底部两角圆角。
+///
+/// 两种用法:
+///  - `.card`:灵动岛卡片本身,尺寸照机器刘海走 —— 底部圆角随高度(`NotchOutline.bottomRadius`),顶边两侧
+///    各一道内凹的「肩膀」(`NotchOutline.shoulder`),轮廓不越出矩形。卡片、出场裁剪、编辑台里拖宽度时
+///    那圈虚线**都用这一个**,三处各写一份迟早会对不上。
+///  - `NotchHangingShape(bottomCornerRadius:)`:固定圆角、没有肩膀,给设置页里缩小画的示意图用。
 struct NotchHangingShape: Shape {
-    var bottomCornerRadius: CGFloat
+    /// nil = 按高度自适应(`.card`)。
+    var bottomCornerRadius: CGFloat?
+    var shoulders = false
+
+    static let card = NotchHangingShape(bottomCornerRadius: nil, shoulders: true)
+
+    init(bottomCornerRadius: CGFloat?, shoulders: Bool = false) {
+        self.bottomCornerRadius = bottomCornerRadius
+        self.shoulders = shoulders
+    }
 
     func path(in rect: CGRect) -> Path {
-        let r = min(bottomCornerRadius, rect.width / 2, rect.height / 2)
+        let s = shoulders ? NotchOutline.shoulder(width: rect.width, height: rect.height) : 0
+        let bodyWidth = rect.width - 2 * s
+        let r = bottomCornerRadius.map { min($0, bodyWidth / 2, rect.height / 2) }
+            ?? NotchOutline.bottomRadius(height: rect.height, bodyWidth: bodyWidth)
+        let left = rect.minX + s
+        let right = rect.maxX - s
         var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
-        path.addArc(
-            center: CGPoint(x: rect.maxX - r, y: rect.maxY - r),
-            radius: r,
-            startAngle: .degrees(0),
-            endAngle: .degrees(90),
-            clockwise: false
-        )
-        path.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
-        path.addArc(
-            center: CGPoint(x: rect.minX + r, y: rect.maxY - r),
-            radius: r,
-            startAngle: .degrees(90),
-            endAngle: .degrees(180),
-            clockwise: false
-        )
+        if s > 0 {
+            // 右肩:圆心在主体外侧,从顶边弯进右侧边 —— 内凹。
+            path.addArc(center: CGPoint(x: rect.maxX, y: rect.minY + s), radius: s,
+                        startAngle: .degrees(-90), endAngle: .degrees(-180), clockwise: true)
+        }
+        path.addLine(to: CGPoint(x: right, y: rect.maxY - r))
+        path.addArc(center: CGPoint(x: right - r, y: rect.maxY - r), radius: r,
+                    startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: left + r, y: rect.maxY))
+        path.addArc(center: CGPoint(x: left + r, y: rect.maxY - r), radius: r,
+                    startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        if s > 0 {
+            path.addLine(to: CGPoint(x: left, y: rect.minY + s))
+            path.addArc(center: CGPoint(x: rect.minX, y: rect.minY + s), radius: s,
+                        startAngle: .degrees(0), endAngle: .degrees(-90), clockwise: true)
+        }
         path.closeSubpath()
         return path
     }
