@@ -88,7 +88,7 @@ func TestLyricsFillSweepRetriesSameKeyWhenOffline(t *testing.T) {
 		}
 		return lyricsSweepOutcome{filled: key == "a"}
 	})
-	st := runLyricsFillSweepKeys(context.Background(), []string{"a", "b"}, false, lyricsFillStatus{Running: true, Total: 2})
+	st := runLyricsFillSweepKeys(context.Background(), []string{"a", "b"}, false, lyricsFillSweepGap, lyricsFillStatus{Running: true, Total: 2})
 	if strings.Join(*calls, ",") != "a,a,b" {
 		t.Fatalf("断网那条该重搜一次再往下: %v", *calls)
 	}
@@ -105,7 +105,7 @@ func TestLyricsFillSweepStopsWhenOfflineTooLong(t *testing.T) {
 	calls, _ := stubLyricsFillSweep(t, func(context.Context, string) lyricsSweepOutcome {
 		return lyricsSweepOutcome{offline: true}
 	})
-	st := runLyricsFillSweepKeys(context.Background(), []string{"a", "b", "c"}, false, lyricsFillStatus{Running: true, Total: 3})
+	st := runLyricsFillSweepKeys(context.Background(), []string{"a", "b", "c"}, false, lyricsFillSweepGap, lyricsFillStatus{Running: true, Total: 3})
 	if len(*calls) != lyricsFillSweepOfflineLimit {
 		t.Fatalf("该试 %d 次后停下,实际 %d 次: %v", lyricsFillSweepOfflineLimit, len(*calls), *calls)
 	}
@@ -129,7 +129,7 @@ func TestLyricsFillSweepCancelMidSearchDoesNotCount(t *testing.T) {
 		}
 		return lyricsSweepOutcome{filled: true}
 	})
-	st := runLyricsFillSweepKeys(ctx, []string{"a", "b", "c"}, false, lyricsFillStatus{Running: true, Total: 3})
+	st := runLyricsFillSweepKeys(ctx, []string{"a", "b", "c"}, false, lyricsFillSweepGap, lyricsFillStatus{Running: true, Total: 3})
 	if strings.Join(*calls, ",") != "a,b" {
 		t.Fatalf("停下之后不该再搜: %v", *calls)
 	}

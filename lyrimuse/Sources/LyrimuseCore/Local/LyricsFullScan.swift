@@ -29,7 +29,7 @@ public enum LyricsFullScan {
         /// 每首歌的粗略耗时估计(秒),由 collector 发布 —— 界面那句「预计约 N 小时」用它。
         ///
         /// 跟 `scoringVersion` 同一个理由:这个数由 collector 侧的常量决定
-        /// (`lyricsFullScanGap` + 一轮全源搜索的估计),**App 不该自己写死一份**。
+        /// (`lyricsManualSweepGap` + 一轮全源搜索的估计),**App 不该自己写死一份**。
         /// 之前界面里就硬编码着 25 秒、注释还写着「15 秒固定间隔」,collector 把
         /// 全量那一档改成 5 秒之后,那个数和那句话当场都成了错的,而没有任何东西会报错。
         ///

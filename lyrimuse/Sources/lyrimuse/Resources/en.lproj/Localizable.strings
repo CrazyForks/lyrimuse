@@ -8,6 +8,7 @@
 "%1$@ · 来自 %2$@" = "%1$@ · from %2$@";
 "%1$@ 从「%2$@」导出的备份" = "Backup exported from “%2$@” on %1$@";
 "%1$@ 在此项被扣 %2$d 分，胜者未被扣分，%3$d 分的分差全部来自此项。" = "%1$@ lost %2$d points on this term and the winner did not; the entire %3$d-point gap comes from it.";
+"%1$@ 小时 %2$@ 分钟" = "%1$@ h %2$@ min";
 "%1$@ 年 %2$@ 月 %3$@ 日" = "%1$@-%2$@-%3$@";
 "%1$@ 年共 %2$@ 次" = "%2$@ plays in %1$@";
 "%1$@ 年前的今天听了 %2$@ 次，循环最多的是《%3$@》" = "%1$@ years ago today: %2$@ plays, most on repeat: %3$@";
@@ -24,6 +25,7 @@
 "%@ · 登录将在 %@ 过期，建议重新连接" = "%@ · Sign-in expires on %@; reconnecting is recommended";
 "%@ · 纯文本，可直接编辑；外观与快捷键另存于 App 偏好设置，不在此处" = "%@ · Plain text you can edit directly. Appearance and shortcuts are stored in the app’s preferences, not here";
 "%@ 个文件导入失败，其余已导入" = "%@ file(s) failed to import; the rest were imported";
+"%@ 分钟" = "%@ min";
 "%@ 分钟前更新" = "Updated %@ min ago";
 "%@ 天" = "%@ days";
 "%@ 字" = "%@ characters";
@@ -149,7 +151,7 @@
 "上次搜索 %1$@ 首，补全 %2$@ 首" = "Last run: searched %1$@, found %2$@";
 "上次检查：%@" = "Last checked: %@";
 "上次检测通过（%@）" = "Verified working (%@)";
-"上次结果" = "Last Run";
+"上次补搜 %1$@ 首，补全 %2$@ 首" = "Last run: searched %1$@, found %2$@";
 "上次：过了 %1$@ 首就被停下，更新 %2$@ 首" = "Last run: stopped after %1$@, updated %2$@";
 "上次：过了 %1$@ 首，更新 %2$@ 首" = "Last run: went through %1$@, updated %2$@";
 "上游源没连上、没法查：%@" = "Upstream unreachable, could not search: %@";
@@ -167,6 +169,7 @@
 "下面的「连接」要用这对密钥完成授权：先在 Last.fm 创建一个应用，拿到 API Key 和 Secret" = "Connecting below needs this key pair. Create a Last.fm application first to get an API Key and Secret";
 "不 scrobble：%@" = "Not scrobbled: %@";
 "不再悬停显示播放控制" = "Stop Showing Playback Controls on Hover";
+"不到 1 分钟" = "under a minute";
 "不到 1 小时" = "under an hour";
 "不可用：%@" = "Unusable: %@";
 "不含宽度和总开关" = "Width and the master toggle are left alone";
@@ -216,6 +219,7 @@
 "仅用首位歌手" = "First credited artist only";
 "仅纯文本" = "Plain Text Only";
 "仅纯音乐" = "Instrumental Only";
+"仅补搜筛选出的 %@ 首" = "Search Only the %@ Filtered Songs";
 "仅证据薄" = "Thin evidence only";
 "仅逐字" = "Word Timing Only";
 "仅部分专辑提供；低电量或「减弱动态效果」时自动暂停" = "Available on some albums only; pauses in Low Power Mode or with Reduce Motion on";
@@ -240,7 +244,6 @@
 "企业微信" = "WeCom";
 "会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题" = "Saves the current text, background, and stroke colors as a theme you can reapply anytime";
 "会覆盖当前所有设置，包括已连接的账号和播放数据发往的地址，并立即重启 Lyrimuse" = "Overwrites every current setting, including connected accounts and where your playback data is sent, then restarts Lyrimuse";
-"会跳过纯音乐和手动修正过的歌词" = "Skips instrumentals and manually edited lyrics";
 "位置" = "Position";
 "位置已固定为「%@」，在 ⚙ 菜单里可改" = "Position is fixed to “%@” — change it in the ⚙ menu";
 "位置已锁定" = "Position locked";
@@ -276,10 +279,10 @@
 "全部来源" = "All Sources";
 "全部歌手" = "All Artists";
 "全部源重新查询" = "re-queried every source";
-"全部缺失歌词（%@ 首）" = "All missing lyrics (%@)";
 "全部设置" = "All Settings";
 "全部设置…" = "All Settings…";
 "全量重新扫库" = "Full library rescan";
+"全量重新扫库…" = "Full Library Rescan…";
 "全量重新扫库？" = "Rescan the whole library?";
 "共 %@ 次" = "%@ plays total";
 "共 %@ 首" = "%@ songs";
@@ -592,6 +595,7 @@
 "已安装" = "Installed";
 "已安装但未运行" = "Installed but not running";
 "已安装但未运行（上次退出码 %d）" = "Installed but not running (last exit code %d)";
+"已完成 %1$@ / %2$@ 首" = "%1$@ of %2$@ done";
 "已导出两个文件：设置和歌词库（%@）。搬到新电脑时两个都要拷" = "Exported two files: the settings and the lyrics library (%@). Copy both when moving to a new Mac.";
 "已导出到本地的歌词文件也会一并删除，下次播放这首歌会重新走一遍匹配解析，不保证一定能找到一样的歌词" = "Its exported .lrc file is deleted too. The next time this song plays, Lyrimuse searches for lyrics again and may not find the same ones";
 "已导出到本地的歌词文件也会一并删除，且无法撤销。下次播放这些歌会重新走一遍匹配解析，不保证能找到一样的歌词" = "Their exported .lrc files are deleted too, and this can't be undone. The next time you play these songs, Lyrimuse searches again and may not find the same lyrics";
@@ -677,7 +681,6 @@
 "当前使用" = "In use";
 "当前启用的其余源没有应答：%@" = "Other enabled sources did not answer: %@";
 "当前歌词的出处" = "Where the current lyrics came from";
-"当前筛选结果（%@ 首）" = "Current filter results (%@)";
 "当前连续 · 最长 %@ 天" = "Current streak · longest %@ days";
 "待推送的收听" = "Pending Scrobbles";
 "待播清单" = "Playing Next";
@@ -909,6 +912,7 @@
 "最近一次评估" = "Latest evaluation";
 "最近一轮解析时一个歌词源都没有应答（多半是那一刻网络不通），不是「这首歌没有词」。会自动重搜，也可以用工具栏「补搜歌词」立刻重来" = "Not one lyric source replied during the last resolve — most likely the network was down at that moment, not that this song has no lyrics. It will be retried automatically; you can also use “Find Missing Lyrics” in the toolbar to redo it now";
 "最近听过" = "Recently played";
+"最近完成" = "Recently Finished";
 "最近记录" = "Recent Scrobbles";
 "有 %@ 个歌词源没连上" = "%@ lyric sources could not be reached";
 "有 %@ 首歌是因为这个开关被锁定的。解锁后它们会重新接受自动重搜和打分改进；你手动编辑过正文的歌不受影响，始终保持锁定" = "%@ songs are locked because of this switch. Unlocking lets automatic re-search and scoring improvements adjust them again; songs whose lyrics you edited by hand are unaffected and stay locked";
@@ -1221,6 +1225,7 @@
 "第 %@ 次听" = "Play #%@";
 "第三方许可" = "Third-party licenses";
 "等待 Last.fm 确认（通常几秒内）" = "Waiting for Last.fm to acknowledge (usually a few seconds)";
+"等待下一首…" = "Waiting for the next song…";
 "等歌开始就会显示歌词" = "Lyrics will show once the song starts";
 "签名密钥（可选）" = "Signature Secret (Optional)";
 "简体" = "Simplified";
@@ -1288,7 +1293,6 @@
 "翻译语言包" = "Translation Languages";
 "耳机" = "Headphones";
 "联网搜索候选歌词" = "Search Online for Lyrics";
-"联网补搜缺失的歌词" = "Search online for missing lyrics";
 "背景" = "Background";
 "背景偏亮时，歌词文字自动转为深色" = "Lyrics text turns dark automatically when the background is light";
 "背景颜色" = "Background Color";
@@ -1336,9 +1340,11 @@
 "行上按 %1$@ 次计，明细合计 %2$@ 次" = "The row counts %1$@, the breakdown totals %2$@";
 "行为" = "Behavior";
 "行数" = "Lines";
+"补全 %1$@ · 没找到 %2$@ · 跳过 %3$@" = "Found %1$@ · Not found %2$@ · Skipped %3$@";
 "补全曲目信息" = "Track info backfill";
 "补提交" = "Backfill";
 "补提交没能完成，请稍后再试" = "Backfill didn't finish. Try again later.";
+"补搜 %@ 首缺失的歌词" = "Search Lyrics for %@ Missing Songs";
 "补搜中 %1$@/%2$@" = "Searching %1$@/%2$@";
 "补搜歌词" = "Find Missing Lyrics";
 "补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动" = "Searches again for songs with no lyrics or plain text only. Instrumentals and manually corrected songs are left alone.";
@@ -1568,7 +1574,7 @@
 "逐字歌词，唱到哪个字亮到哪个字；没有逐字数据的歌整行高亮" = "Word-by-word lyrics: each word lights up as it is sung. Songs without word timings highlight the whole line";
 "逐行" = "Line-by-line";
 "逐行歌词" = "Line-by-line";
-"逐首搜索，每首间隔约 15 秒" = "One track at a time, about 15 seconds apart";
+"逐首联网搜索，每首间隔约 5 秒；会跳过纯音乐和手动修正过的歌词" = "Searches one song at a time, about 5 seconds apart. Instrumentals and manually corrected lyrics are skipped.";
 "通用" = "General";
 "通知平台" = "Notification Platform";
 "那天最后一次：%@" = "Last played that day: %@";

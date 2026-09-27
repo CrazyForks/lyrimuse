@@ -816,75 +816,6 @@
         }
       }
     },
-    "全部缺失歌词（%@ 首）" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All missing lyrics (%@)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部缺失歌词（%@ 首）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部缺少的歌詞（%@ 首）"
-          }
-        }
-      }
-    },
-    "当前筛选结果（%@ 首）" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Current filter results (%@)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前筛选结果（%@ 首）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前篩選結果（%@ 首）"
-          }
-        }
-      }
-    },
-    "联网补搜缺失的歌词" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Search online for missing lyrics"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "联网补搜缺失的歌词"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "聯網補搜缺少的歌詞"
-          }
-        }
-      }
-    },
     "上次搜索 %1$@ 首，补全 %2$@ 首" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -927,29 +858,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已被手動停止"
-          }
-        }
-      }
-    },
-    "上次结果" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last Run"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上次结果"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上次結果"
           }
         }
       }
@@ -33495,40 +33403,6 @@
         }
       }
     },
-    "逐首搜索，每首间隔约 15 秒" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "One track at a time, about 15 seconds apart"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "逐首搜尋，每首間隔約 15 秒"
-          }
-        }
-      }
-    },
-    "会跳过纯音乐和手动修正过的歌词" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Skips instrumentals and manually edited lyrics"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "會略過純音樂和手動修正過的歌詞"
-          }
-        }
-      }
-    },
     "时间轴整体偏移" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36130,6 +36004,210 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "前 %1$d 首佔 %2$d%%"
+          }
+        }
+      }
+    },
+    "补全 %1$@ · 没找到 %2$@ · 跳过 %3$@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Found %1$@ · Not found %2$@ · Skipped %3$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補全 %1$@ · 沒找到 %2$@ · 跳過 %3$@"
+          }
+        }
+      }
+    },
+    "等待下一首…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for the next song…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待下一首…"
+          }
+        }
+      }
+    },
+    "不到 1 分钟" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "under a minute"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不到 1 分鐘"
+          }
+        }
+      }
+    },
+    "%@ 分钟" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ min"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 分鐘"
+          }
+        }
+      }
+    },
+    "%1$@ 小时 %2$@ 分钟" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ h %2$@ min"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 小時 %2$@ 分鐘"
+          }
+        }
+      }
+    },
+    "已完成 %1$@ / %2$@ 首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ of %2$@ done"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已完成 %1$@ / %2$@ 首"
+          }
+        }
+      }
+    },
+    "最近完成" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recently Finished"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近完成"
+          }
+        }
+      }
+    },
+    "补搜 %@ 首缺失的歌词" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search Lyrics for %@ Missing Songs"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補搜 %@ 首缺失的歌詞"
+          }
+        }
+      }
+    },
+    "仅补搜筛选出的 %@ 首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search Only the %@ Filtered Songs"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅補搜篩選出的 %@ 首"
+          }
+        }
+      }
+    },
+    "全量重新扫库…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Library Rescan…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全庫重新掃描…"
+          }
+        }
+      }
+    },
+    "逐首联网搜索，每首间隔约 5 秒；会跳过纯音乐和手动修正过的歌词" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Searches one song at a time, about 5 seconds apart. Instrumentals and manually corrected lyrics are skipped."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "逐首聯網搜尋，每首間隔約 5 秒；會跳過純音樂和手動修正過的歌詞"
+          }
+        }
+      }
+    },
+    "上次补搜 %1$@ 首，补全 %2$@ 首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last run: searched %1$@, found %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次補搜 %1$@ 首，補全 %2$@ 首"
           }
         }
       }

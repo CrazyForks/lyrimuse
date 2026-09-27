@@ -198,29 +198,29 @@ func TestLyricsFillSweepFirstDelay(t *testing.T) {
 	}
 }
 
-// 两首之间的间隔分两档:补空慢、全量快。跟上面那条同一个理由 —— 选错常量不报错,
-// 只是全库多花十几个小时,而那要等一天才看得出来。
+// 两首之间的间隔分两档:自动补空慢、用户点出来的(手动补搜 / 全量扫库)快。跟上面那条同一个
+// 理由 —— 选错常量不报错,只是多花几十分钟到十几个小时,而那要等跑完才看得出来。
 func TestLyricsFillSweepPace(t *testing.T) {
 	if got := lyricsFillSweepPace(false); got != lyricsFillSweepGap {
-		t.Errorf("补空扫描应当用 lyricsFillSweepGap: got %v, want %v", got, lyricsFillSweepGap)
+		t.Errorf("自动补空应当用 lyricsFillSweepGap: got %v, want %v", got, lyricsFillSweepGap)
 	}
-	if got := lyricsFillSweepPace(true); got != lyricsFullScanGap {
-		t.Errorf("全量扫库应当用 lyricsFullScanGap: got %v, want %v", got, lyricsFullScanGap)
+	if got := lyricsFillSweepPace(true); got != lyricsManualSweepGap {
+		t.Errorf("用户点出来的那一轮应当用 lyricsManualSweepGap: got %v, want %v", got, lyricsManualSweepGap)
 	}
-	if lyricsFullScanGap >= lyricsFillSweepGap {
-		t.Errorf("全量那一档必须比补空短,否则这次改动没有意义: full=%v sweep=%v",
-			lyricsFullScanGap, lyricsFillSweepGap)
+	if lyricsManualSweepGap >= lyricsFillSweepGap {
+		t.Errorf("手动那一档必须比自动补空短,否则分两档没有意义: manual=%v auto=%v",
+			lyricsManualSweepGap, lyricsFillSweepGap)
 	}
 	// 下限守卫:一首歌会打出 100+ 个请求散到十几个主机,而整个采集器没有 per-host 限流器。
 	// gap 是这些突发之间唯一的喘息 —— 真要压到 2 秒以下,得先补限流,不能只改这个数。
-	if lyricsFullScanGap < 2*time.Second {
+	if lyricsManualSweepGap < 2*time.Second {
 		t.Errorf("gap %v 太短:没有 per-host 限流器兜底时这是唯一的喘息,先补限流再压",
-			lyricsFullScanGap)
+			lyricsManualSweepGap)
 	}
 	// 5300 首的全库一轮别超过一天 —— 超了「全量重新扫库」这个功能就没人用得下去。
 	const libraryTracks = 5300
 	const searchSecondsPerTrack = 3 // 实测:18 秒/首 - 15 秒 gap
-	total := time.Duration(libraryTracks) * (lyricsFullScanGap + searchSecondsPerTrack*time.Second)
+	total := time.Duration(libraryTracks) * (lyricsManualSweepGap + searchSecondsPerTrack*time.Second)
 	if total > 24*time.Hour {
 		t.Errorf("按 %d 首估算全库要 %v,超过一天了", libraryTracks, total)
 	}

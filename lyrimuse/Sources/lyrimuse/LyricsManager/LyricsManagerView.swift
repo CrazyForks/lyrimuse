@@ -650,6 +650,12 @@ struct LyricsManagerView: View {
     // 点了补搜、collector 还没接手的那几秒(LyricsFillSweep.isPending):按钮置灰、工具栏先转起来,
     // 免得用户以为没点上再点一次。由点击处置 true,轮询按 isPending 清掉。
     @State private var fillSweepPending = false
+    /// 点下去的是不是「全量重新扫库」:接手前那几秒按钮上说哪一句。
+    @State private var fillSweepPendingIsFull = false
+    /// collector 公布的全量扫库状态(打分版本号、有没有一轮没跑完);nil = collector 还没起来过或版本太老,
+    /// 那时「全量重新扫库」入口不出现(同设置页那一行)。跟补搜进度同一个轮询节拍读,开销是一次 stat。
+    @State private var fullScanState: LyricsFullScan.State?
+    @State private var confirmFullScan = false
     /// 上一次「闲时」问磁盘的时刻,见 `LyricsManagerRefresh`。
     @State private var lastIdleRefresh = Date.distantPast
     // nil = 全部歌手/专辑。跟 SourceFilter/TimingFilter 不同,歌手/专辑的候选值不是固定
@@ -1602,6 +1608,7 @@ struct LyricsManagerView: View {
                     guard windowSurface.isVisible else { return }
                     await store.reload(onlyIfChanged: true)
                     refreshPlaceholder()
+                    fullScanState = LyricsFullScan.current
                     while !Task.isCancelled {
                         // 扫描跑着时 2 秒一次(进度文件每条都推进,工具栏那颗按钮要跟着动),刚点了补搜、
                         // 等 collector 接手那几秒 1 秒一次,没在跑就 5 秒。
@@ -1613,6 +1620,8 @@ struct LyricsManagerView: View {
                         let previous = fillSweepStatus
                         let sweep = LyricsFillSweep.current
                         if sweep != fillSweepStatus { fillSweepStatus = sweep }
+                        let full = LyricsFullScan.current
+                        if full != fullScanState { fullScanState = full }
                         if fillSweepPending && !LyricsFillSweep.isPending { fillSweepPending = false }
                         // 扫描期间缓存文件每搜完一首都会变,可列表上看得见的东西只在补出一首、一轮开始或结束
                         // 时才变(LyricsFillSweep.changesVisibleRows);每条都整份重读一次要一两秒 CPU。
@@ -1670,6 +1679,20 @@ struct LyricsManagerView: View {
             Button(L10n.t("取消"), role: .cancel) {}
         } message: {
             Text(String(format: L10n.t("这会清掉你为 %d 首歌手动调出来的歌词时间轴校正值，无法撤销。歌词内容本身不受影响；设置里的「时间轴偏移」也不会被清掉。清掉之后，这些歌会重新交给后台自动更新歌词源"), offsets.trackOffsetCount))
+        }
+        // 工具栏「补搜歌词」菜单里的「全量重新扫库」。文案、待扫首数与预计时长跟设置页那一行共用同一份
+        // (LyricsLibraryStatsPanel 的几个静态函数),两个入口说的数不能分叉。
+        .confirmationDialog(
+            L10n.t("全量重新扫库？"),
+            isPresented: $confirmFullScan,
+            titleVisibility: .visible
+        ) {
+            Button(L10n.t("开始扫描")) {
+                if LyricsFillSweep.requestFullScan() { fillSweepPending = true; fillSweepPendingIsFull = true }
+            }
+            Button(L10n.t("取消"), role: .cancel) {}
+        } message: {
+            Text(fullScanConfirmMessage)
         }
         // 电台校准的清空确认。同样单独挂一层,理由见上面那条。
         .confirmationDialog(
@@ -1898,12 +1921,48 @@ struct LyricsManagerView: View {
         let retryableAll = store.summaries.filter(EnrichCacheStore.isFillSweepRetryable).map(\.key)
         let retryableVisible = sortedFiltered.filter(EnrichCacheStore.isFillSweepRetryable).map(\.key)
         return Menu {
+            // 菜单照 macOS 菜单的写法:菜单项是动作(动词开头,弹确认框的带「…」),状态是菜单顶上 / 底下
+            // 各一两行灰字(Time Machine 那种「最近备份：…」),规则说明放进悬停提示和确认框,不占菜单行。
             if let status, running {
                 // 这一轮**不一定**是补空重试:「全量重新扫库」复用同一条通道(状态文件、
-                // 单轮互斥、取消都共用,见 collector/lyricsfullscan.go 头注),所以两句文案都得
-                // 按 isFullScan 分流。不分流的话,全量跑着的时候这里会说「停止重试」「正在重试
-                // 无歌词条目」,而实际在跑的是全量扫库 —— 说的跟做的不是一回事。
+                // 单轮互斥、取消都共用,见 collector/lyricsfullscan.go 头注),所以文案都得
+                // 按 isFullScan 分流 —— 全量跑着的时候说「停止补搜」「正在补搜」,说的跟做的就不是一回事。
                 let isFull = status.isFullScan
+                // 顶上是此刻在做什么(标题)+ 进度与结果分布 + 大约还要多久;全量扫库的详情在设置页
+                // 「歌词库」那几行,这里只留标题和停止。
+                Section {
+                    if !isFull {
+                        Text(String(format: L10n.t("已完成 %1$@ / %2$@ 首"), "\(status.done)", "\(status.total)"))
+                        Text(String(format: L10n.t("补全 %1$@ · 没找到 %2$@ · 跳过 %3$@"),
+                                    "\(status.filled)", "\(status.missedCount)", "\(status.skippedCount)"))
+                        if status.done < status.total {
+                            Text(String(format: L10n.t("大约还要%@"), Self.fillSweepRemainingText(status)))
+                        }
+                    }
+                } header: {
+                    // 上一首一个歌词源都没连上时 collector 在原地等网络,那时说这个,不说「正在搜索」。
+                    // 两首之间(补搜隔几秒才搜下一首)没有「当前这首」:搜过至少一首就说在等下一首,一首都没搜
+                    // 就还在准备。全量那一轮的兜底走现成的「全量重新扫库」,不另起一句只露脸一瞬的翻译串。
+                    if status.isOffline {
+                        Text(L10n.t("网络不通，稍后重试…"))
+                    } else if let current = status.current {
+                        Text(String(format: L10n.t("正在搜索：%@"), LyricsFillSweep.displayName(key: current)))
+                    } else if isFull {
+                        Text(L10n.t("全量重新扫库"))
+                    } else {
+                        Text(status.done > 0 ? L10n.t("等待下一首…") : L10n.t("正在准备补搜…"))
+                    }
+                }
+                // 最近几首:结果只用图标说(上面那行已经用文字写了三种各几首),行里只放「歌名 — 歌手」。
+                if !isFull, let recent = status.recent, !recent.isEmpty {
+                    Section {
+                        ForEach(Array(recent.enumerated()), id: \.offset) { _, item in
+                            Self.fillSweepRecentRow(item)
+                        }
+                    } header: {
+                        Text(L10n.t("最近完成"))
+                    }
+                }
                 Section {
                     Button(role: .destructive) {
                         LyricsFillSweep.requestCancel()
@@ -1911,63 +1970,58 @@ struct LyricsManagerView: View {
                         Label(isFull ? L10n.t("停止扫库") : L10n.t("停止补搜"),
                               systemImage: "stop.circle")
                     }
-                } header: {
-                    // 菜单里只放"正在搜哪一首":总进度已经在按钮标题上。key 是
-                    // "歌手|歌名|专辑",直接显示够认。
-                    // 兜底那一句(还没开始搜第一首时)全量走现成的「全量重新扫库」,不另起一句
-                    // 「正在全量重新扫库…」—— 少一个只在一瞬间露脸的翻译串。
-                    // 上一首一个歌词源都没连上时 collector 在原地等网络,那时说这个,不说「正在搜索」。
-                    if status.isOffline {
-                        Text(L10n.t("网络不通，稍后重试…"))
-                    } else {
-                        Text(status.current.map { String(format: L10n.t("正在搜索：%@"), $0) }
-                             ?? (isFull ? L10n.t("全量重新扫库") : L10n.t("正在准备补搜…")))
-                    }
                 }
             } else {
-                // 标题只说这是什么,菜单项只写范围和数量;规则拆成下面两行短句单独一节。
-                // 原来整句规则塞在标题里,菜单被撑成一条长长的灰字,读起来像日志。
+                // 窄档:只搜没词的。数量写进动作里(「补搜 165 首缺失的歌词」),不另起标题 —— 工具栏按钮
+                // 本身就叫「补搜歌词」。筛选那一项只在筛选真的缩小了范围时出现,免得两个数字一样的项并排。
+                // 规则(逐首、间隔、跳过哪些)放悬停提示;这里点出来的是手动那一轮,间隔是 collector 的
+                // lyricsManualSweepGap,改那边记得改提示。
                 Section {
                     Button {
-                        if LyricsFillSweep.request(keys: []) { fillSweepPending = true }
+                        if LyricsFillSweep.request(keys: []) { fillSweepPending = true; fillSweepPendingIsFull = false }
                     } label: {
-                        Label(String(format: L10n.t("全部缺失歌词（%@ 首）"), "\(retryableAll.count)"),
-                              systemImage: "arrow.triangle.2.circlepath")
+                        Label(String(format: L10n.t("补搜 %@ 首缺失的歌词"), "\(retryableAll.count)"),
+                              systemImage: "text.magnifyingglass")
                     }
                     .disabled(retryableAll.isEmpty || fillSweepPending)
+                    .help(L10n.t("逐首联网搜索，每首间隔约 5 秒；会跳过纯音乐和手动修正过的歌词"))
                     if hasActiveFilters && retryableVisible.count != retryableAll.count {
                         Button {
-                            if LyricsFillSweep.request(keys: retryableVisible) { fillSweepPending = true }
+                            if LyricsFillSweep.request(keys: retryableVisible) { fillSweepPending = true; fillSweepPendingIsFull = false }
                         } label: {
-                            Label(String(format: L10n.t("当前筛选结果（%@ 首）"), "\(retryableVisible.count)"),
+                            Label(String(format: L10n.t("仅补搜筛选出的 %@ 首"), "\(retryableVisible.count)"),
                                   systemImage: "line.3.horizontal.decrease.circle")
                         }
                         .disabled(retryableVisible.isEmpty || fillSweepPending)
+                        .help(L10n.t("逐首联网搜索，每首间隔约 5 秒；会跳过纯音乐和手动修正过的歌词"))
                     }
-                } header: {
-                    Text(L10n.t("联网补搜缺失的歌词"))
                 }
-                // 纯展示,不可点(菜单里的 Text 按禁用项画成灰色)。间隔是 collector 的
-                // lyricsFillSweepGap,改那边记得改这里。
-                Section {
-                    Text(L10n.t("逐首搜索，每首间隔约 15 秒"))
-                    Text(L10n.t("会跳过纯音乐和手动修正过的歌词"))
+                // 宽档:连已有歌词的也重新选一遍(设置页「歌词库」那一行的同一个入口)。弹确认框,所以带「…」;
+                // 范围说明、待扫首数和预计时长都在确认框里 —— 首数在这里算的话,窗口每重渲染一次就要把整库过一遍分层。
+                if fullScanState != nil {
+                    Section {
+                        Button {
+                            confirmFullScan = true
+                        } label: {
+                            Label(L10n.t("全量重新扫库…"), systemImage: "arrow.clockwise")
+                        }
+                        .disabled(fillSweepPending)
+                        .help(L10n.t("连已经有歌词的也重新过一遍；人工修正过的、校准过时间轴的、纯音乐的不动"))
+                    }
                 }
-                // 全量扫库那一轮的收据不在这里给:两轮共用同一份状态文件,而全量的 done/filled 是整场
-                // 累计的几千首,放进「补搜」菜单会被读成补搜搜了几千首(设置页那一行同一道判断)。
+                // 上一轮补搜的收据,一行灰字。全量扫库那一轮的收据不在这里给:两轮共用同一份状态文件,而全量的
+                // done/filled 是整场累计的几千首,放进「补搜」菜单会被读成补搜搜了几千首(设置页那一行同一道判断)。
                 // 一首都没搜的那一轮也不给,除非是断网停下的 —— 那时要说清楚为什么停。
                 if let status, status.finishedAt != nil, !status.isFullScan,
                    status.done > 0 || status.isOffline {
                     Section {
-                        // 纯展示的一行,不可点。停下的两种情形另说一句,免得"搜了 12 首"被当成全部。
-                        Text(String(format: L10n.t("上次搜索 %1$@ 首，补全 %2$@ 首"), "\(status.done)", "\(status.filled)"))
+                        Text(String(format: L10n.t("上次补搜 %1$@ 首，补全 %2$@ 首"), "\(status.done)", "\(status.filled)"))
+                        // 停下的两种情形另说一句,免得"搜了 12 首"被当成全部。
                         if status.isOffline {
                             Text(L10n.t("因网络不通已停下"))
                         } else if status.cancelled == true {
                             Text(L10n.t("已被手动停止"))
                         }
-                    } header: {
-                        Text(L10n.t("上次结果"))
                     }
                 }
             }
@@ -1994,7 +2048,7 @@ struct LyricsManagerView: View {
                 HStack(spacing: 4) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(L10n.t("正在准备补搜…"))
+                    Text(fillSweepPendingIsFull ? L10n.t("全量重新扫库") : L10n.t("正在准备补搜…"))
                         .font(.caption)
                 }
             } else {
@@ -2009,6 +2063,37 @@ struct LyricsManagerView: View {
                           ? L10n.t("扫描中 %1$@/%2$@") : L10n.t("补搜中 %1$@/%2$@"),
                           "\(status?.done ?? 0)", "\(status?.total ?? 0)"))
               : L10n.t("立即联网补搜缺失的歌词，不必等歌曲再次播放"))
+    }
+
+    /// 「全量重新扫库？」确认框正文:只在确认框弹出时算一次,不进工具栏菜单的渲染路径。
+    private var fullScanConfirmMessage: String {
+        guard let state = fullScanState else { return "" }
+        let pending = LyricsLibraryStatsPanel.fullScanPendingCount(
+            store.summaries, pinnedKeys: Set(pins.pins.keys),
+            currentVersion: state.scoringVersion, passStart: state.startedAt)
+        return LyricsLibraryStatsPanel.fullScanConfirmMessage(
+            pending: pending, secondsPerTrack: LyricsLibraryStatsPanel.fullScanSecondsPerTrack(state))
+    }
+
+    /// 补搜菜单里最近一首的那一行:结果图标 + 「歌名 — 歌手」。纯展示,不可点。
+    private static func fillSweepRecentRow(_ item: LyricsFillSweep.Info.Recent) -> some View {
+        let symbol: String
+        switch item.result {
+        case "filled": symbol = "checkmark.circle"
+        case "skipped": symbol = "forward.circle"
+        default: symbol = "xmark.circle"
+        }
+        return Label(LyricsFillSweep.displayName(key: item.key), systemImage: symbol)
+    }
+
+    /// 补搜「大约还要」的时长:这一轮通常几十分钟,按分钟说(设置页那句按小时,是给全量扫库的)。
+    /// 还没跑完一首时按每首约 20 秒估(两首之间的间隔加上一首的搜索本身)。
+    private static func fillSweepRemainingText(_ status: LyricsFillSweep.Info) -> String {
+        let seconds = LyricsFillSweep.remainingSeconds(status, now: Date(), fallbackSecondsPerTrack: 20)
+        let minutes = Int((seconds / 60).rounded(.up))
+        if minutes < 1 { return L10n.t("不到 1 分钟") }
+        if minutes < 60 { return String(format: L10n.t("%@ 分钟"), "\(minutes)") }
+        return String(format: L10n.t("%1$@ 小时 %2$@ 分钟"), "\(minutes / 60)", "\(minutes % 60)")
     }
 
     // 口径本体挪到 EnrichCacheStore.byteText —— 设置页「歌词库」那一行是第三处要显示同一个

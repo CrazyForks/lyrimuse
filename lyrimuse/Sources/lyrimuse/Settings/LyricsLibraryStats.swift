@@ -506,11 +506,11 @@ struct LyricsLibraryStatsPanel: View {
     // MARK: 全量重新扫库
 
     /// 每首的平均耗时**由 collector 发布**(`LyricsFullScan.State.secondsPerTrack`,
-    /// = lyricsFullScanGap + 一轮全源搜索的估计)。这里只留一个兜底值,给老 collector
+    /// = lyricsManualSweepGap + 一轮全源搜索的估计)。这里只留一个兜底值,给老 collector
     /// 或状态文件还没写出来的那一拍用。
     ///
     /// 别把它改回写死一份:之前这里是 `25.0`、注释还写着「15 秒固定间隔
-    /// (lyricsFillSweepGap)」,而那天 collector 把全量那一档换成 lyricsFullScanGap(5 秒),
+    /// (lyricsFillSweepGap)」,而 collector 把全量那一档换成 5 秒(lyricsManualSweepGap),
     /// 这个数和那句话当场都成了错的 —— 界面凭空多报一倍时长,没有任何东西会报错。
     /// 这跟 `scoringVersion` 不能硬编码是同一条理由,走的也是同一份状态文件。
     ///
@@ -519,8 +519,13 @@ struct LyricsLibraryStatsPanel: View {
 
     /// collector 发布的值;没有(老版本 / 文件还没写出来)就退回兜底。
     private var secondsPerTrack: Double {
-        let published = fullScanState?.secondsPerTrack ?? 0
-        return published > 0 ? Double(published) : Self.fallbackSecondsPerTrack
+        Self.fullScanSecondsPerTrack(fullScanState)
+    }
+
+    /// 见 `secondsPerTrack`。静态版给「歌词管理」工具栏那个入口共用。
+    static func fullScanSecondsPerTrack(_ state: LyricsFullScan.State?) -> Double {
+        let published = state?.secondsPerTrack ?? 0
+        return published > 0 ? Double(published) : fallbackSecondsPerTrack
     }
 
     private static func hoursText(_ tracks: Int, secondsPerTrack: Double) -> String {
@@ -533,10 +538,15 @@ struct LyricsLibraryStatsPanel: View {
     /// (`LyricsFullScan.tier`,selftest 覆盖),所以按钮上的数就是真会被扫的条数 ——
     /// 跟隔壁「重新扫描（N 首）」那个数是**包含**关系:那 N 首正是这里的第 0 层。
     private func fullScanPending(_ currentVersion: Int) -> Int {
-        let pinnedKeys = Set(pins.pins.keys)
-        let polluted = EnrichCacheStore.pollutedKeys(store.summaries)
-        let passStart = fullScanState?.startedAt ?? 0
-        return store.summaries.reduce(into: 0) { total, summary in
+        Self.fullScanPendingCount(store.summaries, pinnedKeys: Set(pins.pins.keys),
+                                  currentVersion: currentVersion, passStart: fullScanState?.startedAt ?? 0)
+    }
+
+    /// 见 `fullScanPending`。静态版给「歌词管理」工具栏那个入口共用,两处的数必须是同一个口径。
+    static func fullScanPendingCount(_ summaries: [EnrichCacheStore.Summary], pinnedKeys: Set<String>,
+                                     currentVersion: Int, passStart: Int64) -> Int {
+        let polluted = EnrichCacheStore.pollutedKeys(summaries)
+        return summaries.reduce(into: 0) { total, summary in
             if EnrichCacheStore.fullScanTier(
                 summary, currentScoringVersion: currentVersion, pinnedKeys: pinnedKeys,
                 passStart: passStart, pollutedKeys: polluted) != nil {
@@ -547,9 +557,14 @@ struct LyricsLibraryStatsPanel: View {
 
     private var fullScanConfirmMessage: String {
         let pending = fullScanState.map { fullScanPending($0.scoringVersion) } ?? 0
-        return String(
+        return Self.fullScanConfirmMessage(pending: pending, secondsPerTrack: secondsPerTrack)
+    }
+
+    /// 「全量重新扫库？」确认框的正文,两个入口共用。
+    static func fullScanConfirmMessage(pending: Int, secondsPerTrack: Double) -> String {
+        String(
             format: L10n.t("%1$@ 首，预计%2$@。已经有歌词的也会重新选一次；人工修正过的、校准过时间轴的、纯音乐的不动。随时可以停，关掉也不用重来"),
-            Self.format(pending), Self.hoursText(pending, secondsPerTrack: secondsPerTrack))
+            format(pending), hoursText(pending, secondsPerTrack: secondsPerTrack))
     }
 
     /// 「全量重新扫库」这一行。collector 没公布过打分版本号(还没起来过 / 版本太老)时整行

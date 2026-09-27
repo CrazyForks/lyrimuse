@@ -96,9 +96,9 @@ type lyricsFullScanState struct {
 	//。
 	//
 	// 跟 ScoringVersion 同一个理由:这个数由 collector 侧的常量决定
-	// (lyricsFullScanGap + 一轮全源搜索),**App 不能自己写死一份**。此前界面里就硬编码着
+	// (lyricsManualSweepGap + 一轮全源搜索),**App 不能自己写死一份**。此前界面里就硬编码着
 	// 25 秒、注释写着「15 秒固定间隔(lyricsFillSweepGap)」,而全量改用
-	// lyricsFullScanGap(5 秒)之后那句话和那个数当场都成了错的 —— 没有任何东西会报错,
+	// lyricsManualSweepGap(5 秒)之后那句话和那个数当场都成了错的 —— 没有任何东西会报错,
 	// 只是用户看到的预计时长凭空多出一倍。
 	SecondsPerTrack int `json:"secondsPerTrack,omitempty"`
 	// Total / Done / Filled:**整场**全量的累计进度,给界面当分母与分子。
@@ -180,7 +180,7 @@ const lyricsFullScanSearchEstimate = 8 * time.Second
 // lyricsFullScanSecondsPerTrack 是上面两个常量的和,取整到秒。抽出来是为了让单测能钉住
 // 「界面拿到的数必须跟真实 gap 对得上」这条,而不是又一次靠人去记得同步两个地方。
 func lyricsFullScanSecondsPerTrack() int {
-	return int((lyricsFullScanGap + lyricsFullScanSearchEstimate) / time.Second)
+	return int((lyricsManualSweepGap + lyricsFullScanSearchEstimate) / time.Second)
 }
 
 // setLyricsFullScanStatePath 由 setLyricsFillPaths 调用。

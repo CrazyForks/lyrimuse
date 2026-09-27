@@ -1100,6 +1100,27 @@ func runLyricsManagerTests() {
         {"running":false,"manual":true,"total":80,"done":12,"filled":3,"startedAt":1,"updatedAt":2,"finishedAt":3,"offline":true}
         """.utf8))
         expectEqual(offline?.isOffline, true, "补空进度: 断网停下的 offline 解出来")
+        expectEqual(info?.skippedCount, 0, "补空进度: 没有 skipped 键(omitempty / 旧版)读成 0")
+        expectEqual(info?.recent, nil, "补空进度: 没有 recent 键读成 nil")
+        let detailed = try? JSONDecoder().decode(S.Info.self, from: Data("""
+        {"running":true,"manual":true,"total":167,"done":10,"filled":3,"skipped":2,"startedAt":1,"updatedAt":2,
+         "recent":[{"key":"范逸臣|革命|無樂不作","result":"filled"},{"key":"A|B|C","result":"missed"}]}
+        """.utf8))
+        expectEqual(detailed?.skippedCount, 2, "补空进度: skipped 解出来")
+        expectEqual(detailed?.missedCount, 5, "补空进度: 没找到 = done - filled - skipped")
+        expectEqual(detailed?.recent?.first, S.Info.Recent(key: "范逸臣|革命|無樂不作", result: "filled"),
+                    "补空进度: recent 解出来、新的在前")
+        expectEqual(S.displayName(key: "范逸臣|革命|無樂不作"), "革命 — 范逸臣", "补空进度: key 显示成「歌名 — 歌手」")
+        expectEqual(S.displayName(key: "|革命|"), "革命", "补空进度: 歌手空只写歌名")
+        expectEqual(S.displayName(key: "没有竖线"), "没有竖线", "补空进度: 拆不开原样显示")
+        let eta = S.Info(running: true, manual: true, total: 100, done: 10, filled: 0, current: nil,
+                         startedAt: 1_000, updatedAt: 1_200, finishedAt: nil, cancelled: nil)
+        expectEqual(S.remainingSeconds(eta, now: Date(timeIntervalSince1970: 1_200), fallbackSecondsPerTrack: 20), 1_800,
+                    "补空剩余: 按这一轮实测速度(200 秒 10 首)外推剩下 90 首")
+        let fresh = S.Info(running: true, manual: true, total: 30, done: 0, filled: 0, current: nil,
+                           startedAt: 1_000, updatedAt: 1_000, finishedAt: nil, cancelled: nil)
+        expectEqual(S.remainingSeconds(fresh, now: Date(timeIntervalSince1970: 1_005), fallbackSecondsPerTrack: 20), 600,
+                    "补空剩余: 一首都没跑完时按估计值")
 
         // 请求写下、collector 还没接手:按钮置灰的那几秒。
         func sweepInfo(running: Bool, startedAt: Int64, filled: Int = 0) -> S.Info {

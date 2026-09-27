@@ -22,7 +22,7 @@ import (
 // 两条触发:
 //   - 自动:进程起来 10 分钟后扫一次,之后每 24 小时一次。每轮只处理 needsLyricsFirstFill 为真
 //     的(退避到期的)条目、上限 lyricsFillSweepDailyCap 条、两首之间隔 lyricsFillSweepGap
-//     (全量扫库那一轮走更短的 lyricsFullScanGap,见 lyricsFillSweepPace)——
+//     (用户点出来的那一轮走更短的 lyricsManualSweepGap,见 lyricsFillSweepPace)——
 //     补空本身是"每条最多每天一次、指数退避"的节奏,这里只是把"要不要问"的时机从"被播到"
 //     改成"到点了",不改每条的退避账。
 //   - 手动:App 侧(「歌词管理」的「重试无歌词条目」按钮)往 lyricsFillRequestPath 写一个
@@ -52,11 +52,13 @@ const (
 	lyricsFullScanResumeDelay = time.Minute
 	lyricsFillSweepInterval   = 24 * time.Hour
 	lyricsFillSweepGap        = 15 * time.Second
-	// 全量扫库单独一档,比补空那 15 秒短。
+	// 用户点出来的那一轮(手动补搜、全量扫库)单独一档,比自动补空那 15 秒短。
 	//
-	// 两者的账完全不同:补空一轮最多 lyricsFillSweepDailyCap(40)条、一天一次,15 秒×40
-	// 才 10 分钟,快不快无所谓;全量是 5300+ 首连着跑,15 秒 gap 让总时长变成 **26.6 小时**
-	// (实测 18 秒/首,其中 15 秒是纯等待)。5 秒 → 约 8 秒/首 → 约 12 小时。
+	// 两者的账完全不同:自动补空一轮最多 lyricsFillSweepDailyCap(40)条、一天一次、没人在等,
+	// 15 秒×40 才 10 分钟,快不快无所谓;用户点出来的那一轮有人盯着进度。全量是 5300+ 首连着跑,
+	// 15 秒 gap 让总时长变成 **26.6 小时**(实测 18 秒/首,其中 15 秒是纯等待),5 秒 → 约 8 秒/首
+	// → 约 12 小时;手动补搜一轮上百首,每首的搜索本身就要 8~24 秒(没词的条目会把所有退路走一遍),
+	// 15 秒 gap 让它每首约 28 秒,5 秒约 18 秒。见 11 章决策 30。
 	//
 	// 5 秒这个值的依据是实测各源的真实速率,不是拍脑袋(从 api call summary 读的,
 	// 80 秒窗口约 4~5 首):网易云 71 次 ≈ 0.89 req/s、iTunes 68 次 ≈ 0.85、QQ smartbox 60 次
@@ -67,7 +69,7 @@ const (
 	// 这些**突发之间**唯一的喘息,而整个采集器没有任何 per-host 限流器(查过,
 	// 一个 rate.Limiter 都没有)。真要再往下压,先补限流再说。
 	// (musicbrainz 不在此列:它自己有 1.1 秒全局最小间隔 + 结果永久缓存,见 musicbrainz.go。)
-	lyricsFullScanGap              = 5 * time.Second
+	lyricsManualSweepGap           = 5 * time.Second
 	lyricsFillSweepDailyCap        = 40
 	lyricsFillRequestCheckInterval = 2 * time.Second
 	// 一首搜完一个歌词源都没连上(见 lyricSourceRound.reachedAny):原地等这么久再搜同一首,
@@ -112,6 +114,31 @@ type lyricsSweepOutcome struct {
 	filled bool
 	// offline:真的发出去搜了,但一个歌词源都没连上。这一条没有结论,扫描原地等网络回来再搜它。
 	offline bool
+	// skipped:轮到它时已经不需要搜了(被删 / 被手改 / 已有词 / 正在别处解析),没发请求。
+	skipped bool
+}
+
+// lyricsFillRecent 是最近跑完的一条,给界面列「刚才搜了哪几首、结果如何」。Result 取 filled / missed / skipped。
+type lyricsFillRecent struct {
+	Key    string `json:"key"`
+	Result string `json:"result"`
+}
+
+// lyricsFillRecentMax:进度里留最近几条,新的在前。
+const lyricsFillRecentMax = 3
+
+func (s *lyricsFillStatus) noteRecent(key string, out lyricsSweepOutcome) {
+	result := "missed"
+	switch {
+	case out.skipped:
+		result = "skipped"
+	case out.filled:
+		result = "filled"
+	}
+	s.Recent = append([]lyricsFillRecent{{Key: key, Result: result}}, s.Recent...)
+	if len(s.Recent) > lyricsFillRecentMax {
+		s.Recent = s.Recent[:lyricsFillRecentMax]
+	}
 }
 
 // lyricsFillStatus 是写给 App 看的进度。Total 是这一轮开工时挑出的条数;Done 含"跑到一半发现
@@ -137,6 +164,10 @@ type lyricsFillStatus struct {
 	Cancelled  bool   `json:"cancelled,omitempty"`
 	// Offline:跑着时 = 上一首一个歌词源都没连上、正在等网络回来;停下时 = 因为一直连不上而停下。
 	Offline bool `json:"offline,omitempty"`
+	// Skipped:Done 里轮到时已经不需要搜、没发请求的条数(Done - Filled - Skipped 就是搜了没找到的)。
+	Skipped int `json:"skipped,omitempty"`
+	// Recent:最近跑完的几条,新的在前,见 lyricsFillRecent。
+	Recent []lyricsFillRecent `json:"recent,omitempty"`
 }
 
 // setLyricsFillPaths 在 main() 启动时调一次。顺带清掉上一次运行遗留的请求/状态文件:请求跟这次
@@ -165,12 +196,12 @@ func setLyricsFillPaths() {
 // lyricsFillSweepFirstDelay 决定第一发定时器等多久。抽成纯函数是因为这里**选错常量完全
 // 不报错**:扫描照跑、日志照写,只是晚十分钟 —— 就是这么错的一次(见
 // lyricsFullScanResumeDelay 头注)。单测把这两档钉死。
-// lyricsFillSweepPace 决定两首之间隔多久。抽成纯函数的理由跟下面 lyricsFillSweepFirstDelay
-// 一模一样:**选错常量完全不报错**——扫描照跑、进度照涨,只是全库多花十几个小时,而那要等
-// 一天之后才看得出来。单测把两档钉死。
-func lyricsFillSweepPace(full bool) time.Duration {
-	if full {
-		return lyricsFullScanGap
+// lyricsFillSweepPace 决定两首之间隔多久:按"是不是用户点出来的"分档,不按全量 / 补空分。
+// 抽成纯函数的理由跟下面 lyricsFillSweepFirstDelay 一模一样:**选错常量完全不报错**——扫描照跑、
+// 进度照涨,只是多花几十分钟到十几个小时。单测把两档钉死。
+func lyricsFillSweepPace(manual bool) time.Duration {
+	if manual {
+		return lyricsManualSweepGap
 	}
 	return lyricsFillSweepGap
 }
@@ -386,7 +417,7 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 		}
 		return
 	}
-	status = runLyricsFillSweepKeys(ctx, keys, req.full, status)
+	status = runLyricsFillSweepKeys(ctx, keys, req.full, lyricsFillSweepPace(req.manual), status)
 	status.Running = false
 	status.Current = ""
 	status.FinishedAt = time.Now().Unix()
@@ -417,8 +448,7 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 // lyricsFillSweepOfflineWait 再搜它;连续 lyricsFillSweepOfflineLimit 次都这样就停下、标 Offline。
 // 往下走的话,断网期间剩下的每一首都会白搜一轮,收据上还显示成「搜了、没补出来」。
 // 搜到一半被停(ctx 取消)的那一条什么都没写,同样不算进度。
-func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, status lyricsFillStatus) lyricsFillStatus {
-	gap := lyricsFillSweepPace(full)
+func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, gap time.Duration, status lyricsFillStatus) lyricsFillStatus {
 	offlineStreak := 0
 	var wait time.Duration
 	for i := 0; i < len(keys); {
@@ -452,6 +482,13 @@ func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, statu
 		if out.filled {
 			status.Filled++
 		}
+		if out.skipped {
+			status.Skipped++
+		}
+		if !full {
+			// 全量扫库那一轮「没更新」不是「没找到」,不列进最近结果(界面也只在补搜时显示它)。
+			status.noteRecent(keys[i], out)
+		}
 		status.Done++
 		status.RoundDone++
 		status.Current = ""
@@ -475,7 +512,7 @@ func lyricsFillSweepOne(ctx context.Context, key string) lyricsSweepOutcome {
 	before, ok := enrichCache[key]
 	if !ok || before.Lyrics != "" || before.ManualLyrics || before.Instrumental || enrichInflight[key] {
 		enrichMu.Unlock()
-		return lyricsSweepOutcome{}
+		return lyricsSweepOutcome{skipped: true}
 	}
 	dur := before.ResolvedDurationSecs
 	if dur <= 0 {

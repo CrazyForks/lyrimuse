@@ -42,6 +42,28 @@ public enum LyricsFillSweep {
         /// 跑着时 = 上一首一个歌词源都没连上、collector 正在等网络回来再搜它;停下时 = 因为一直连不上
         /// 而停下(见 collector 的 runLyricsFillSweepKeys)。可选:collector 带 `omitempty`,旧版也不写。
         public let offline: Bool?
+        /// `done` 里轮到时已经不需要搜(被删 / 被手改 / 已有词)、没发请求的条数。可选:collector 带 `omitempty`,旧版也不写。
+        public let skipped: Int?
+        /// 最近跑完的几条,新的在前(collector 最多留 3 条,只在补搜时记)。可选,理由同上。
+        public let recent: [Recent]?
+
+        /// 最近跑完的一条:缓存 key 与结果。
+        public struct Recent: Decodable, Equatable, Sendable {
+            public let key: String
+            /// filled / missed / skipped;认不出的按 missed 显示。
+            public let result: String
+
+            public init(key: String, result: String) {
+                self.key = key
+                self.result = result
+            }
+        }
+
+        /// 见 `skipped`。字段缺席读成 0。
+        public var skippedCount: Int { skipped ?? 0 }
+
+        /// 搜了、没找到的条数。
+        public var missedCount: Int { max(done - filled - skippedCount, 0) }
 
         /// 这一轮是不是全量扫库。字段缺席(补空那一轮)读成 false。
         public var isFullScan: Bool { full == true }
@@ -55,7 +77,7 @@ public enum LyricsFillSweep {
         public init(running: Bool, manual: Bool, full: Bool? = nil, total: Int, done: Int, filled: Int,
                     roundDone: Int? = nil,
                     current: String?, startedAt: Int64, updatedAt: Int64, finishedAt: Int64?,
-                    cancelled: Bool?, offline: Bool? = nil) {
+                    cancelled: Bool?, offline: Bool? = nil, skipped: Int? = nil, recent: [Recent]? = nil) {
             self.running = running
             self.manual = manual
             self.full = full
@@ -69,7 +91,27 @@ public enum LyricsFillSweep {
             self.finishedAt = finishedAt
             self.cancelled = cancelled
             self.offline = offline
+            self.skipped = skipped
+            self.recent = recent
         }
+    }
+
+    /// 缓存 key(`歌手|歌名|专辑`)在进度里的显示:「歌名 — 歌手」;歌手空就只写歌名,拆不开原样返回。纯函数,selftest 覆盖。
+    public static func displayName(key: String) -> String {
+        let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3, !parts[1].isEmpty else { return key }
+        return parts[0].isEmpty ? parts[1] : "\(parts[1]) — \(parts[0])"
+    }
+
+    /// 这一轮大约还要多少秒:按这一轮已经跑出来的速度(`roundDoneOrDone` / 已用时间)外推剩下的 `total - done`,
+    /// 还没跑完一首时按 `fallbackSecondsPerTrack` 估。纯函数,selftest 覆盖。
+    public static func remainingSeconds(_ info: Info, now: Date, fallbackSecondsPerTrack: Double) -> Double {
+        let left = max(info.total - info.done, 0)
+        let elapsed = now.timeIntervalSince1970 - Double(info.startedAt)
+        let perTrack = info.roundDoneOrDone > 0 && elapsed > 0
+            ? elapsed / Double(info.roundDoneOrDone)
+            : fallbackSecondsPerTrack
+        return Double(left) * perTrack
     }
 
     static let requestURL = LyrimusePaths.configFile("lyrimuse-lyrics-fill-request.txt")
