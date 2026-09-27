@@ -8056,29 +8056,6 @@
         }
       }
     },
-    "在 %@ 播放任意歌曲，歌词会自动出现" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Play something in %@ and lyrics will appear here"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在 %@ 播放任意歌曲，歌词会自动出现"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在 %@ 播放任意歌曲，歌詞會自動出現"
-          }
-        }
-      }
-    },
     "在 Apple Music 中打开" : {
       "extractionState" : "manual",
       "localizations" : {

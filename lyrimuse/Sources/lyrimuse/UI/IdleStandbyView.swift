@@ -651,7 +651,8 @@ private struct IdleLastTrackHero: View {
             Text(L10n.t("没有在播放"))
                 .font(.system(size: 20, weight: .semibold))
                 .padding(.top, 4)
-            Text(String(format: L10n.t("在 %@ 播放任意歌曲，歌词会自动出现"), player.displayName))
+            // 不点名播放器(用户往往勾了好几家),同灵动岛那句;下面那颗键才指具体那家。
+            Text(L10n.t("在播放器里播放任意歌曲，歌词会自动出现"))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)

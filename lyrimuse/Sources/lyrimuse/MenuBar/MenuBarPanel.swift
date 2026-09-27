@@ -298,6 +298,8 @@ private struct MenuBarPanelView: View {
     // 长按 / 右键某个能翻面的格子之后,面板下半部分换成它自己的快捷设置;
     // nil = 正常的钮块网格。见 MenuBarPanelQuickSettings.swift。
     @State private var quickTarget: PanelQuickTarget?
+    /// 停播卡「打开」键上那枚播放器图标(见 idleRow)。按播放器取一次,不在 body 里现查。
+    @State private var idlePlayerIcon: NSImage?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 封面小图按像素预先重采样要知道显示倍率(见 coverView)。
     @Environment(\.displayScale) private var displayScale
@@ -625,9 +627,9 @@ private struct MenuBarPanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.t("没有在播放"))
                     .font(.system(size: 12, weight: .semibold))
-                // 点名播放器,跟右边那颗键指的是同一家 —— 同歌词窗口停播页的口径。灵动岛那句
-                // 刻意泛指,因为它旁边那颗键只有 tooltip 承接得住具体名字。
-                Text(String(format: L10n.t("在 %@ 播放任意歌曲，歌词会自动出现"), name))
+                // 不点名播放器:这里指的是停播前最后用的那家,而用户往往勾了好几家,点名读起来像只有
+                // 那一家才行;句子也得短到这一行放得下(同迷你窗停播页那句)。
+                Text(L10n.t("放一首歌，歌词会自动出现"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }
@@ -638,10 +640,21 @@ private struct MenuBarPanelView: View {
             // 这一颗是这个状态下唯一能做的事,必须一眼认得出来。色相跟圆钮块"开"的那圈同一个
             // Color.accentColor。
             ChipButton(cornerRadius: 8, tint: .accentColor, baseLevel: 0.16, action: act) {
+                // 只能「打开」的播放器:键上是那家的图标 +「打开」,全名放进悬停提示 —— 写成
+                // 「打开 网易云音乐」既点名、又把左边那句挤没。
                 HStack(spacing: 5) {
-                    Image(systemName: canResume ? "play.fill" : "arrow.up.forward.app")
-                        .font(.system(size: 10.5, weight: .semibold))
-                    Text(canResume ? L10n.t("继续播放") : String(format: L10n.t("打开 %@"), name))
+                    if canResume {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    } else if let idlePlayerIcon {
+                        Image(nsImage: idlePlayerIcon)
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "arrow.up.forward.app")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    Text(canResume ? L10n.t("继续播放") : L10n.t("打开"))
                         .font(.system(size: 11.5, weight: .medium))
                         .lineLimit(1)
                 }
@@ -650,6 +663,12 @@ private struct MenuBarPanelView: View {
                 .frame(height: 28)
             }
             .fixedSize()
+            .help(canResume ? L10n.t("继续播放") : String(format: L10n.t("打开 %@"), name))
+            .accessibilityLabel(canResume ? L10n.t("继续播放") : String(format: L10n.t("打开 %@"), name))
+        }
+        .task(id: player) {
+            idlePlayerIcon = NSWorkspace.shared.urlForApplication(withBundleIdentifier: player.bundleIdentifier)
+                .map { NSWorkspace.shared.icon(forFile: $0.path) }
         }
         // 有曲目时卡片靠 44pt 的封面撑高,这里只有一行字。给同样的下限,面板在"放着"和
         // "没放"之间切换时顶部这一块不会突然塌掉一截。
