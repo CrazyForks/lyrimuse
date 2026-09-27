@@ -123,11 +123,20 @@ final class NotchEditorialPanel {
         self.onHover = onHover
         panel.orderFrontRegardless()
 
-        PlaybackCoordinator.shared.$title
+        // 换歌就关:按歌名 + 歌手 + 专辑认,只看歌名的话换到同名的另一首(翻唱、别的版本)浮框还挂着上一首的简介。
+        let p = PlaybackCoordinator.shared
+        Publishers.CombineLatest3(p.$title, p.$artist, p.$album)
+            .map { "\($0)|\($1)|\($2)" }
             .dropFirst()
             .removeDuplicates()
             .sink { [weak self] _ in self?.close() }
             .store(in: &cancellables)
+        // 灵动岛挪了位置或改了尺寸(换屏、改宽度):浮框是按当时的卡片位置摆的,留着就悬在原处,关掉。
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            NotificationCenter.default.publisher(for: name, object: owner)
+                .sink { [weak self] _ in self?.close() }
+                .store(in: &cancellables)
+        }
         NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: owner)
             .sink { [weak self] note in
                 guard let win = note.object as? NSWindow, !win.occlusionState.contains(.visible) else { return }

@@ -499,6 +499,31 @@ func runNotchTests() {
         expectEqual(S.gateRetryDelay(after: .never, round: S.fastStartRounds), YouTubeMusicAdProbe.adRefreshInterval,
                     "门槛节奏: 出了快探窗口,「不给跳」才当真、退回心跳")
 
+        // 灵动岛审计那一批的几处接线(契约)。
+        do {
+            let ui = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("lyrimuse/UI")
+            func src(_ name: String) -> String {
+                (try? String(contentsOf: ui.appendingPathComponent(name), encoding: .utf8)) ?? ""
+            }
+            let controller = src("NotchLyricsWindowController.swift")
+            let stage = src("NotchEditorStage.swift")
+            let view = src("NotchLyricsView.swift")
+            expectEqual(src("NotchLyricsWindow.swift").contains("becomesKeyOnlyIfNeeded = true"), true,
+                        "灵动岛接线: 点按钮不抢键盘焦点")
+            expectEqual(stage.contains("controller.setHideWhenNotPlaying(settings.notchHideWhenNotPlaying)")
+                        && stage.contains("controller.applyScreenSetting()"), true,
+                        "灵动岛接线: 恢复默认后主实例按新值同步屏幕与自动隐藏")
+            expectEqual(controller.contains("return ScreenIdentity.notched ?? NSScreen.screens.first"), true,
+                        "灵动岛接线: 没有刘海时固定主屏,不跟着键盘焦点跳")
+            expectEqual(controller.contains("var hideWhenNotPlaying: Bool = AppSettings.shared.notchHideWhenNotPlaying"), true,
+                        "灵动岛接线: 暂停时隐藏的初值读设置,冷启动不闪")
+            expectEqual(controller.components(separatedBy: "resetHoverAfterHide()").count - 1, 3,
+                        "灵动岛接线: 两条收走窗口的路都清悬停状态")
+            expectEqual(view.contains("p.$currentLyricsOffsetMs") && view.contains("timingEpoch: playback.lyricsOffsetMs"), true,
+                        "灵动岛接线: 订阅总偏移,偏移一变当前行重装")
+        }
+
         // 跟随封面背景:换图两层交叉淡入,旧图不透明地留在下面 —— 直接换 Image 内容会让旧图当场消失、
         // 露出打底色,同一首歌换上高清封面时整卡暗一下再亮回来(真机逐帧:均值 −7.6 再 +7.7)。
         do {
@@ -509,7 +534,8 @@ func runNotchTests() {
                         "封面背景契约: 不再直接换 Image 内容做过渡(会露出打底色)")
             expectEqual(v.contains("if let back { layer(back) }\n            if let front { layer(front).opacity(frontOpacity) }"), true,
                         "封面背景契约: 旧图在下、不透明;只有新图做透明度动画")
-            expectEqual(v.contains("} completion: {\n                back = nil"), true, "封面背景契约: 淡完才撤旧图")
+            expectEqual(v.contains("} completion: {\n                if generation == fadeGeneration { back = nil }"), true,
+                        "封面背景契约: 淡完才撤旧图,而且只撤最新那一次的(连着换两次不暗闪)")
         }
 
         // 卡片外轮廓:照机器刘海 —— 跟刘海一样高时底部圆角 = 高 × 0.25,展开封顶 20;顶边两侧 4pt 内凹肩膀。
@@ -789,8 +815,8 @@ func runNotchTests() {
         // (`trackInfoShowsTrackFields`,上面已有断言),它是被那条覆盖的。
         expectEqual(view.contains("adBreakArtworkTile(side:"), true,
                     "广告态契约: 灵动岛歌词行末尾那枚封面在广告期间换成替代方块")
-        expectEqual(view.contains("controller.isAdBreakNow || (playback.highResArtworkImage ?? playback.artworkImage) != nil"),
-                    true, "广告态契约: 替代方块照样算「这一格占着位置」,别放行多余的布局动画")
+        expectEqual(view.contains("controller.isAdBreakNow\n                || (radioTalkStation?.image ?? playback.highResArtworkImage ?? playback.artworkImage) != nil"),
+                    true, "广告态契约: 替代方块照样算「这一格占着位置」,别放行多余的布局动画(电台口白的台标也算)")
         let window = (try? String(contentsOfFile: ui.appendingPathComponent("LyricsWindowView.swift").path,
                                   encoding: .utf8)) ?? ""
         let panel = (try? String(contentsOfFile: ui.deletingLastPathComponent()

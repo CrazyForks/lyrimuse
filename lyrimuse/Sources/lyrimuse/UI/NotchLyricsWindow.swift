@@ -54,6 +54,7 @@ final class NotchLyricsWindow: NSPanel {
         // 系统平铺功能的高亮探测跳过它。
         isMovable = false
         isReleasedWhenClosed = false
+        becomesKeyOnlyIfNeeded = true
     }
 
     // 经典悬浮窗(LyricsOverlayWindow)把这两个都锁 false,因为它没有必要跟系统菜单栏
@@ -62,6 +63,8 @@ final class NotchLyricsWindow: NSPanel {
     // 跳动、不会切菜单栏),所以放开 canBecomeKey 不等于开始抢别的 App 的焦点。
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    // 能成为 key,但只在点到真正要键盘的控件时才成为(NSPanel.becomesKeyOnlyIfNeeded)。灵动岛里的按钮都不要键盘:
+    // 默认行为下点一下播放键这扇窗就成了 key 窗口,用户在别的 App 里接着敲的字全落到这里丢掉。
 
     // AppKit 默认会把窗口的 setFrame 请求"夹"回 visibleFrame 以内,不让普通窗口盖住
     // 菜单栏那一条——哪怕这个窗口的 level 是 .floating、哪怕算出来的目标位置正是刘海

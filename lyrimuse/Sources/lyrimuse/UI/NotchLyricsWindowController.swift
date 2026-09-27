@@ -54,7 +54,9 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
     // 真值在 AppSettings.notchOverlayEnabled,这里只是它的镜像(菜单栏要观察这个
     // @Published)。只能经 setVisible(_:) 改,那是打开/关闭的唯一入口。
     @Published private(set) var isVisible: Bool = AppSettings.shared.notchOverlayEnabled
-    @Published private(set) var hideWhenNotPlaying: Bool = false
+    // 初值直接读设置(同 isVisible):写死 false 的话,冷启动 / 插屏建副本时 init 里的播放订阅先按「不隐藏」
+    // 把卡片摆出来,等真实设置补上又缩回去,开着「暂停时隐藏」、此刻没在放的人会看到卡片闪一下。
+    @Published private(set) var hideWhenNotPlaying: Bool = AppSettings.shared.notchHideWhenNotPlaying
     /// 窗口此刻是否真的看得见(`occlusionState` 含 `.visible`)。关掉灵动岛 / 暂停时隐藏(orderOut)、
     /// 锁屏、屏保、熄屏都是 false。灵动岛所有按时间推进的表都按它停(经环境值 `notchCardLayerActive`),
     /// SwiftUI 不会因为窗口看不见就自己停 `TimelineView(.animation)`。默认 true:宁可多跑也不能把看得见的窗口停表。
@@ -355,6 +357,8 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
         // 当前屏幕几何重新算一遍并 setFrame,这里传什么都会被立刻覆盖掉。
         let placeholder = NSSize(width: AppSettings.shared.notchContentWidth, height: Self.fallbackNotchHeight + Self.contentHeight)
         let panel = NotchLyricsWindow(contentRect: NSRect(origin: .zero, size: placeholder))
+        // 「截屏 / 录屏时隐藏」同理从一开始就按设置来,不然补上之前那一小段录屏拍得到它。
+        panel.sharingType = AppSettings.shared.notchHideDuringScreenCapture ? .none : .readWrite
         self.init(window: panel)
         self.pinnedScreenID = pinnedScreenID
 
@@ -432,7 +436,14 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             PlaybackCoordinator.shared.$artist,
             PlaybackCoordinator.shared.$isCurrentTrackAdBreak
         ).sink { [weak self] title, artist, isAd in
-            self?.hasTrack = !title.isEmpty || !artist.isEmpty || isAd
+            guard let self else { return }
+            let present = !title.isEmpty || !artist.isEmpty || isAd
+            self.hasTrack = present
+            // 提醒开始那一刻正好有曲目,setAlertHold 把它跳过了(见那边的注释);提醒还没结束曲目就没了,这时补撑开 ——
+            // isAlerting 做了去重、不会再推一次,不补的话这一轮提醒就整个被吞掉。
+            if !present, !self.alertHold, NotchUnknownPlayerPrompt.shared.isAlerting {
+                self.setAlertHold(true)
+            }
         }
 
         // 「发现新播放器」的主动提醒(NotchUnknownPlayerPrompt):提醒期间卡片自己撑开、隐藏着的
@@ -810,6 +821,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             lastAppliedShouldShow = false
             if isVanished { isVanished = false }
             window?.orderOut(nil)
+            resetHoverAfterHide()
             return
         case .keepPendingVanish:
             return
@@ -842,10 +854,23 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
                 }
                 self.lastAppliedShouldShow = false
                 self.window?.orderOut(nil)   // isVanished 保持 true:下次露面从刘海里长出来
+                self.resetHoverAfterHide()
             }
         }
         pendingHideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + NotchWindowRoot.vanishSettleDelay, execute: work)
+    }
+
+    /// 窗口收走之后指针的「离开」事件不一定会来(点 ✕、暂停时隐藏,指针都还停在卡片上):不清的话下次露面
+    /// 卡片直接停在展开态,要把指针移上去再移开才收回。
+    private func resetHoverAfterHide() {
+        pendingHoverWork?.cancel()
+        pendingHoverWork = nil
+        cardHovered = false
+        editorialHovered = false
+        guard hoverExpanded else { return }
+        hoverExpanded = false
+        refreshExpanded()
     }
 
     private func cancelPendingHide() {
@@ -959,7 +984,9 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
         if let pinned = ScreenIdentity.screen(withID: AppSettings.shared.notchScreenID) {
             return pinned
         }
-        return ScreenIdentity.notched ?? NSScreen.main
+        // 没有刘海时取主屏(`screens.first`,带菜单栏的那块),不取 `NSScreen.main`:后者跟着键盘焦点跳,
+        // 几何一重算灵动岛就换到焦点那块屏,开着「全部屏幕」时还会跟那块屏上的副本叠在一起。
+        return ScreenIdentity.notched ?? NSScreen.screens.first
     }
 
     // 设置页改完"显示在哪块屏幕"后调这个立刻生效(跟 applyContentWidthSetting 同一个模式)。

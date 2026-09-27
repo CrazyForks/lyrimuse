@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import LyrimuseCore
 import SwiftUI
 
@@ -130,7 +131,16 @@ final class NotchPreviewChrome: ObservableObject, NotchChromeSource {
     var expandedTrackInfoShowsAlbum: Bool { AppSettings.shared.notchExpandedShowsAlbum }
     var expandedShowsQuickActions: Bool { AppSettings.shared.notchExpandedShowsQuickActions }
 
-    init() { refreshGeometry() }
+    init() {
+        refreshGeometry()
+        // 屏幕设置从哪条路改的都要跟上(「屏幕」浮层、「恢复默认」、设置页别处的重置)。@Published 在 willSet
+        // 发布、那时 targetScreen() 读到的还是旧值,所以挪到下一拍再算。
+        screenSubscription = AppSettings.shared.$notchScreenID.removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshGeometry() }
+    }
+
+    private var screenSubscription: AnyCancellable?
 
     /// 视图内部那个 .onHover 打进来的调用,预览里**故意忽略**(空实现)。
     ///
@@ -1210,6 +1220,14 @@ struct NotchEditorStage: View {
                     NSCursor.pop()
                 }
             }
+            // 指针还停在上面时这块被拿掉(卡片收起撤掉展开区、设置窗关掉),离开事件不会来:在这里把手形光标
+            // 弹掉,不然它一直留着(同 LyricsWindowPreviewStage 那块区域的做法)。
+            .onDisappear {
+                if hoveredHotspot == spot.kind {
+                    hoveredHotspot = nil
+                    NSCursor.pop()
+                }
+            }
             .onTapGesture { openPopover(for: spot, rectIndex: rectIndex) }
             .animation(.easeOut(duration: 0.12), value: hovering)
             .accessibilityElement()
@@ -1616,6 +1634,15 @@ enum NotchStyleDefaults {
         settings.notchHideDuringScreenCapture = AppSettings.defaultNotchHideDuringScreenCapture
         settings.notchHideWhenNotPlaying = AppSettings.defaultNotchHideWhenNotPlaying
         settings.notchHideInFullScreen = AppSettings.defaultNotchHideInFullScreen
+        // 屏幕和两个自动隐藏开关,主实例不订阅(只有设置行 / 「屏幕」浮层那几处会调过去,镜像副本才订阅),
+        // 只写设置的话主灵动岛停在旧屏、照旧按旧开关隐藏,副本却按新值变了。跟那几处同一个守卫:
+        // 灵动岛关着就别碰 `.shared`(读一下就会建窗口),再打开时 setVisible 会按设置补齐。
+        if settings.notchOverlayEnabled {
+            let controller = NotchLyricsWindowController.shared
+            controller.setHiddenFromCapture(settings.notchHideDuringScreenCapture)
+            controller.setHideWhenNotPlaying(settings.notchHideWhenNotPlaying)
+            controller.applyScreenSetting()
+        }
     }
 }
 

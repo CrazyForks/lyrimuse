@@ -223,6 +223,11 @@ struct NotchWindowRoot: View {
             .animation(cardAnimation, value: controller.isCollapsed)
             .animation(vanishAnimation, value: controller.isVanished)
             .onChange(of: controller.isExpanded) { _, expanded in wasExpanded = expanded }
+            // 窗口收走(看不见)时把边沿记忆也清掉,跟控制器那边的 resetHoverAfterHide 配对:不清的话下次露面
+            // 指针正好在卡片上,移动时不再有「进入」这条边沿,卡片就一直不展开。
+            .onChange(of: controller.isSurfaceVisible) { _, visible in
+                if !visible { hoveringCard = false }
+            }
     }
 
     private func updateHover(inside: Bool) {

@@ -201,6 +201,9 @@ private final class NotchPlayback: ObservableObject {
     /// PlaybackCoordinator/AppSettings),得有人先把值取到手。
     @Published private(set) var trackLyricsOffsetMs: Int = 0
     @Published private(set) var lyricsOffsetStepMs: Int = 200
+    /// 实际生效的歌词时间轴**总**偏移(单曲 + 全局基准 + MV / LRC 自带,`PlaybackCoordinator.currentLyricsOffsetMs`)。
+    /// 只订单曲那一项的话,改全局基准或 MV 偏移时逐字填色和音浪都不重排,要等换行才对上。
+    @Published private(set) var lyricsOffsetMs: Int = 0
     /// 展开区随机 / 循环两颗键读的播放模式。只在模式读自 Apple Music 时非 nil,其它播放器
     /// (含同样读得到模式的 Spotify)一律 nil,两颗键据此整个不画。
     @Published private(set) var appleMusicPlaybackMode: MusicPlaybackController.MusicPlaybackMode?
@@ -299,6 +302,7 @@ private final class NotchPlayback: ObservableObject {
                 .sink { [weak self] in self?.mainFontSize = $0 },
             s.$notchExpandedShowsLyricsOffset.removeDuplicates().sink { [weak self] in self?.showsLyricsOffsetControls = $0 },
             p.$trackLyricsOffsetMs.removeDuplicates().sink { [weak self] in self?.trackLyricsOffsetMs = $0 },
+            p.$currentLyricsOffsetMs.removeDuplicates().sink { [weak self] in self?.lyricsOffsetMs = $0 },
             s.$lyricsOffsetStepMs.removeDuplicates().sink { [weak self] in self?.lyricsOffsetStepMs = $0 },
         ]
     }
@@ -830,9 +834,12 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                 // 和机器刘海一样的纯黑色」):理由跟上面没有曲目那一档同构 —— 广告没有封面可跟
                 // (`accent` 退回默认冷色、`coverArt` 风格退回那块灰),底色于是既衬不了内容、也
                 // 代表不了这一刻在放什么,只剩"像不像刘海"一个标准。广告一结束自动退回原风格,
-                // 跟着同一条弹簧渐变淡回去,不硬切。
+                // 淡入淡出:没有曲目、广告这两档变化时卡片尺寸和收起状态都不变,外层那几条弹簧
+                // (绑在尺寸和 isCollapsed 上)带不动它,得自己挂一条;收起那一档仍跟外层弹簧走。
                 Color.black
                     .opacity(controller.isCollapsed || isIdleNoTrack || controller.isAdBreakNow ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.35),
+                               value: isIdleNoTrack || controller.isAdBreakNow)
                 // 刘海空当里的品牌胶囊(notchSeam)直接钉在 ZStack 顶部**居中**,不再画在顶行的 HStack 里
                 // (现象是「暂停状态展开的动画会把中间那个 Lyrimuse 图案漏出来一会」)。
                 // 逐帧抓窗坐实:当时顶行是 collapsedRow / topRow 两个视图在 VStack 里整行互换,SwiftUI 对
@@ -924,17 +931,6 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         .onAppear { playback.syncAdSkipGate(adBreak: controller.isAdBreakNow) }
         .onChange(of: controller.isAdBreakNow) { _, on in playback.syncAdSkipGate(adBreak: on) }
         .onDisappear { playback.syncAdSkipGate(adBreak: false) }
-        // 一次性诊断(现象是「稳态那枚提示不实时更新,展开一次才出来」)。
-        // 问题只可能落在两处:body 压根没被这次翻转叫醒(那 onChange 也不会响),或者 body 看见了、
-        // 但三道门里有一条此刻是假的(那 canSkipAd 响、hint 不响)。两条探针正好把这两种分开。
-        .onChange(of: playback.canSkipAd) { _, value in
-            YouTubeMusicAdSkipCenter.logger.notice("""
-                view: canSkipAd=\(value, privacy: .public) expanded=\(controller.isExpanded, privacy: .public)                 showsLyrics=\(controller.showsLyrics, privacy: .public) hint=\(showsAdSkipHint, privacy: .public)
-                """)
-        }
-        .onChange(of: showsAdSkipHint) { _, value in
-            YouTubeMusicAdSkipCenter.logger.notice("view: adSkipHint=\(value, privacy: .public)")
-        }
         // 删掉了这里原来那个 .onHover。它覆盖的范围比卡片大一圈(预览那边
         // 早就记录过同一个现象),窗口改成常驻最大尺寸之后这变成了实打实的 bug:鼠标划过
         // 卡片下方的透明区也会展开。命中判定和触觉反馈都移到 NotchWindowRoot,那里拿
@@ -1098,13 +1094,14 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
 
     private var equalizerBars: some View {
         // 窗口看不见时按暂停处理:TimelineView 不会因为窗口被遮住 / orderOut 自己停。
-        EqualizerBars(color: accentOrWhite, isPlaying: playback.isPlayingNow && surfaceVisible,
+        // 「减弱动态效果」开着也按暂停画:音浪是纯装饰的动画,别的会动的部分(弹簧、出场撑开)都已经为它停了。
+        EqualizerBars(color: accentOrWhite, isPlaying: playback.isPlayingNow && surfaceVisible && !reduceMotion,
                       resyncKey: equalizerResyncKey,
                       amplitude: Self.vocalAmplitude(at:))
     }
 
     /// 音浪的关键帧是按「当前行的逐字 + 锚点外推」预先排好一段的(见 EqualizerBars 头注),这几样
-    /// 一变就得按新基准重排:换行(包络跟着新一行的字走)、锚点重发(拖动进度 / 恢复播放)、本曲偏移。
+    /// 一变就得按新基准重排:换行(包络跟着新一行的字走)、锚点重发(拖动进度 / 恢复播放)、总偏移。
     private var equalizerResyncKey: Int {
         var h = Hasher()
         let line = playback.currentLine
@@ -1114,7 +1111,7 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         h.combine(playback.anchor?.fetchedAt)
         h.combine(playback.anchor?.progressMs)
         h.combine(playback.anchor?.rate)
-        h.combine(playback.trackLyricsOffsetMs)
+        h.combine(playback.lyricsOffsetMs)
         return h.finalize()
     }
 
@@ -1909,7 +1906,8 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                 alignment: side,
                 paused: !playback.isPlayingNow || playback.currentLineFillSettled || !layerActive,
                 shadow: .init(color: NSColor.black.withAlphaComponent(0.45), radius: 2, offsetY: 1),
-                edgeFadeWidth: NotchMetrics.lyricEdgeFadeWidth),
+                edgeFadeWidth: NotchMetrics.lyricEdgeFadeWidth,
+                timingEpoch: playback.lyricsOffsetMs),
             nowMs: Self.lyricsNowMs)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement()
@@ -1994,7 +1992,8 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         // 广告期间那枚替代方块同样占着这个位置(见 lyricRowArtwork),判据要跟着算上,
         // 否则 `.animation(nil, value:)` 会以为这一格是空的、放行一次不该有的布局动画。
         playback.lyricRowShowsArtwork
-            && (controller.isAdBreakNow || (playback.highResArtworkImage ?? playback.artworkImage) != nil)
+            && (controller.isAdBreakNow
+                || (radioTalkStation?.image ?? playback.highResArtworkImage ?? playback.artworkImage) != nil)
     }
 
     private func lyricContent(layerActive: Bool) -> some View {
@@ -2290,8 +2289,9 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
     /// 惯例(`@ViewBuilder` 的 `if let` 不满足时直接产出零视图,HStack 自然收缩)。
     @ViewBuilder
     private var trackInfoArtwork: some View {
+        // 电台口白期间换台标,跟耳朵、歌词行那两枚同一个取法(头部标题这时也已经是台名)。
         if controller.trackInfoShowsTrackFields, controller.expandedTrackInfoShowsArtwork,
-           let image = playback.highResArtworkImage ?? playback.artworkImage {
+           let image = radioTalkStation?.image ?? playback.highResArtworkImage ?? playback.artworkImage {
             artworkThumbnail(image, side: NotchMetrics.trackInfoArtworkSide)
         }
     }
@@ -2553,6 +2553,22 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         NotchIconButton(systemName: systemName, glyphSize: 10.5, hitSize: 22,
                         tint: accentOrWhite, glyphOpacity: active ? 1 : 0.45,
                         restingLevel: active ? 0.16 : 0, action: action)
+            .accessibilityLabel(Text(Self.controlAccessibilityName(systemName)))
+            .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    /// 播控键的读屏名。键只有图标,不给的话 VoiceOver 读的是符号自带的英文描述(「backward fill」),
+    /// 也不跟界面语言走。按图标名给,调用处不用各传一遍。
+    private static func controlAccessibilityName(_ systemName: String) -> String {
+        switch systemName {
+        case "backward.fill": return L10n.t("上一首")
+        case "forward.fill": return L10n.t("下一首")
+        case "play.fill", "pause.fill": return L10n.t("播放/暂停")
+        case "shuffle": return L10n.t("随机播放")
+        case "repeat.1": return L10n.t("单曲循环")
+        case "repeat": return L10n.t("循环播放")
+        default: return ""
+        }
     }
 
     /// glyphSize/hitSize 显式给时优先(展开卡里的三键要比耳朵里的大一号),
@@ -2572,6 +2588,7 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                 action()
             }
         }
+        .accessibilityLabel(Text(Self.controlAccessibilityName(systemName)))
     }
 }
 
@@ -3505,6 +3522,9 @@ private struct NotchCrossfadeBackdrop: View {
     @State private var front: NSImage?
     @State private var back: NSImage?
     @State private var frontOpacity: Double = 1
+    /// 每次换图加一。淡入完成回调只在自己仍是最新一次时才撤旧图:0.5s 内连着换两次(普通封面刚到、高清紧跟着
+    /// 到)时,第一次的回调会把第二次还垫在下面的那张撤掉,露出底下的纯色,整卡暗闪一下。
+    @State private var fadeGeneration = 0
 
     var body: some View {
         ZStack {
@@ -3516,10 +3536,12 @@ private struct NotchCrossfadeBackdrop: View {
             back = front
             front = image
             frontOpacity = 0
+            fadeGeneration &+= 1
+            let generation = fadeGeneration
             withAnimation(.easeInOut(duration: 0.5)) {
                 frontOpacity = 1
             } completion: {
-                back = nil
+                if generation == fadeGeneration { back = nil }
             }
         }
     }

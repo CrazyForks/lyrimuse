@@ -49,6 +49,9 @@ struct OverlayScrollingLyricRow: NSViewRepresentable {
         /// > 0 = 放不下、还没开始滚的时候,尾部留一条这么宽的渐隐带(同 `MarqueeText.edgeFadeWidth`,
         /// 判据同 `MarqueeMath.trailingFadeWidth`:一开始滚就收掉)。
         var edgeFadeWidth: CGFloat = 0
+        /// 时间基准的指纹(宿主传歌词时间轴总偏移之类):一变就按新基准重装动画,不等漂移超过
+        /// `resyncToleranceMs`。调一次偏移常常只有 200ms,小于那道阈值,不强制重装的话这一行一直按旧偏移走。
+        var timingEpoch: Int = 0
     }
 
     /// 整行阴影。`offsetY` 取 SwiftUI 的口径(正 = 往下)。
@@ -203,6 +206,7 @@ final class OverlayLyricScrollView: NSView {
     func apply(spec next: OverlayScrollingLyricRow.Spec, nowMs: Int) {
         let imagesChanged = spec.map { !Self.sameImages($0, next) } ?? true
         let timingChanged = spec?.paused != next.paused || spec?.pacedWindow != next.pacedWindow
+            || spec?.timingEpoch != next.timingEpoch
         spec = next
         if imagesChanged { rebuildImages(spec: next) }
         // 在跑时动画不在(首次装上 / 上一轮判成不用滚)要重装;停着时本来就不装动画,不算缺。
@@ -215,12 +219,13 @@ final class OverlayLyricScrollView: NSView {
         place(nowMs: nowMs, reinstall: true)
     }
 
-    /// 两份输入画出来的长图是不是同一张 —— 除了 `paused` / `pacedWindow` 全都一样。这两项只影响
+    /// 两份输入画出来的长图是不是同一张 —— 除了 `paused` / `pacedWindow` / `timingEpoch` 全都一样。这几项只影响
     /// 动画,不重画位图。
     private static func sameImages(_ a: OverlayScrollingLyricRow.Spec, _ b: OverlayScrollingLyricRow.Spec) -> Bool {
         var a = a
         a.paused = b.paused
         a.pacedWindow = b.pacedWindow
+        a.timingEpoch = b.timingEpoch
         return a == b
     }
 
