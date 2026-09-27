@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,5 +138,98 @@ func TestMusixmatchEnsureTokenRefreshesAfterExpiry(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("第二次调用不该再触发刷新,累计应仍为 1,实际 %d", got)
+	}
+}
+
+func resetMusixmatchTokenStateForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	reset := func() {
+		musixmatchTokenMu.Lock()
+		musixmatchToken, musixmatchTokenExpiry = "", time.Time{}
+		musixmatchLastToken, musixmatchLastTokenAt = "", time.Time{}
+		musixmatchFetchFailedAt = time.Time{}
+		musixmatchTokenMu.Unlock()
+	}
+	reset()
+	orig := musixmatchDoFetchToken
+	t.Cleanup(func() {
+		musixmatchDoFetchToken = orig
+		reset()
+	})
+}
+
+// token.get 要不到时退回上一个 token,并在冷却期内不再去要。
+func TestMusixmatchEnsureTokenFallsBackToPreviousToken(t *testing.T) {
+	resetMusixmatchTokenStateForTest(t)
+	musixmatchTokenMu.Lock()
+	musixmatchToken, musixmatchTokenExpiry = "tok-prev", time.Now().Add(-time.Minute)
+	musixmatchLastToken, musixmatchLastTokenAt = "tok-prev", time.Now().Add(-30*time.Minute)
+	musixmatchTokenMu.Unlock()
+	var calls int32
+	musixmatchDoFetchToken = func(context.Context) string { atomic.AddInt32(&calls, 1); return "" }
+
+	if got := musixmatchEnsureToken(context.Background()); got != "tok-prev" {
+		t.Fatalf("要不到新 token 应退回上一个,实际 %q", got)
+	}
+	if got := musixmatchEnsureToken(context.Background()); got != "tok-prev" || atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("冷却期内不该再去要: got=%q calls=%d", got, atomic.LoadInt32(&calls))
+	}
+
+	// 太旧的不用。
+	musixmatchTokenMu.Lock()
+	musixmatchLastTokenAt = time.Now().Add(-musixmatchStaleTokenMaxAge - time.Minute)
+	musixmatchTokenMu.Unlock()
+	if got := musixmatchEnsureToken(context.Background()); got != "" {
+		t.Fatalf("超过 %s 的旧 token 不该再用,实际 %q", musixmatchStaleTokenMaxAge, got)
+	}
+}
+
+// 过了有效期的磁盘 token 读回来记成「上一个」;数据接口说它失效(非 captcha 的 401)才丢,文件一起删。
+func TestMusixmatchExpiredFileTokenIsKeptUntilRejected(t *testing.T) {
+	resetMusixmatchTokenStateForTest(t)
+	if err := os.MkdirAll(filepath.Dir(musixmatchTokenPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fetched := time.Now().Add(-40 * time.Minute)
+	musixmatchSaveTokenFile("tok-file", fetched, fetched.Add(musixmatchTokenFreshFor))
+	if got := musixmatchLoadTokenFile(); got != "" {
+		t.Fatalf("过了有效期的不该当新鲜的用,实际 %q", got)
+	}
+	if got := musixmatchStaleToken(); got != "tok-file" {
+		t.Fatalf("过了有效期的应记成上一个,实际 %q", got)
+	}
+	if musixmatchRejectsToken([]byte(`{"message":{"header":{"status_code":401,"hint":"captcha"}}}`)) {
+		t.Fatal("captcha 是频率限制,不算 token 失效")
+	}
+	if !musixmatchRejectsToken([]byte(`{"message":{"header":{"status_code":401,"hint":"renew"}}}`)) {
+		t.Fatal("非 captcha 的 401 算 token 失效")
+	}
+	musixmatchRejectToken("tok-file")
+	if got := musixmatchStaleToken(); got != "" {
+		t.Fatalf("被拒之后不该再用,实际 %q", got)
+	}
+	if _, err := os.Stat(musixmatchTokenPath()); !os.IsNotExist(err) {
+		t.Fatalf("被拒的 token 文件应删掉: %v", err)
+	}
+}
+
+// 没有这个字段的旧文件按 Expiry 往前推 9 分钟算拿到的时刻。
+func TestMusixmatchTokenFileWithoutFetchedAt(t *testing.T) {
+	resetMusixmatchTokenStateForTest(t)
+	expiry := time.Now().Add(-time.Hour)
+	raw, _ := json.Marshal(map[string]any{"token": "tok-legacy", "expiry": expiry.Unix()})
+	if err := os.MkdirAll(filepath.Dir(musixmatchTokenPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(musixmatchTokenPath(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	musixmatchLoadTokenFile()
+	musixmatchTokenMu.Lock()
+	at := musixmatchLastTokenAt
+	musixmatchTokenMu.Unlock()
+	if d := expiry.Add(-musixmatchTokenFreshFor).Sub(at); d > time.Second || d < -time.Second {
+		t.Fatalf("拿到时刻 = %s, want %s", at, expiry.Add(-musixmatchTokenFreshFor))
 	}
 }

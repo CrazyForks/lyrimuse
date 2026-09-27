@@ -98,6 +98,15 @@ var (
 	// 再抢一次网络——16 个并发请求因此变成至多 1~2 次真实的 token.get。
 	musixmatchTokenFetchMu sync.Mutex
 
+	// musixmatchLastToken / musixmatchLastTokenAt:上一个拿到过的 token 和拿到的时刻,过了 9 分钟也留着。
+	// token.get 被拒时退回它(musixmatchStaleToken):实测匿名 usertoken 远不止 9 分钟,取到 30 分钟后
+	// search / subtitle 照常 200。数据接口明确说它失效(非 captcha 的 401)才丢,见 musixmatchRejectToken。
+	// musixmatchFetchFailedAt:上次 token.get 没要到的时刻,musixmatchTokenFetchCooldown 内不再去要。
+	// 三个都受 musixmatchTokenMu 保护。
+	musixmatchLastToken     string
+	musixmatchLastTokenAt   time.Time
+	musixmatchFetchFailedAt time.Time
+
 	// musixmatchLastFailureMu/musixmatchLastFailureReason:诊断用的只读旁路
 	// (跟 ytmusic.go 的 ytmusicLastFailureReason 同一个思路,同一个理由——
 	// 不改 musixmatchLyric 的返回值形状,自动解析路径从来不需要"为什么没查到"这个原因,
@@ -288,10 +297,97 @@ func musixmatchEnsureToken(ctx context.Context) string {
 	if t := musixmatchLoadTokenFile(); t != "" {
 		return t
 	}
-	if musixmatchDoFetchToken != nil {
-		return musixmatchDoFetchToken(ctx)
+	stale := musixmatchStaleToken()
+	if musixmatchInFetchCooldown() {
+		return stale
 	}
-	return musixmatchFetchToken(ctx, 0)
+	var t string
+	switch {
+	case musixmatchDoFetchToken != nil:
+		t = musixmatchDoFetchToken(ctx)
+	case stale != "":
+		// 手里有旧的就不退避重试:被拒那一下直接用旧的,不让这首歌的搜索白等 10 秒。
+		t = musixmatchFetchToken(ctx, 1)
+	default:
+		t = musixmatchFetchToken(ctx, 0)
+	}
+	musixmatchTokenMu.Lock()
+	if t != "" {
+		musixmatchFetchFailedAt = time.Time{}
+	} else if ctx.Err() == nil {
+		musixmatchFetchFailedAt = time.Now()
+	}
+	musixmatchTokenMu.Unlock()
+	if t == "" && stale != "" {
+		log.Printf("musixmatch: token.get refused; reusing the previous token")
+		return stale
+	}
+	return t
+}
+
+// musixmatchStaleTokenMaxAge:要不到新 token 时,上一个 token 最多再用多久(按拿到的时刻算)。
+const musixmatchStaleTokenMaxAge = 24 * time.Hour
+
+// musixmatchTokenFetchCooldown:token.get 没要到之后,隔多久再去要。反爬按请求频率收紧,被拒之后
+// 每首歌都再要一遍只会被拦得更久。
+const musixmatchTokenFetchCooldown = 5 * time.Minute
+
+// musixmatchStaleToken 返回上一个拿到过的 token(不看 9 分钟那道有效期);没有、太旧或已被拒返回空。
+func musixmatchStaleToken() string {
+	musixmatchTokenMu.Lock()
+	defer musixmatchTokenMu.Unlock()
+	if musixmatchLastToken == "" || time.Since(musixmatchLastTokenAt) >= musixmatchStaleTokenMaxAge {
+		return ""
+	}
+	return musixmatchLastToken
+}
+
+func musixmatchInFetchCooldown() bool {
+	musixmatchTokenMu.Lock()
+	defer musixmatchTokenMu.Unlock()
+	return !musixmatchFetchFailedAt.IsZero() && time.Since(musixmatchFetchFailedAt) < musixmatchTokenFetchCooldown
+}
+
+// musixmatchRejectToken:数据接口说这个 token 失效了,内存和磁盘里的都丢掉。
+func musixmatchRejectToken(token string) {
+	musixmatchTokenMu.Lock()
+	dropped := false
+	if musixmatchToken == token {
+		musixmatchToken, musixmatchTokenExpiry = "", time.Time{}
+		dropped = true
+	}
+	if musixmatchLastToken == token {
+		musixmatchLastToken, musixmatchLastTokenAt = "", time.Time{}
+		dropped = true
+	}
+	musixmatchTokenMu.Unlock()
+	if path := musixmatchTokenPath(); path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			var f musixmatchTokenFile
+			if json.Unmarshal(raw, &f) == nil && f.Token == token {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	if dropped {
+		log.Printf("musixmatch: token rejected by the API; dropping it")
+	}
+}
+
+// musixmatchRejectsToken:响应头是不是在说 token 失效。captcha 是按请求频率拦的,不是 token 坏了,不算。
+func musixmatchRejectsToken(body []byte) bool {
+	var out struct {
+		Message struct {
+			Header struct {
+				StatusCode int    `json:"status_code"`
+				Hint       string `json:"hint"`
+			} `json:"header"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return false
+	}
+	return out.Message.Header.StatusCode == 401 && out.Message.Header.Hint != "captcha"
 }
 
 // musixmatchTokenPath 是 token 的磁盘缓存位置。
@@ -314,7 +410,12 @@ func musixmatchTokenPath() string {
 type musixmatchTokenFile struct {
 	Token  string `json:"token"`
 	Expiry int64  `json:"expiry"`
+	// FetchedAt:拿到的时刻。没有这个字段的旧文件按 Expiry 往前推 9 分钟算。
+	FetchedAt int64 `json:"fetched_at,omitempty"`
 }
+
+// musixmatchTokenFreshFor:拿到的 token 按这么久算新鲜(官方有效期 10 分钟,提前 1 分钟换)。
+const musixmatchTokenFreshFor = 9 * time.Minute
 
 func musixmatchLoadTokenFile() string {
 	path := musixmatchTokenPath()
@@ -329,22 +430,30 @@ func musixmatchLoadTokenFile() string {
 	if json.Unmarshal(raw, &f) != nil || f.Token == "" {
 		return ""
 	}
+	fetchedAt := time.Unix(f.FetchedAt, 0)
+	if f.FetchedAt == 0 {
+		fetchedAt = time.Unix(f.Expiry, 0).Add(-musixmatchTokenFreshFor)
+	}
+	musixmatchTokenMu.Lock()
+	defer musixmatchTokenMu.Unlock()
+	// 过了有效期也记成「上一个」:token.get 被拒时还能退回它,见 musixmatchStaleToken。
+	if fetchedAt.After(musixmatchLastTokenAt) {
+		musixmatchLastToken, musixmatchLastTokenAt = f.Token, fetchedAt
+	}
 	if time.Now().Unix() >= f.Expiry {
 		return ""
 	}
-	musixmatchTokenMu.Lock()
 	musixmatchToken = f.Token
 	musixmatchTokenExpiry = time.Unix(f.Expiry, 0)
-	musixmatchTokenMu.Unlock()
 	return f.Token
 }
 
-func musixmatchSaveTokenFile(token string, expiry time.Time) {
+func musixmatchSaveTokenFile(token string, fetchedAt, expiry time.Time) {
 	path := musixmatchTokenPath()
 	if path == "" {
 		return
 	}
-	raw, err := json.Marshal(musixmatchTokenFile{Token: token, Expiry: expiry.Unix()})
+	raw, err := json.Marshal(musixmatchTokenFile{Token: token, Expiry: expiry.Unix(), FetchedAt: fetchedAt.Unix()})
 	if err != nil {
 		return
 	}
@@ -354,12 +463,9 @@ func musixmatchSaveTokenFile(token string, expiry time.Time) {
 }
 
 // musixmatchFetchToken 请求一个新 token。401 表示这次匿名请求被限流/拒绝,官方样例
-// (syncedlyrics)的做法是退避 10 秒重试一次——这里只重试一次(retry>=1 就放弃),不
+// (syncedlyrics)的做法是退避 10 秒重试一次——这里只重试一次(retry>=1 时被拒直接放弃),不
 // 无限重试卡住调用方。
 func musixmatchFetchToken(ctx context.Context, retry int) string {
-	if retry > 1 {
-		return ""
-	}
 	body, err := musixmatchDo(ctx, "token.get", neturl.Values{"user_language": {"en"}})
 	if err != nil {
 		return ""
@@ -382,6 +488,9 @@ func musixmatchFetchToken(ctx context.Context, retry int) string {
 		// 先记下来再退避重试,不管重试成不成功,这一拍"是反爬拒的"这个事实已经发生过。
 		// 存的是稳定代码不是文案,见 lyricsourcefailure.go 头注,两侧必须同步维护。
 		musixmatchSetLastFailureReason(lyricFailureReasonMusixmatchRateLimited)
+		if retry >= 1 {
+			return ""
+		}
 		select {
 		case <-time.After(10 * time.Second):
 		case <-ctx.Done():
@@ -393,12 +502,14 @@ func musixmatchFetchToken(ctx context.Context, retry int) string {
 	if token == "" {
 		return ""
 	}
-	expiry := time.Now().Add(9 * time.Minute)
+	now := time.Now()
+	expiry := now.Add(musixmatchTokenFreshFor)
 	musixmatchTokenMu.Lock()
 	musixmatchToken = token
 	musixmatchTokenExpiry = expiry
+	musixmatchLastToken, musixmatchLastTokenAt = token, now
 	musixmatchTokenMu.Unlock()
-	musixmatchSaveTokenFile(token, expiry)
+	musixmatchSaveTokenFile(token, now, expiry)
 	return token
 }
 
@@ -427,9 +538,11 @@ func musixmatchHTTPClient() *http.Client {
 // 时不附带 usertoken(避免 musixmatchEnsureToken→musixmatchDo→musixmatchEnsureToken
 // 递归),其余 action 都需要先有一个可用 token。
 func musixmatchDo(ctx context.Context, action string, params neturl.Values) ([]byte, error) {
+	var usedToken string
 	if action != "token.get" {
 		if token := musixmatchEnsureToken(ctx); token != "" {
 			params.Set("usertoken", token)
+			usedToken = token
 		}
 	}
 	params.Set("app_id", musixmatchAppID)
@@ -450,7 +563,11 @@ func musixmatchDo(ctx context.Context, action string, params neturl.Values) ([]b
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("musixmatch %s: status %d", action, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err == nil && usedToken != "" && musixmatchRejectsToken(body) {
+		musixmatchRejectToken(usedToken)
+	}
+	return body, err
 }
 
 // musixmatchTrackMatch 是 musixmatchSearchTrack 选中的候选——title/artist/album/cover
