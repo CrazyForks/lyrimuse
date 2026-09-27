@@ -84,7 +84,16 @@ final class ShortcutRecorderButton: NSButton {
         }
     }
 
+    /// 正在录制的那一颗。同时只许一颗在录:点了 A 再点 B,两颗都显示「请按下快捷键…」,按下的组合只有一颗收得到,
+    /// 另一颗就一直卡在录制态。
+    private static weak var activeRecorder: ShortcutRecorderButton?
+
     private func startRecording() {
+        if let other = Self.activeRecorder, other !== self { other.stopRecording() }
+        Self.activeRecorder = self
+        // 录制期间关掉全局快捷键(同 KeyboardShortcuts 库自带录制器的做法):不关的话按到已经分给别的动作的
+        // 组合,那个动作会真的执行,而且 Carbon 热键可能把这次 keyDown 吞掉,下面的撞键提示就走不到。
+        KeyboardShortcuts.isEnabled = false
         isRecording = true
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
@@ -92,7 +101,18 @@ final class ShortcutRecorderButton: NSButton {
         }
     }
 
+    /// 可以不带修饰键单独录的键:F1–F35(同 KeyboardShortcuts 库的 `NSEvent.SpecialKey.isFunctionKey`,
+    /// 那个是库内部的、这里用不到)。不能按 `.function` 标志判:方向键和导航键也带它。
+    private static let functionKeys: Set<NSEvent.SpecialKey> = [
+        .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10, .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f18,
+        .f19, .f20, .f21, .f22, .f23, .f24, .f25, .f26, .f27, .f28, .f29, .f30, .f31, .f32, .f33, .f34, .f35,
+    ]
+
     private func stopRecording() {
+        if Self.activeRecorder === self {
+            Self.activeRecorder = nil
+            KeyboardShortcuts.isEnabled = true
+        }
         isRecording = false
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
@@ -101,7 +121,11 @@ final class ShortcutRecorderButton: NSButton {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+        // 口径同 KeyboardShortcuts 库(NSEvent.modifiers):去掉 capsLock / numericPad / function。
+        // 方向键、Home/End、PageUp/PageDown、⌦ 都自带 .function(方向键还带 .numericPad),
+        // 留着的话下面「没有修饰键」的判断对它们全都不成立 —— ⌦ 清不掉快捷键,单按 ← 也能录成全局热键。
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
 
         if modifiers.isEmpty, Int(event.keyCode) == kVK_Escape {
             stopRecording()
@@ -122,11 +146,10 @@ final class ShortcutRecorderButton: NSButton {
         }
 
         // 跟库原本的规则一致:单独一个 Shift 不算数(没法用),必须搭配 Command/
-        // Option/Control 中至少一个,或者本身是功能键/媒体键(系统自动带上
-        // .function 这个 flag)。
+        // Option/Control 中至少一个,或者本身是 F1–F35(见 functionKeys)。
         let requiredModifiers = modifiers.subtracting(.shift).intersection([.command, .option, .control])
         guard
-            !requiredModifiers.isEmpty || modifiers.contains(.function),
+            !requiredModifiers.isEmpty || event.specialKey.map(Self.functionKeys.contains) == true,
             let shortcut = KeyboardShortcuts.Shortcut(event: event)
         else {
             NSSound.beep()

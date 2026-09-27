@@ -1302,6 +1302,9 @@ private struct LyricsSettingsTab: View {
                         runManualPickLockSweep(locking: on)
                     }
                 ))
+                // 追溯处理(读缓存 + collector 批量写,秒级)期间不让再拨:连点会并发跑两轮,关掉那一轮可能在
+                // 上锁之前就算完目标集,最后开关是关的、歌却被锁了。
+                .disabled(manualPickLockBusy)
             }
             // 回执常驻一小会儿。 位置在卡片最末、开关行的正下方 —— 别挪到别处:这条话
             // 说的就是刚才那一下开关的后果,离开关越远越像一条无主的系统提示。
@@ -1332,9 +1335,13 @@ private struct LyricsSettingsTab: View {
             Button(L10n.t("一并解锁")) {
                 Task {
                     manualPickLockBusy = true
-                    let n = await EnrichCacheStore.shared.applyManualPickLock(false)
+                    let result = await EnrichCacheStore.shared.applyManualPickLock(false)
                     manualPickLockBusy = false
-                    showManualPickLockNotice(String(format: L10n.t("已解锁 %@ 首"), "\(n)"))
+                    guard result.ok else {
+                        showManualPickLockNotice(EnrichCacheStore.shared.lastError ?? L10n.t("同步失败"))
+                        return
+                    }
+                    showManualPickLockNotice(String(format: L10n.t("已解锁 %@ 首"), "\(result.changed)"))
                 }
             }
         } message: {
@@ -1381,9 +1388,13 @@ private struct LyricsSettingsTab: View {
             }
 
             // 打开 = "我手动选过的都该是锁着的",直接做,不问。
-            let changed = await store.applyManualPickLock(true)
+            let result = await store.applyManualPickLock(true)
             manualPickLockBusy = false
-            if changed > 0 {
+            let changed = result.changed
+            if !result.ok {
+                // 写失败时 changed 也是 0:不拦的话会落到最后一支,说成「已经都是锁定状态」。
+                showManualPickLockNotice(store.lastError ?? L10n.t("同步失败"))
+            } else if changed > 0 {
                 showManualPickLockNotice(String(
                     format: L10n.t("已锁定 %@ 首之前手动选定的歌；从现在起选定的会直接锁定"),
                     "\(changed)"))
@@ -1661,7 +1672,8 @@ private struct LyricsSettingsTab: View {
         Task {
             do {
                 try await LyricSourceTestService.shared.test(source: source) { result in
-                    guard let matched = LyricsSource(rawValue: result.source) else { return }
+                    guard generation == lyricSourceTestGeneration,
+                          let matched = LyricsSource(rawValue: result.source) else { return }
                     sourceTestStates[matched] = .result(
                         status: result.status,
                         detail: LyricSourceFailureReason.text(forCode: result.reasonCode))
@@ -1673,6 +1685,8 @@ private struct LyricsSettingsTab: View {
                 }
             }
             if generation == lyricSourceTestGeneration {
+                // 跑完了却没报回这个源(collector 这一轮没测它):别让它一直转圈。
+                if sourceTestStates[source] == .testing { sourceTestStates[source] = nil }
                 isTestingLyricSources = false
             }
         }
@@ -1691,7 +1705,8 @@ private struct LyricsSettingsTab: View {
         Task {
             do {
                 try await LyricSourceTestService.shared.test(source: nil) { result in
-                    guard let matched = LyricsSource(rawValue: result.source) else { return }
+                    guard generation == lyricSourceTestGeneration,
+                          let matched = LyricsSource(rawValue: result.source) else { return }
                     sourceTestStates[matched] = .result(
                         status: result.status,
                         detail: LyricSourceFailureReason.text(forCode: result.reasonCode))
@@ -1708,6 +1723,11 @@ private struct LyricsSettingsTab: View {
                 }
             }
             if generation == lyricSourceTestGeneration {
+                // 正常跑完时,还挂着「测试中」的是这一轮没测到的源(比如被这一轮取代的那次单测测的是个已关闭的源,
+                // 或者还没落盘就点了测试):清回未测,不让它一直转圈、也点不了重测。
+                for source in LyricsSource.allCases where sourceTestStates[source] == .testing {
+                    sourceTestStates[source] = nil
+                }
                 isTestingLyricSources = false
             }
         }
@@ -5138,7 +5158,7 @@ private struct PlayerSettingsTab: View {
                 CardDivider()
                 SettingsNote {
                     Text(L10n.t("启用失败，可能是权限或系统限制导致歌词引擎没能正常启动，导出诊断信息能看到具体原因，也方便反馈问题"))
-                    Button(L10n.t("导出诊断…")) { exportDiagnostics() }
+                    DiagnosticsExportButton(title: L10n.t("导出诊断…"))
                 }
             }
             // 私有通道自检失败时明说。不显示成报错红字:用户无法修复它(只能等上游适配),
@@ -5311,8 +5331,9 @@ private struct PlayerSettingsTab: View {
         isTogglingCollectorService = true
         collectorEnableFailed = false
         Task {
-            let state = await CollectorServiceManager.setEnabledAndWait(true)
+            // 先写开关(didSet 派发那唯一一次 install),再等它跑完拿状态,见 CollectorServiceManager.operationQueue。
             AppSettings.shared.collectorServiceEnabled = true
+            let state = await CollectorServiceManager.waitForPendingOperations()
             collectorState = state
             isTogglingCollectorService = false
             // 只有这一个方向了(见上面按钮处的注释),没跑起来就是失败,直接标红给指引。
@@ -5320,12 +5341,6 @@ private struct PlayerSettingsTab: View {
         }
     }
 
-    // 跟"关于"tab 里"导出诊断信息"按钮同一份实现(DiagnosticsExporter 是无状态的纯
-    // 静态工具,两处各自调用即可,不需要抽共享 View)——常驻服务启用失败时给用户一个
-    // 具体能做的事,而不是让红叉停在原地不知道下一步。
-    private func exportDiagnostics() {
-        DiagnosticsExporter.exportInteractively()
-    }
 }
 
 private struct GeneralSettingsTab: View {
@@ -5549,13 +5564,13 @@ private struct GeneralSettingsTab: View {
                         // (存到 iCloud / 存一份 / 更新备份 / 已保存),每变一次整行跳一下 ——
                         // 跟 ShortcutRecorder 用 max(width,150) 解决的是同一个问题。
                         .frame(minWidth: 88)
-                        .disabled(!ICloudConfigStore.isAvailable)
+                        .disabled(!ICloudConfigStore.isAvailable || iCloudBusy)
                         if iCloudSnapshot != nil {
                             // 这颗叫「恢复这份」不叫「导入…」:它直接恢复**副标题里说的那一份**
                             // (不开面板),而下面「设置文件」那行的「导入…」是开文件选择器;两条路的
                             // 文件面板默认目录还是同一个 iCloud 文件夹,同名会更难分辨。
                             Button(L10n.t("恢复这份")) { importFromICloud() }
-                                .disabled(!ICloudConfigStore.isAvailable)
+                                .disabled(!ICloudConfigStore.isAvailable || iCloudBusy)
                         }
                     }
                 }
@@ -5606,6 +5621,10 @@ private struct GeneralSettingsTab: View {
                     // Task 包一层:歌词归档要读几千个文件 + 压缩,不能卡在 alert 的按钮里
                     // (buildArchive 内部已经把重活扔进 detached task,这里只是别同步等)。
                     Task { @MainActor in
+                        // 要读几千个歌词文件再压缩,可能到秒级:这段时间转圈、按钮置灰,免得以为没反应再点一次,
+                        // 并发写出两对备份。
+                        iCloudBusy = true
+                        defer { iCloudBusy = false }
                         guard let data = ConfigPortability.buildExportData() else { return }
                         let name = ConfigPortability.suggestedFilename()
                         guard ICloudConfigStore.write(data, filename: name) != nil else {
@@ -5908,17 +5927,19 @@ private struct GeneralSettingsTab: View {
         iCloudBusy = true
         iCloudMessage = nil
         Task {
+            // 忙碌态一直挂到整条流程结束(含下面那份歌词包的下载,默认最多等 20 秒):提前放掉的话这段时间没有转圈、
+            // 按钮还能再点(并发起第二轮),超时后确认框还会按「不含歌词」说。
+            defer { iCloudBusy = false }
             // 新机器上这份文件很可能还只是个未下载的占位符,readOutcome 会先触发下载再等它到位。
             // 分档提示:超时那档下载是**真的已经在跑**了,叫用户再点一次才有意义;而"连下载都没
             // 发起"是另一回事,不能也让他干等 —— 两种不能压成同一句话,判据见 ICloudFileReadiness。
             let outcome = await ICloudConfigStore.readOutcome(snap.url)
-            iCloudBusy = false
             let data: Data
             switch outcome {
             case .data(let d):
                 data = d
             case .downloading:
-                iCloudMessage = L10n.t("正在从 iCloud 下载这份备份，下载完再点一次「导入」")
+                iCloudMessage = L10n.t("正在从 iCloud 下载这份备份，下载完再点一次「恢复这份」")
                 return
             case .unavailable:
                 iCloudMessage = L10n.t("读不到这份备份：可能没开 iCloud Drive，或者这个文件夹不在同步")
@@ -6391,9 +6412,7 @@ private struct AboutSettingsTab: View {
                 subtitle: L10n.t("反馈问题时请附上：打包日志、崩溃记录与运行状态，已移除账号凭据"),
                 help: L10n.t("生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看")
             ) {
-                Button(L10n.t("导出…")) {
-                    DiagnosticsExporter.exportInteractively()
-                }
+                DiagnosticsExportButton(title: L10n.t("导出…"))
             }
             CardDivider()
             // 原始日志只在访达里选中,不在 App 里做查看界面(见 15 章「不做设置页实时日志视图」)。

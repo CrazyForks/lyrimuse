@@ -191,14 +191,20 @@ final class LastfmConnectController: ObservableObject {
                 let result = try await LastfmAuthFlow.exchangeSession(apiKey: apiKey, secret: secret, token: token)
                 guard myGen == self.gen else { return } // 已被取消,不写任何东西
                 logger.notice("confirmBrowserAuth: connected successfully")
+                // 换 session 之前统计认的是哪个账号(口径同 LastfmStatsService 取用户名那一处)。
+                let config = ConfigStore.shared
+                let previousUser = config.lastfmScrobbleUsername.isEmpty ? config.lastfmUser : config.lastfmScrobbleUsername
                 ConfigStore.shared.lastfmScrobbleSessionKey = result.sessionKey
                 ConfigStore.shared.lastfmScrobbleUsername = result.username
                 // 换到了新 session key,上一把钥匙的"授权失效"红标(如果有)立刻作废 ——
                 // 不等 collector 下一次成功提交再删,界面反馈要即时。
                 LastfmMirrorStatus.clear()
-                // 可能连的是另一个账号:上一个账号的统计/头像/榜单全部作废,让信息页
-                // 按新身份重拉(否则旧账号数据会一直挂着)。
-                LastfmStatsService.shared.resetAll()
+                // 连的是另一个账号:上一个账号的统计/头像/榜单全部作废,让信息页按新身份重拉(否则旧账号
+                // 数据会一直挂着)。重新授权同一个账号(session 失效、重点「连接」)不清:清了要删掉热力图、
+                // 写法索引和翻页缓存,再全量扫一遍历史。Last.fm 用户名不区分大小写。
+                if previousUser.caseInsensitiveCompare(result.username) != .orderedSame {
+                    LastfmStatsService.shared.resetAll()
+                }
                 // 首次连接就开始后台引导同步,不等用户点进某个 tab ——
                 // 见 LastfmStatsService.ensureFirstSyncBootstrap 的注释。
                 LastfmStatsService.shared.ensureFirstSyncBootstrap()

@@ -16164,25 +16164,19 @@
         }
       }
     },
-    "正在从 iCloud 下载这份备份，下载完再点一次「导入」" : {
+    "正在从 iCloud 下载这份备份，下载完再点一次「恢复这份」" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Downloading this backup from iCloud — click Import again once it finishes"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在从 iCloud 下载这份备份，下载完再点一次「导入」"
+            "value" : "Downloading this backup from iCloud — click Restore This One again once it finishes"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在從 iCloud 下載這份備份，下載完再按一次「匯入」"
+            "value" : "正在從 iCloud 下載這份備份，下載完再按一次「回復這份」"
           }
         }
       }
@@ -36361,6 +36355,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "來自 Last.fm"
+          }
+        }
+      }
+    },
+    "诊断没能导出，请换个位置再试" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't export diagnostics. Try saving them somewhere else."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "診斷沒能匯出，請換個位置再試"
           }
         }
       }

@@ -1057,7 +1057,7 @@
 "歌词进度" = "Lyrics Timing";
 "歌词（LRC）" = "Lyrics (LRC)";
 "正在下载…" = "Downloading…";
-"正在从 iCloud 下载这份备份，下载完再点一次「导入」" = "Downloading this backup from iCloud — click Import again once it finishes";
+"正在从 iCloud 下载这份备份，下载完再点一次「恢复这份」" = "Downloading this backup from iCloud — click Restore This One again once it finishes";
 "正在准备安装…" = "Preparing to install…";
 "正在准备补搜…" = "Preparing…";
 "正在加载…" = "Loading…";
@@ -1384,6 +1384,7 @@
 "评估后未更换" = "Evaluated, not replaced";
 "评分规则更新后重选" = "Re-picked after a scoring rule update";
 "诊断与数据" = "Diagnostics & Data";
+"诊断没能导出，请换个位置再试" = "Couldn't export diagnostics. Try saving them somewhere else.";
 "译文" = "Translation";
 "译文与读音" = "Translation & Romanization";
 "译文语言" = "Translation Language";

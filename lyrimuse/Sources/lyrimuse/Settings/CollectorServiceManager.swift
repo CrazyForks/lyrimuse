@@ -150,19 +150,13 @@ public enum CollectorServiceManager {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    // install/uninstall 必须互斥——实测排查坐实:早先 setEnabled(_)/
-    // setEnabledAndWait(_:) 各自派发一个独立的 Task.detached,互相之间完全没有互斥。
-    // AppSettings.collectorServiceEnabled 的 didSet 对"赋同一个值"依然会触发(Swift 不
-    // 做 old==new 短路),而 SettingsView.toggleCollectorService/OnboardingView.
-    // enableCollectorService 在 setEnabledAndWait 完成后都会回写一次
-    // settings.collectorServiceEnabled = enabling——这次赋值会再触发一次
-    // didSet→setEnabled(_:),派生出一个完全独立、不等待的冗余调用。如果用户在这次冗余
-    // 调用还没跑完(install() 内部失败重试路径最坏可达 2-3 秒)之前就快速切换开关,足以
-    // 让 install()/uninstall() 真的并发执行,其中一个的 bootstrap 用到另一个已经删除的
-    // plist 路径而静默失败,最终 launchd 实际状态跟 collectorServiceEnabled 显示的对不
-    // 上。改用一条专属的串行队列承载所有 install()/uninstall() 调用——不管调用方是不是
-    // 冗余触发的,严格按到达顺序一个接一个执行,不再各自开一个独立、互不感知的
-    // Task.detached。
+    // install/uninstall 必须互斥:并发跑时一个的 bootstrap 会用到另一个刚删掉的 plist 路径而静默失败,
+    // launchd 实际状态跟 collectorServiceEnabled 对不上。所有 install()/uninstall() 都排在这一条串行队列上,
+    // 按到达顺序一个接一个执行。
+    //
+    // AppSettings.collectorServiceEnabled 的 didSet 每次赋值都会派发一次(赋同一个值也会,Swift 不做 old==new
+    // 短路)。所以要结果的调用方是「先写开关、再 waitForPendingOperations()」,不能「setEnabledAndWait 之后
+    // 再写开关」—— 那样同一个动作排两遍,第二遍 install() 一上来就 bootout 掉刚起来的服务。
     private static let operationQueue = DispatchQueue(label: "me.yudaotor.lyrimuse.collector-service-manager", qos: .userInitiated)
 
     // 供 AppSettings.collectorServiceEnabled 的 didSet 调用——fire-and-forget，不阻塞
@@ -188,6 +182,14 @@ public enum CollectorServiceManager {
                 if enabled { install() } else { uninstall() }
                 continuation.resume(returning: state)
             }
+        }
+    }
+
+    /// 等串行队列上已经排着的装 / 卸跑完,再取一次状态。给「先写 collectorServiceEnabled(didSet 派发装 / 卸)、
+    /// 再要结果」的调用方用,见 operationQueue 上方的说明。
+    public static func waitForPendingOperations() async -> LaunchdJobState {
+        await withCheckedContinuation { continuation in
+            operationQueue.async { continuation.resume(returning: state) }
         }
     }
 

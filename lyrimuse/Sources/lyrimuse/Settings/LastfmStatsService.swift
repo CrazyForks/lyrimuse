@@ -213,15 +213,17 @@ final class LastfmStatsService: ObservableObject {
     private func refreshTodayCountIfNeeded() {
         guard !fresh("todaycount", ttl: baselineTTL), let cred = credentials else { return }
         fetchedAt["todaycount"] = Date()
+        let epoch = accountEpoch
         Task {
             let dayStart = Calendar.current.startOfDay(for: Date())
             guard let json = await request(method: "user.getrecenttracks", cred: cred,
                                            extra: ["limit": "1", "from": String(Int(dayStart.timeIntervalSince1970))],
                                            priority: .background)
             else {
-                fetchedAt["todaycount"] = nil
+                if epoch == accountEpoch { fetchedAt["todaycount"] = nil }
                 return
             }
+            guard epoch == accountEpoch else { return }
             let count = attrTotal(json)
             recordTodayFetched(dayStart: dayStart, count: count)
             mergeOverview(total: nil, today: count, week: nil)
@@ -534,6 +536,7 @@ final class LastfmStatsService: ObservableObject {
         guard let cred = credentials, !recentPagesPrefetching else { return }
         if !recentPageCacheLoaded { loadRecentPageCache() }
         recentPagesPrefetching = true
+        let epoch = accountEpoch
         Task {
             defer { recentPagesPrefetching = false }
             var totalPages = recentTotalPages
@@ -549,6 +552,7 @@ final class LastfmStatsService: ObservableObject {
                 }
                 guard let rows = await fetchRawPage(page, cred: cred, priority: .background)
                 else { continue } // 单页失败跳过,不拖累其它页;下次触发时这一页仍是"缺的"
+                guard epoch == accountEpoch else { return }
                 if recentTotalPages > 0 { totalPages = recentTotalPages }
                 fetchedAny = true
                 resolvePlayCounts(for: rows, priority: .background)
@@ -565,11 +569,13 @@ final class LastfmStatsService: ObservableObject {
     /// 顺手更新 `recentTotalPages`(响应里有 totalPages,翻页控件靠它)。
     private func fetchRawPage(_ page: Int, cred: (user: String, key: String),
                               priority: LastfmRateLimiter.Priority) async -> [RecentTrack]? {
+        let epoch = accountEpoch
         guard let json = await request(method: "user.getrecenttracks", cred: cred,
                                        extra: ["limit": String(Self.recentPageSize),
                                                "page": String(page)],
                                        priority: priority)
         else { return nil }
+        guard epoch == accountEpoch else { return nil }
         applyRecentPaging(json)
         let rows = parseRecent(json)
         // 这一页是刚现拉的,数据本身就新鲜——storeFetchedPage 顺手盖戳:不盖的话 goToPage 翻到
@@ -881,9 +887,15 @@ final class LastfmStatsService: ObservableObject {
         "\(kind.rawValue)|\(artist)|\(name)"
     }
 
+    /// 账号代际:`resetAll` 递增。没有自己那套代际号的异步写入(翻页重验 / 预取、次数解析、今日计数、
+    /// 第 N 次听、首次 / 上次听、那年今日、别名发现)开工时记下它,落地前核对 —— 不核对的话,换账号时
+    /// 还在飞的旧账号请求回来,会写进新账号的状态,再经各自的落盘路径以新用户名存下来,重启后照样端出来。
+    private var accountEpoch = 0
+
     /// 断开/换账号时把一切归零 —— 统计数字、榜单、头像、封面都是**上一个身份**的,
     /// 挂着不清,重连另一个账号后页面会先展示前任的数据。
     func resetAll() {
+        accountEpoch += 1
         baselineGen += 1
         overview = nil
         recent = []
@@ -892,6 +904,8 @@ final class LastfmStatsService: ObservableObject {
         nowPlayingCount = nil
         nowPlayingCountKey = ""
         nowPlayingCountPlayCountKey = ""
+        nowPlayingSpan = nil
+        nowPlayingSpanKey = ""
         onThisDay = nil
         onThisDayUpdatedAt = nil
         onThisDayDay = nil
@@ -1005,6 +1019,7 @@ final class LastfmStatsService: ObservableObject {
         nowPlayingCount = trackPlayCounts[nowPlayingCountPlayCountKey]
             .map { displayedNowPlayingCount(total: $0, playCountKey: nowPlayingCountPlayCountKey) }
         guard !title.isEmpty, let cred = credentials else { return }
+        let epoch = accountEpoch
         Task {
             // 写法孪生实体(括号风格/去副题/繁简,见 PlayCountVariants 注释)在 Last.fm
             // 各记各的账 —— 逐个问、按规范身份去重后求和。身份去重防两类翻倍:孪生写法
@@ -1041,7 +1056,10 @@ final class LastfmStatsService: ObservableObject {
                       identities.insert(id).inserted else { continue }
                 total = (total ?? 0) + c
             }
-            guard nowPlayingCountKey == key else { return }
+            guard nowPlayingCountKey == key, epoch == accountEpoch else { return }
+            // 本尊那一问没回来(超时 / 限流):放开 key 守卫,下次打开歌词窗口或简介面板时重问。不放的话
+            // 这首歌整首播放期间都不再取,徽章一直是空的。
+            if results[0]?.count == nil, results[0]?.identity == nil { nowPlayingCountKey = "" }
             if let total {
                 // 顺手把这个**新鲜的合并总数**写回历史行用的那张表(见 adoptFreshTotal)。
                 adoptFreshTotal(total, artist: artist, title: title, siblings: sibs)
@@ -1115,6 +1133,7 @@ final class LastfmStatsService: ObservableObject {
         nowPlayingSpanKey = key
         nowPlayingSpan = nil
         guard !title.isEmpty, credentials != nil else { return }
+        let epoch = accountEpoch
         Task {
             // limit=1 的第 n 页 = 第 n 新那一条。取数本体提成 fetchTrackScrobbles,
             // 跟「第 N 次听」合并明细共用一份解析(同一个接口两处各解一遍,哪天 Last.fm 改了
@@ -1124,7 +1143,11 @@ final class LastfmStatsService: ObservableObject {
                 else { return nil }
                 return (p.plays.map(\.date), p.total)
             }
-            guard let head = await page(1) else { return }
+            guard let head = await page(1) else {
+                // 没取到:放开 key 守卫,下次打开简介面板时重取(否则这首歌再也不取)。
+                if nowPlayingSpanKey == key, epoch == accountEpoch { nowPlayingSpanKey = "" }
+                return
+            }
             var first = head.dates.first
             var last = head.dates.first
             if head.total > 1 {
@@ -1135,7 +1158,7 @@ final class LastfmStatsService: ObservableObject {
             // 排序兜底:getTrackScrobbles 按新→旧返回是与 recenttracks 家族一致的观察,
             // 但官方没写死 —— 万一哪天倒过来,交换一下也只是标签回正,不会显示错日期。
             if let f = first, let l = last, f > l { swap(&first, &last) }
-            guard nowPlayingSpanKey == key else { return }
+            guard nowPlayingSpanKey == key, epoch == accountEpoch else { return }
             nowPlayingSpan = TrackScrobbleSpan(total: head.total, first: first, last: last)
         }
     }
@@ -1257,6 +1280,7 @@ final class LastfmStatsService: ObservableObject {
             onThisDayOutcome = .empty
             return
         }
+        let epoch = accountEpoch
         Task {
             // 区分「都没记录」和「请求全挂」:计划里的窗口**都**回来了才配说"都没有";有一个
             // 没回来就是"没能取到"+重试(收严——此前只要任一年有响应就判 .empty,
@@ -1269,6 +1293,7 @@ final class LastfmStatsService: ObservableObject {
                             "limit": String(onThisDayPageSize)]
                 guard let first = await request(method: "user.getrecenttracks", cred: cred, extra: base)
                 else { continue }
+                guard epoch == accountEpoch else { return }
                 responses += 1
                 let total = attrTotal(first)
                 var rows = parseRecent(first).filter { $0.date != nil }
@@ -1282,6 +1307,7 @@ final class LastfmStatsService: ObservableObject {
                         guard let more = await request(method: "user.getrecenttracks", cred: cred,
                                                        extra: base.merging(["page": String(page)]) { _, new in new })
                         else { break }
+                        guard epoch == accountEpoch else { return }
                         rows.append(contentsOf: parseRecent(more).filter { $0.date != nil })
                     }
                 }
@@ -1552,6 +1578,11 @@ final class LastfmStatsService: ObservableObject {
         titleFormsLastTopUp = Date()
         let syncStartedAt = Date().timeIntervalSince1970
         var from: TimeInterval = 1
+        // 全量扫描的上界(带 `to` 请求):这一场首次全量**最初**开扫的时刻,断点续跑沿用断点里记的那个。
+        // 页码是从最新一条往回数的 —— 不钉上界的话,中断到续跑之间新增的 k 条会把所有页边界整体下移 k 行,
+        // 续跑那一页的前 k 行在更早的日子里被算第二遍;收尾时水位也钉在这个上界,之后新增的由增量补上,
+        // 不会因为水位被盖成「续跑那一刻」而漏掉中间那段。
+        var scanUpTo = syncStartedAt
         var wipeFromDay: String?
         if !full {
             // 增量至少重扫最近 14 天,不能只从水位那天扫起:水位之后才到、时间戳落在更早日子的
@@ -1567,6 +1598,7 @@ final class LastfmStatsService: ObservableObject {
         } else if let cp = historyCheckpoint, cp.username == cred.user {
             // 断点续传:接着上次成功落盘的那一页继续,不从头来。
             from = cp.from
+            scanUpTo = cp.startedAt
         }
 
         let generation = historySyncGeneration
@@ -1586,10 +1618,10 @@ final class LastfmStatsService: ObservableObject {
 
             // 400 页 = 8 万条,远超当前量级的安全上限,防 totalPages 异常时打穿。
             while page <= totalPages && page <= 400 {
+                var extra = ["limit": "200", "page": "\(page)", "from": "\(Int(from))"]
+                if full { extra["to"] = "\(Int(scanUpTo))" }
                 let response = await request(
-                    method: "user.getrecenttracks", cred: cred,
-                    extra: ["limit": "200", "page": "\(page)", "from": "\(Int(from))"],
-                    priority: .background)
+                    method: "user.getrecenttracks", cred: cred, extra: extra, priority: .background)
                 // resetAll 在这次请求飞着的时候把一切归零了:这一轮的每一页都已经无家可归,
                 // 不写任何东西、不动任何标志,直接退出(新一轮由 ensureFirstSyncBootstrap 起)。
                 guard generation == historySyncGeneration else {
@@ -1628,7 +1660,7 @@ final class LastfmStatsService: ObservableObject {
                     // 换来的精度对"断点续传"这个目标没有意义。
                     if page % 10 == 0 {
                         historyCheckpoint = HistorySyncCheckpoint(
-                            username: cred.user, page: page, from: from, startedAt: syncStartedAt)
+                            username: cred.user, page: page, from: from, startedAt: scanUpTo)
                         saveHistoryCheckpoint()
                         saveDailySnapshot()
                     }
@@ -1645,7 +1677,7 @@ final class LastfmStatsService: ObservableObject {
                     // page 此刻是"正要扫但失败了"的那一页,退一格才是"已确认成功"的页。
                     if page > 1 {
                         historyCheckpoint = HistorySyncCheckpoint(
-                            username: cred.user, page: page - 1, from: from, startedAt: syncStartedAt)
+                            username: cred.user, page: page - 1, from: from, startedAt: scanUpTo)
                         saveHistoryCheckpoint()
                     }
                     saveDailySnapshot()
@@ -1662,8 +1694,10 @@ final class LastfmStatsService: ObservableObject {
                 for (k, v) in fresh { days[k, default: 0] += v }
                 dailyCounts = days
             }
-            dailySyncedThrough = syncStartedAt
-            titleFormsSyncedThrough = syncStartedAt
+            // 全量只扫到了 scanUpTo(见上面):水位钉在那里,之后新增的由下一次增量从水位那天起补上。
+            let syncedThrough = full ? scanUpTo : syncStartedAt
+            dailySyncedThrough = syncedThrough
+            titleFormsSyncedThrough = syncedThrough
             scheduleTitleFormsSave()
             // 写法索引刚刷新完,顺手扫一批跨文字写法别名候选——见
             // discoverTitleAliasesIfNeeded 声明处注释。
@@ -2083,6 +2117,7 @@ final class LastfmStatsService: ObservableObject {
         guard !candidates.isEmpty else { return }
 
         discoveryScanning = true
+        let epoch = accountEpoch
         Task {
             defer { discoveryScanning = false }
             // 前台还在忙(用户刚翻页/换歌,次数封面还在取)就让路:候选有 30 天冷却、下一次
@@ -2112,6 +2147,7 @@ final class LastfmStatsService: ObservableObject {
                 guard let own = await trackFactsFor(artist: candidate.artist, title: candidate.title,
                                                     cred: cred)
                 else { continue } // 网络失败:这次不算"尝试过",下次同步收尾再试
+                guard epoch == accountEpoch else { return }
                 discoveryAttemptedAt[ownKey] = Date()
                 guard own.duration > 0 else { continue }
 
@@ -2137,6 +2173,7 @@ final class LastfmStatsService: ObservableObject {
                 for han in candidate.hanCandidates {
                     guard let hanFacts = await trackFactsFor(artist: han.artist, title: han.title, cred: cred),
                           hanFacts.duration > 0 else { continue }
+                    guard epoch == accountEpoch else { return }
                     guard hanFacts.duration == own.duration else { continue }
                     guard Self.evidenceAgrees(own, hanFacts) else { continue }
                     matches.append(han)
@@ -2644,8 +2681,13 @@ final class LastfmStatsService: ObservableObject {
             // 只描述**最近记录那一列**(界面主体)有没有拿到——数字缺一两个不算失败,留旧值。
             if let r {
                 let rows = parseRecent(r)
-                applyRecent(rows)
-                applyRecentPaging(r) // 总页数只在响应里,首次加载这条路径也得取(翻页控件靠它才出现)
+                // 只在还停在请求那一页时才换列表:goToPage 命中缓存的两条路不递增 baselineGen(不该连带作废
+                // 今日 / 本周计数),这期间翻了页的话,这批是别的页,换上去就是「页码写第 2 页、列表是第 1 页」。
+                // 缓存照样按请求的那一页记。
+                if requestedPage == recentPage {
+                    applyRecent(rows)
+                    applyRecentPaging(r) // 总页数只在响应里,首次加载这条路径也得取(翻页控件靠它才出现)
+                }
                 // 顺手更新 recentPageCache——periodic 刷新原来"看的哪页刷哪页"这条既有行为,
                 // 现在也让 goToPage 翻回来时受益,不必让它自己再打一次一模一样的请求。
                 storeFetchedPage(requestedPage, rows: rows, json: r)
@@ -3361,6 +3403,7 @@ final class LastfmStatsService: ObservableObject {
         }
         guard !missing.isEmpty else { return }
         missing.forEach { playCountsInFlight.insert($0.key) }
+        let epoch = accountEpoch
         Task {
             defer { missing.forEach { playCountsInFlight.remove($0.key) } }
             var index = 0
@@ -3497,6 +3540,8 @@ final class LastfmStatsService: ObservableObject {
                     }
                     addNext()
                 }
+                // 换过账号:这批是上一个账号的次数 / 封面,一个都不写。
+                guard epoch == accountEpoch else { return }
                 // 观测用:这一批一共问了多少首、成功拿到几个次数——之前排查"预取到底有没有
                 // 真的在解析"全靠猜,留一条轻量日志比重新加临时诊断代码划算。
                 // 没解析出来的那几首把键名一起打出来:排查《慢歌 3》时只有
@@ -3706,11 +3751,13 @@ final class LastfmStatsService: ObservableObject {
         guard let cred = credentials else { return }
         baselineGen += 1
         let gen = baselineGen
+        let epoch = accountEpoch
         Task {
             guard let json = await request(method: "user.getrecenttracks", cred: cred,
                                            extra: ["limit": String(Self.recentPageSize),
                                                    "page": String(target)])
             else { return }
+            guard epoch == accountEpoch else { return }
             let rows = parseRecent(json)
             storeFetchedPage(target, rows: rows, json: json)
             scheduleRecentPageCacheSave()

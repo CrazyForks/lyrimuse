@@ -89,11 +89,15 @@ struct LocalCacheAccessHelp: View {
     /// 而中间这段时间正是用户判断"这个按钮到底有没有用"的时候。
     private func restartAndWaitForState() async {
         phase = .waiting
+        let startedAt = Int64(Date().timeIntervalSince1970)
         _ = await coordinator.requestRestart()
         let deadline = Date().addingTimeInterval(Self.settleTimeout)
         while Date() < deadline {
             try? await Task.sleep(for: .seconds(Self.pollInterval))
-            if !LocalCacheAccess.isDenied(source.rawValue, state: LocalCacheAccess.current) {
+            // 只认这次重启之后发布的结论,而且要明确是「读得到」:新进程启动时先删掉状态文件再重写,
+            // 那段空窗里「不是被拒」只是没有数据(判据同 FullDiskAccessPermission.restartCollector)。
+            guard let state = LocalCacheAccess.current, state.updatedAt >= startedAt else { continue }
+            if LocalCacheAccess.grant(for: [source.rawValue], state: state) == .granted {
                 onResolved()
                 return
             }

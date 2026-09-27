@@ -167,6 +167,10 @@ final class SparkleUpdaterManager: ObservableObject {
     private var cancelCheck: (() -> Void)?
     private var cancelDownload: (() -> Void)?
     private var retryTerminating: (() -> Void)?
+    /// 「取消」递增。开着测试版更新时 startCheck 要先等 refreshBetaFeed(最长 10 秒)才真的调 Sparkle,
+    /// 这段时间 cancelCheck 还是 nil、取消只能重置界面;不核对的话那个 Task 之后照样发起检查,
+    /// 页面跳回「正在检查」,找到的结果又因为 pageIntent 已清空被当成周期检查直接 dismiss 掉。
+    private var checkGeneration = 0
 
     /// 「立即更新」/「立即重启」。手里有 Sparkle 在等的 reply 就直接答 install;没有(周期检查早就 dismiss 过了)
     /// 就再发一次检查,found 里按 `.install` 意图自动答 —— 已经下好的包 Sparkle 会直接进安装。
@@ -201,6 +205,7 @@ final class SparkleUpdaterManager: ObservableObject {
     func cancel() {
         switch flow {
         case .checking:
+            checkGeneration += 1
             cancelCheck?()
             cancelCheck = nil
             pageIntent = .none
@@ -348,6 +353,10 @@ final class SparkleUpdaterManager: ObservableObject {
         case .dismissed:
             clearSessionClosures()
             if case .installing = flow { return }
+            // 出错时 Sparkle 在我们 acknowledge 之后会异步再调一次 dismissUpdateInstallation
+            // (SPUUIBasedUpdateDriver._abortUpdateWithError):不拦的话「更新失败」和「重试」刚显示就被
+            // 改回 idle,页面反而说「已是最新版本」。失败态由「重试」或离开这一页(见上面那个函数)收回。
+            if case .failed = flow { return }
             flow = .idle
         case .focusRequested:
             showUpdatePage()
@@ -490,8 +499,11 @@ final class SparkleUpdaterManager: ObservableObject {
             updater.checkForUpdates()
             return
         }
+        let generation = checkGeneration
         Task {
             await refreshBetaFeed(force: false)
+            // 等测试版地址那几秒里用户点了「取消」:不再发起这次检查。
+            guard generation == checkGeneration, case .checking = flow else { return }
             updater.checkForUpdates()
         }
     }

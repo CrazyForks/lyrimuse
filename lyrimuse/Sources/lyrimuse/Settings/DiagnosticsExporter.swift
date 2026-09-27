@@ -3,6 +3,7 @@ import LyrimuseCore
 import OSLog
 import AppKit
 import Darwin
+import SwiftUI
 
 // 诊断导出:collector 日志(~/Library/Logs/lyrimuse.log)+ App 侧 os.Logger 日志 + 关键状态(权限 / 常驻服务 /
 // 各功能是否已配置)打成一个 zip,给用户附到 issue 里。它是用户遇到问题时唯一会发过来的东西,要覆盖网络 / 逻辑 /
@@ -38,6 +39,9 @@ enum DiagnosticsExporter {
     /// 失败时的补救入口),顺序一旦写反就又变回卡四秒,不该让两处各自维护一遍。
     @MainActor
     static func exportInteractively() {
+        // 一次导出要跑近 20 秒(OSLog 查询 + 歌词引擎自检):这期间再点就忽略,不并发写出好几份。
+        let status = DiagnosticsExportStatus.shared
+        guard !status.isExporting else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedFilename()
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
@@ -52,7 +56,10 @@ enum DiagnosticsExporter {
         // zip 里的顶层目录跟着用户在保存面板里敲的名字走,解压出来是一个文件夹,
         // 不是三个散文件落进下载目录。
         let bundleName = url.deletingPathExtension().lastPathComponent
+        let startedAt = Date()
+        status.isExporting = true
         Task { @MainActor in
+            defer { status.isExporting = false }
             // 状态段要读 @MainActor 的单例,在主线程取;自动化权限先 await 出来传进去,
             // 不能在主线程上同步查(见 `automationLine`)。日志段(慢的那部分)扔后台。
             let head = stateLines(automation: await automationLine())
@@ -60,6 +67,15 @@ enum DiagnosticsExporter {
                 writeDiagnosticsBundle(to: url, bundleName: bundleName, head: head,
                                        secrets: secrets, currentTrackLines: currentTrackLines)
             }.value
+            // 写包的每一步都是 try?:按结果判断有没有写成(文件在、而且是这次写的),没写成就明说,
+            // 不要照样打开访达、让人对着一个空文件夹或上一次的旧文件。
+            let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            guard let modified, modified >= startedAt.addingTimeInterval(-1) else {
+                let alert = NSAlert()
+                alert.messageText = L10n.t("诊断没能导出，请换个位置再试")
+                alert.runModal()
+                return
+            }
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
@@ -637,5 +653,26 @@ enum DiagnosticsExporter {
             lines.append("Instrumental: \(lyrics.instrumental)  |  resolved: \(lyrics.resolved)")
         }
         return lines
+    }
+}
+
+/// 诊断导出进行中。两个入口的按钮(`DiagnosticsExportButton`)据此转圈、置灰。
+@MainActor
+final class DiagnosticsExportStatus: ObservableObject {
+    static let shared = DiagnosticsExportStatus()
+    @Published fileprivate(set) var isExporting = false
+}
+
+/// 「导出诊断」按钮:导出期间置灰、旁边转圈。单独成一个视图,状态变化只重画这一颗,不打醒整个设置分页。
+struct DiagnosticsExportButton: View {
+    let title: String
+    @ObservedObject private var status = DiagnosticsExportStatus.shared
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if status.isExporting { ProgressView().controlSize(.small) }
+            Button(title) { DiagnosticsExporter.exportInteractively() }
+                .disabled(status.isExporting)
+        }
     }
 }

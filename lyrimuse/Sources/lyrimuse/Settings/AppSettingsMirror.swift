@@ -98,8 +98,14 @@ enum AppSettingsMirror {
     /// (界面上看不出变化,要等下次启动)。目前的调用点是
     /// AppDelegate.applicationDidFinishLaunching 的**第一行**,而 AppSettings.shared 在
     /// 同一个函数里靠后才首次被访问。
+    /// 这次启动之前配置文件夹里就有镜像。启动流程紧接着 `restoreIfPristine` 会无条件 `write()` 一份,
+    /// 之后再看文件在不在,全新装机也永远是"在"。首次读取发生在 `restoreIfPristine` 开头(那时还没写),
+    /// 用它的地方(`FeatureSettingsStore.isFreshInstall`)读到的就是启动前的样子。
+    static let existedBeforeLaunch = FileManager.default.fileExists(atPath: fileURL.path)
+
     @discardableResult
     static func restoreIfPristine() -> Bool {
+        _ = existedBeforeLaunch
         // 判据用 hasCompletedOnboarding:它是"这台机器走完引导了没有",而且被刻意排除在
         // 导出/镜像之外(见 ConfigPortability 的排除表),所以它在新机器上一定不存在 ——
         // 正好是"这台机器还没有自己的偏好"最可靠的信号。

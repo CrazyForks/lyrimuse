@@ -1374,8 +1374,9 @@ struct OnboardingView: View {
         collectorFailure = nil
         Task {
             // 引导页只关心"起来了没",不铺开三态——那是设置页排查问题时才需要的粒度。
-            let state = await CollectorServiceManager.setEnabledAndWait(true)
+            // 先写开关(didSet 派发那唯一一次 install),再等它跑完拿状态,见 CollectorServiceManager.operationQueue。
             settings.collectorServiceEnabled = true
+            let state = await CollectorServiceManager.waitForPendingOperations()
             collectorRunning = state.isRunning
             isTogglingCollectorService = false
             // 起不来时给一句交代 + 一条出路。`LaunchdJobState.description`

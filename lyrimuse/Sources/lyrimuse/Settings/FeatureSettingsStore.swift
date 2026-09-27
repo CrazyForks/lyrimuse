@@ -585,7 +585,8 @@ public final class FeatureSettingsStore: ObservableObject {
         if UserDefaults.standard.object(forKey: "np:hasCompletedOnboarding") != nil { return false }
         let fm = FileManager.default
         if fm.fileExists(atPath: fileURL.path) { return false }
-        if fm.fileExists(atPath: AppSettingsMirror.fileURL.path) { return false }
+        // 看的是启动之前在不在:启动时 AppDelegate 会先写出一份镜像,那之后文件总是在的。
+        if AppSettingsMirror.existedBeforeLaunch { return false }
         return true
     }
 

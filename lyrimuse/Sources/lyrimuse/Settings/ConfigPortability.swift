@@ -323,6 +323,9 @@ enum ConfigPortability {
             if let featuresData = try? JSONSerialization.data(withJSONObject: featuresObj, options: [.prettyPrinted]) {
                 do {
                     try featuresData.write(to: featuresURL, options: .atomic)
+                    // 内存里的功能设置也换成刚导入的这份,理由同上面 ConfigStore.load():不换的话①紧接着的
+                    // 歌词恢复(LyricsBackupStore.restore)按导入前的 lyrics_dir 铺文件;②退出时的兜底保存把旧值盖回去。
+                    await MainActor.run { FeatureSettingsStore.shared.load() }
                 } catch {
                     logger.error("importData: writing features.json failed — \(String(describing: error), privacy: .public)")
                 }

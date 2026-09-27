@@ -949,11 +949,14 @@ public final class EnrichCacheStore: ObservableObject {
         }
     }
 
-    /// 把上面那批 key 的 `manual_lyrics` 批量翻成 `locking`,返回真正改动的条数。挑哪几首、连 .lrc 文件头
-    /// 一起重写,都由 collector 按同一判据做(见 collector 侧 set_manual_lock)。
+    /// 把上面那批 key 的 `manual_lyrics` 批量翻成 `locking`。挑哪几首、连 .lrc 文件头一起重写,
+    /// 都由 collector 按同一判据做(见 collector 侧 set_manual_lock)。
+    /// - Returns: `ok` = collector 那边真的写成了(失败原因在 `lastError`);`changed` = 改了几首。
+    ///   调用方必须先看 `ok`:写失败时 `changed` 也是 0,只看它会把失败说成「已经都是锁定状态」。
     @discardableResult
-    public func applyManualPickLock(_ locking: Bool) async -> Int {
-        await commit("set_manual_lock", ["value": locking]).changed
+    public func applyManualPickLock(_ locking: Bool) async -> (ok: Bool, changed: Int) {
+        let result = await commit("set_manual_lock", ["value": locking])
+        return (result.ok, result.changed)
     }
 
     /// 采纳一条"仅纯文本"候选(LyricsSearchService.Candidate.isPlainTextOnly,「搜索候选

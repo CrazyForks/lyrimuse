@@ -1700,8 +1700,12 @@ final class AppSettings: ObservableObject {
             // 布尔年代的一次性迁移:「打开 Lyrimuse 时启动 X」当年只在唯一具体播放器时才显示,true 就迁成
             // 那一个;含糊(纯 auto / 两个以上)当年开关本来就藏着,迁成空。选中集合从共享文件读一次。
             let legacy = (defaults.object(forKey: Keys.launchMusicOnLyrimuseOpen) as? Bool) ?? false
-            launchPlayersOnLyrimuseOpen = PlayerLinkage.migratedLaunchSet(
+            let migrated = PlayerLinkage.migratedLaunchSet(
                 legacyEnabled: legacy, selectedPlayers: PlaybackPlayerPreference.selected, requiresSole: true)
+            launchPlayersOnLyrimuseOpen = migrated
+            // 迁移结果当场落盘:init 里的首次赋值不触发 didSet,而旧布尔键在 init 末尾就被 pruneObsoleteDefaults
+            // 清掉 —— 不写的话第二次启动既没有新键也没有旧键,这个功能静默变成关。
+            defaults.set(migrated.map(\.rawValue).sorted(), forKey: Keys.launchPlayersOnLyrimuseOpen)
         }
         quitWithPlayers = Set(((defaults.array(forKey: Keys.quitWithPlayers) as? [String]) ?? [])
             .compactMap(PlaybackPlayer.init(rawValue:)))
@@ -1787,6 +1791,14 @@ final class AppSettings: ObservableObject {
             (defaults.object(forKey: Keys.notchHideDuringScreenCapture) as? Bool) ?? legacyHideDuringCapture
         notchHideWhenNotPlaying =
             (defaults.object(forKey: Keys.notchHideWhenNotPlaying) as? Bool) ?? legacyHideWhenNotPlaying
+        // 继承来的值当场落盘:init 里的首次赋值不触发 didSet,不写的话灵动岛这份永远没存过,每次启动都
+        // 重新跟着悬浮歌词那份走 —— 用户之后只关掉悬浮歌词的「截屏时隐藏」,重启后灵动岛也跟着不再隐藏。
+        if defaults.object(forKey: Keys.notchHideDuringScreenCapture) == nil {
+            defaults.set(legacyHideDuringCapture, forKey: Keys.notchHideDuringScreenCapture)
+        }
+        if defaults.object(forKey: Keys.notchHideWhenNotPlaying) == nil {
+            defaults.set(legacyHideWhenNotPlaying, forKey: Keys.notchHideWhenNotPlaying)
+        }
         notchHideInFullScreen = (defaults.object(forKey: Keys.notchHideInFullScreen) as? Bool)
             ?? Self.defaultNotchHideInFullScreen
         appLanguage = defaults.string(forKey: Keys.appLanguage) ?? "system"
