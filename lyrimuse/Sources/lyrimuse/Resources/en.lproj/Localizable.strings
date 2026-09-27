@@ -4,6 +4,7 @@
    selftest 会校验 catalog 与生成物一致。 */
 
 "%1$@ %2$@ 次" = "%1$@: %2$@ plays";
+"%1$@ · %2$@ 次" = "%1$@ · %2$@ plays";
 "%1$@ · %2$@ 首" = "%1$@ · %2$@ plays";
 "%1$@ · 来自 %2$@" = "%1$@ · from %2$@";
 "%1$@ 从「%2$@」导出的备份" = "Backup exported from “%2$@” on %1$@";
@@ -17,6 +18,7 @@
 "%1$@ 首源自带 · %2$@ 首机翻" = "%1$@ from source · %2$@ machine-translated";
 "%1$@ 首源自带，%2$@ 首机翻" = "%1$@ from the source, %2$@ machine-translated";
 "%1$@ 首，预计%2$@。已经有歌词的也会重新选一次；人工修正过的、校准过时间轴的、纯音乐的不动。随时可以停，关掉也不用重来" = "%1$@ songs, roughly %2$@. Songs that already have lyrics get re-picked too. Manual fixes, calibrated timing and instrumentals are left alone. You can stop any time, and quitting won't lose progress";
+"%1$@–%2$@ 点 · %3$@ 次" = "%1$@:00–%2$@:00 · %3$@ plays";
 "%1$d 条候选中仅 %2$d 条获得内容印证，正文未必一致。" = "Only %2$d of %1$d candidates were corroborated; their lyrics may differ.";
 "%1$d 条候选在这些项上完全相同：%2$@" = "All %1$d candidates scored identically on: %2$@";
 "%1$d/%2$d 个源应答" = "%1$d of %2$d sources answered";
@@ -40,6 +42,7 @@
 "%@ 条状态未知，不会自动重试" = "%@ with unknown status — not retried automatically";
 "%@ 条被 Last.fm 拒绝" = "%@ rejected by Last.fm";
 "%@ 次" = "×%@";
+"%@ 点" = "%@:00";
 "%@ 的歌词缓存读不到" = "Can't read %@'s lyrics cache";
 "%@ 的自动化权限未开启…" = "%@ Automation Access Is Off…";
 "%@ 的自动化权限被拒，读不到播放状态" = "Automation permission for %@ denied; playback state cannot be read";
@@ -457,6 +460,7 @@
 "含账号凭据，请勿分享给他人；需要连同外观与快捷键整体迁移时，请使用「备份与迁移」" = "Contains account credentials, so don’t share it. To move everything including appearance and shortcuts, use Backup & Migrate";
 "听到哪里才记到 Last.fm。\n50%：曲长一半、最多 4 分钟（官方规则）。\n75% / 90%：听满对应比例。\n曲终：放到结尾才记，中途切歌不记。" = "How far into a track before it's scrobbled to Last.fm.\n50%: half the track, capped at 4 minutes (Last.fm's rule).\n75% / 90%: that fraction of the track.\nTrack End: only when played through; skipping doesn't count.";
 "听得最多" = "Most Played";
+"听得最多 %@" = "Top day %@";
 "启用" = "Enable";
 "启用失败，可能是权限或系统限制导致歌词引擎没能正常启动，导出诊断信息能看到具体原因，也方便反馈问题" = "Couldn't enable it — a permission or system restriction may have kept the lyrics engine from starting. Export Diagnostics shows the specific cause and makes it easier to report";
 "启用的歌词源请求全部失败，很可能是网络连接有问题，不是这首歌真的没有歌词——检查网络后可以点下面的「重试」" = "None of the enabled lyrics sources responded. That usually means a network problem rather than a song with no lyrics. Check your connection, then click Retry below";
@@ -816,6 +820,7 @@
 "播放用的是逐字时间轴，改「歌词（LRC）」不生效。要手改主歌词，先用「联网搜索候选歌词」换一份不带逐字的；译文/读音不受影响" = "Playback uses the word-level timing, so editing Lyrics (LRC) has no effect. To hand-edit the main lyrics, use 「Search Online for Lyric Candidates」 to swap in a candidate without word-level timing; translation and romanization edits still apply.";
 "播放记录" = "Play history";
 "播放过的歌会自动出现在这里" = "Songs you play will show up here automatically.";
+"收听时段" = "Listening Hours";
 "收听次数：%@" = "Plays: %@";
 "收听足迹" = "Listening Footprint";
 "收起" = "Collapse";
@@ -924,6 +929,8 @@
 "最多保留 4 万条记录，按每天 40 首估算约两年半；超出后从最旧的开始丢弃" = "Keeps up to 40,000 entries — roughly two and a half years at 40 tracks a day; past that, the oldest go first";
 "最大宽度" = "Max Width";
 "最大音量" = "Full volume";
+"最安静 %@" = "Quietest %@";
+"最常听 %@" = "Busiest %@";
 "最近一次评估" = "Latest evaluation";
 "最近一轮解析时一个歌词源都没有应答（多半是那一刻网络不通），不是「这首歌没有词」。会自动重搜，也可以用工具栏「补搜歌词」立刻重来" = "Not one lyric source replied during the last resolve — most likely the network was down at that moment, not that this song has no lyrics. It will be retried automatically; you can also use “Find Missing Lyrics” in the toolbar to redo it now";
 "最近听过" = "Recently played";
@@ -1546,6 +1553,7 @@
 "这条广告还不能跳过" = "This ad can't be skipped yet";
 "这次请求耗时有点久。如果你已经看到系统弹窗，请去处理它；找不到弹窗的话，可以直接去系统设置里手动开启" = "This is taking longer than usual. If a system dialog appeared, respond to it there. If you don't see one, you can turn this on in System Settings instead";
 "这段时间的歌曲榜里没有这位歌手的歌" = "No songs by this artist in this period's track chart";
+"这段时间还没有收听记录" = "No scrobbles in this period";
 "这里是一句歌词示例" = "A line of lyrics looks like this";
 "这里是下一句歌词示例" = "The next line looks like this";
 "这里是译文示例" = "The translation looks like this";
@@ -1687,6 +1695,7 @@
 "飞书" = "Feishu";
 "首次同步历史中（%1$@/%2$@ 页）" = "First-time history sync (page %1$@ of %2$@)";
 "首次同步历史中，稍候完整数据会自动出现" = "First-time history sync — the full data will appear shortly";
+"首次同步历史之后，这里会出现你的收听时段" = "Your listening hours appear here once the first history sync finishes";
 "首次同步历史之后，这里会出现你的收听足迹" = "Your listening footprint appears here once the first history sync finishes";
 "首次听" = "First listened";
 "首次解析" = "First resolution";

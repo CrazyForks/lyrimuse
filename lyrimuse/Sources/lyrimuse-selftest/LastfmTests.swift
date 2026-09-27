@@ -1126,6 +1126,46 @@ func runLastfmTests() {
                     Array(0 ..< 20), "拼页: 负起点来源被跳过")
     }
 
+    // MARK: - ListeningHours(收听时段)
+    do {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let fmt = DateFormatter()
+        fmt.calendar = cal; fmt.timeZone = cal.timeZone; fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd"
+        let key: (Date) -> String = { fmt.string(from: $0) }
+        let today = fmt.date(from: "2026-09-27")!.addingTimeInterval(3600 * 18) // 周日 18:00
+        func row(_ pairs: [Int: Int]) -> [Int] {
+            var r = [Int](repeating: 0, count: ListeningHours.hoursPerDay)
+            for (h, n) in pairs { r[h] = n }
+            return r
+        }
+        let hourly: [String: [Int]] = [
+            "2026-09-27": row([21: 5]),        // 周日
+            "2026-09-21": row([8: 3]),         // 周一
+            "2026-08-29": row([10: 1]),        // 周六,近 30 天的第一天
+            "2026-08-28": row([23: 4]),        // 周五,刚好在近 30 天外
+            "2026-08-01": row([16: 10]),       // 周六
+            "2026-07-01": [1, 2, 3],           // 长度不对,整行忽略
+        ]
+        let month = ListeningHours.summarize(hourly: hourly, span: .month, today: today, calendar: cal, dayKey: key)
+        expectEqual(month?.total, 9, "收听时段: 近 30 天含今天、含第 30 天、不含第 31 天")
+        expectEqual(month?.peakHour, 21, "收听时段: 近 30 天最常听的钟点")
+        expectEqual(month?.weekdays, [3, 0, 0, 0, 0, 1, 5], "收听时段: 星期几周一在前")
+        expectEqual(month?.peakWeekday, 6, "收听时段: 近 30 天听得最多是周日")
+        expectEqual(month?.quietestHour, 0, "收听时段: 并列最少取最早的钟点")
+        let all = ListeningHours.summarize(hourly: hourly, span: .overall, today: today, calendar: cal, dayKey: key)
+        expectEqual(all?.total, 23, "收听时段: 全部")
+        expectEqual(all?.peakHour, 16, "收听时段: 全部的最常听钟点")
+        expectEqual(all?.peakWeekday, 5, "收听时段: 全部里周六最多")
+        expectEqual(ListeningHours.summarize(hourly: ["2025-01-01": row([9: 2])], span: .month, today: today,
+                                             calendar: cal, dayKey: key) == nil,
+                    true, "收听时段: 范围内一次都没有 → nil")
+        let tie = ListeningHours.summarize(hourly: ["2026-09-26": row([9: 2, 20: 2])], span: .month, today: today,
+                                           calendar: cal, dayKey: key)
+        expectEqual(tie?.peakHour, 9, "收听时段: 并列最多取最早的钟点")
+    }
+
     // MARK: - OnThisDayPlanner / ListeningMilestones(那年今日计划 + 收听足迹)
     do {
         var cal = Calendar(identifier: .gregorian)

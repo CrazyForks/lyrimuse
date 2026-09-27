@@ -932,6 +932,8 @@ final class LastfmStatsService: ObservableObject {
         // 的热力图数据会在内存里挂到下次 App 重启为止,跟本方法开头"把一切归零"的
         // 注释自相矛盾。合并两条全量扫描时顺手修掉。
         dailyCounts = [:]
+        hourlyCounts = [:]
+        hourlyBackfillNeeded = false
         dailySyncedThrough = 0
         dailyLoaded = false
         dailySyncing = false
@@ -1371,6 +1373,11 @@ final class LastfmStatsService: ObservableObject {
     /// 分页聚合:首次同步整个历史(每页 1000 条,只跑一次),之后增量重扫最近
     /// `dailyRescanDays` 天(通常 1 页)。独立缓存文件,删了无损、下次重建。
     @Published private(set) var dailyCounts: [String: Int] = [:]
+    /// 跟 `dailyCounts` 同构、同一次扫描写入:"yyyy-MM-dd" → 当天 0…23 点各几次(收听时段卡,
+    /// `ListeningHours`)。两份必须一起增、一起作废,别单独改其中一份。
+    @Published private(set) var hourlyCounts: [String: [Int]] = [:]
+    /// 盘上的日桶是没有 `hours` 字段的旧快照:按钟点的数补不出来,下一次同步整轮重扫。
+    private var hourlyBackfillNeeded = false
     @Published private(set) var dailySyncing = false
     /// 正在跑的是首次全量(含截断自愈重扫):这时 dailyCounts 残缺,按天算的数(近 7 天、环比、
     /// 日均、走势图、收听足迹)都不能用。增量同步期间 dailyCounts 原样保留、收尾才整体替换,
@@ -1399,6 +1406,8 @@ final class LastfmStatsService: ObservableObject {
         var username: String
         var syncedThrough: TimeInterval
         var days: [String: Int]
+        /// nil = 旧快照,见 `hourlyBackfillNeeded`。
+        var hours: [String: [Int]]?
     }
 
     private static let dailyURL = LyrimusePaths.configFile("lyrimuse-lastfm-daily-heatmap.json")
@@ -1419,12 +1428,27 @@ final class LastfmStatsService: ObservableObject {
               snap.username == cred.user   // 换过账号不吃旧缓存
         else { return }
         dailyCounts = snap.days
+        hourlyCounts = snap.hours ?? [:]
+        hourlyBackfillNeeded = snap.hours == nil && !snap.days.isEmpty
         dailySyncedThrough = snap.syncedThrough
+    }
+
+    private static let emptyHourRow = [Int](repeating: 0, count: ListeningHours.hoursPerDay)
+
+    /// 按天逐钟点相加。长度不对的旧行当成空行重来,不跟着错位加。
+    private static func addHours(_ add: [String: [Int]], into target: inout [String: [Int]]) {
+        for (k, row) in add {
+            var cur = target[k] ?? emptyHourRow
+            if cur.count != ListeningHours.hoursPerDay { cur = emptyHourRow }
+            for h in 0..<min(row.count, ListeningHours.hoursPerDay) { cur[h] += row[h] }
+            target[k] = cur
+        }
     }
 
     private func saveDailySnapshot() {
         guard let cred = credentials else { return }
-        let snap = DailySnapshot(username: cred.user, syncedThrough: dailySyncedThrough, days: dailyCounts)
+        let snap = DailySnapshot(username: cred.user, syncedThrough: dailySyncedThrough, days: dailyCounts,
+                                 hours: hourlyCounts)
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: Self.dailyURL, options: .atomic)
         }
@@ -1569,8 +1593,21 @@ final class LastfmStatsService: ObservableObject {
             logger.notice("history sync: daily counts \(self.dailyCounts.values.reduce(0, +), privacy: .public) vs Last.fm total \(self.overview?.total ?? -1, privacy: .public) — heatmap truncated, forcing a full rescan")
             truncationRescanAttempted = true
             dailyCounts = [:]
+            hourlyCounts = [:]
             dailySyncedThrough = 0
             titleFormsSyncedThrough = 0
+            historyCheckpoint = nil
+            saveHistoryCheckpoint()
+            priorWatermark = 0
+        }
+        // 旧快照没有按钟点的数:整轮重扫补齐。断点也作废 —— 那一轮前面几页同样没记钟点,
+        // 接着续跑的话早先那段历史的钟点就永远缺着。
+        if hourlyBackfillNeeded {
+            logger.notice("history sync: daily snapshot has no hourly counts — full rescan to backfill")
+            hourlyBackfillNeeded = false
+            dailyCounts = [:]
+            hourlyCounts = [:]
+            dailySyncedThrough = 0
             historyCheckpoint = nil
             saveHistoryCheckpoint()
             priorWatermark = 0
@@ -1626,6 +1663,7 @@ final class LastfmStatsService: ObservableObject {
             var requests = 0
             var failed = false
             var fresh: [String: Int] = [:] // 只有增量(!full)分支用:攒够了再一次性合并
+            var freshHours: [String: [Int]] = [:] // 同上,按钟点那一份
 
             while page <= totalPages && requests < LastfmHistoryPaging.maxRequests {
                 requests += 1
@@ -1655,16 +1693,22 @@ final class LastfmStatsService: ObservableObject {
                 }
                 totalPages = pages
                 var pageCounts: [String: Int] = [:]
+                var pageHours: [String: [Int]] = [:]
                 for row in rows {
                     // 顺手收割写法索引(nowplaying 行/畸形行也是真实写法,一并收)。
                     harvestTitleForm(artist: row.artist, title: row.title)
                     guard let uts = row.uts else { continue }
-                    pageCounts[Self.dayKey(Date(timeIntervalSince1970: uts)), default: 0] += 1
+                    let date = Date(timeIntervalSince1970: uts)
+                    let key = Self.dayKey(date)
+                    pageCounts[key, default: 0] += 1
+                    pageHours[key, default: Self.emptyHourRow][Calendar.current.component(.hour, from: date)] += 1
                 }
                 if full {
                     for (k, v) in pageCounts { dailyCounts[k, default: 0] += v }
+                    Self.addHours(pageHours, into: &hourlyCounts)
                 } else {
                     for (k, v) in pageCounts { fresh[k, default: 0] += v }
+                    Self.addHours(pageHours, into: &freshHours)
                 }
                 if full && totalPages > 3 {
                     dailySyncProgress = String(
@@ -1707,12 +1751,16 @@ final class LastfmStatsService: ObservableObject {
             }
             if !full {
                 var days = dailyCounts
+                var hours = hourlyCounts
                 if let wipe = wipeFromDay {
                     // "yyyy-MM-dd" 字典序即时间序,直接字符串比较。
                     for k in days.keys where k >= wipe { days.removeValue(forKey: k) }
+                    for k in hours.keys where k >= wipe { hours.removeValue(forKey: k) }
                 }
                 for (k, v) in fresh { days[k, default: 0] += v }
+                Self.addHours(freshHours, into: &hours)
                 dailyCounts = days
+                hourlyCounts = hours
             }
             // 全量只扫到了 scanUpTo(见上面):水位钉在那里,之后新增的由下一次增量从水位那天起补上。
             let syncedThrough = full ? scanUpTo : syncStartedAt

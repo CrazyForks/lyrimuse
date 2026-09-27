@@ -23,8 +23,9 @@ struct LastfmHeatmapView: View {
     }
 
     // GitHub 的两套官方色阶(浅/深色模式),第 0 档(零播放)用系统填充色融入设置页背景。
-    private static let lightLevels = ["#9be9a8", "#40c463", "#30a14e", "#216e39"]
-    private static let darkLevels = ["#0e4429", "#006d32", "#26a641", "#39d353"]
+    // 收听时段卡(LastfmListeningHoursView)的条形也取这两组,同一段里的绿保持一套。
+    static let lightLevels = ["#9be9a8", "#40c463", "#30a14e", "#216e39"]
+    static let darkLevels = ["#0e4429", "#006d32", "#26a641", "#39d353"]
 
     /// 有记录的年份 + 今年,倒序。宿主画年份选择器要用,所以是 static —— 这个 View
     /// 收起时根本不在视图层级里,而卡头一直在。

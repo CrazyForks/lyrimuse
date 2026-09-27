@@ -49,6 +49,8 @@ struct LastfmStatsSection: View {
     @AppStorage("np:lastfmOnThisDayCollapsed") private var onThisDayCollapsed = false
     @AppStorage("np:lastfmFootprintCollapsed") private var footprintCollapsed = false
     @AppStorage("np:lastfmHeatmapCollapsed") private var heatmapCollapsed = false
+    @AppStorage("np:lastfmHoursCollapsed") private var hoursCollapsed = false
+    @AppStorage("np:lastfmHoursSpan") private var hoursSpanRaw = ListeningHours.Span.month.rawValue
     @AppStorage("np:lastfmChartKind") private var kindRaw = LastfmStatsService.ChartKind.artists.rawValue
     @AppStorage("np:lastfmChartPeriod") private var periodRaw = LastfmStatsService.Period.month.rawValue
 
@@ -88,12 +90,13 @@ struct LastfmStatsSection: View {
                 recentCard
             case .chart: chartCard
             case .onThisDay:
-                // 「足迹」段(由「那年今日」改名)的卡序:热力图在最上——它是整段的总览
-                // (一整年每天听了多少),另两张卡都是从同一份日桶里挑出来的切片;足迹卡
-                // (里程碑)居中——它天天有内容、全部从本地日桶派生零请求;那年今日在最下
-                // ——一年里大半天是空的("那天没听"很正常),放上面会让整段先看到一句"没有记录"。
-                heatmapCard
+                // 「足迹」段(由「那年今日」改名)的卡序:足迹卡(几个数字的总账)在最上,几行就读完、
+                // 也不会把下面的图挤下去;热力图(一年里哪几天)和收听时段(一天里几点、一周哪天)
+                // 都在答"什么时候在听",挨着放、由大到小;那年今日在最下——一年里大半天是空的
+                // ("那天没听"很正常),放上面会让整段先看到一句"没有记录"。顺序固定,不随哪张有没有内容变。
                 listeningFootprintCard
+                heatmapCard
+                listeningHoursCard
                 onThisDayCard
             // 见 Tab.settings:内容由 AccountLinkingTab 画,这里只保持挂载不掉线。
             case .settings: EmptyView()
@@ -1317,7 +1320,7 @@ struct LastfmStatsSection: View {
 
     // MARK: - 播放热力图
 
-    /// 「足迹」段的第一张卡。
+    /// 「足迹」段的第二张卡(在收听足迹下面)。
     ///
     /// 它原来是档案卡右上角一颗日历角标弹出的 popover。搬成卡片有两条理由:语义上它跟
     /// 同段那两张卡是一件事(都在回看历史,而且跟足迹卡读的是同一份日桶);布局上 popover
@@ -1427,6 +1430,57 @@ struct LastfmStatsSection: View {
                     .padding(.vertical, 6)
                 }
             }
+        }
+    }
+
+    // MARK: - 收听时段
+
+    /// 每天每个钟点的次数跟日桶同一次扫描写入;首次全量期间残缺,跟足迹卡一样先不画。
+    @ViewBuilder
+    private var listeningHoursCard: some View {
+        if stats.dailyFullSyncing || stats.hourlyCounts.isEmpty {
+            SettingsCard {
+                SettingsRawRow(insetToText: true) {
+                    HStack(spacing: 8) {
+                        if stats.dailyFullSyncing { ProgressView().controlSize(.small) }
+                        Text(L10n.t("首次同步历史之后，这里会出现你的收听时段"))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
+            }
+        } else {
+            SettingsCard {
+                collapsibleHeader(icon: "clock", title: L10n.t("收听时段"), collapsed: $hoursCollapsed) {
+                    if !hoursCollapsed {
+                        SettingsSegmentedControlHashable(
+                            selection: hoursSpanBinding,
+                            options: ListeningHours.Span.allCases,
+                            label: Self.hoursSpanLabel
+                        )
+                    }
+                }
+                if !hoursCollapsed {
+                    CardDivider()
+                    LastfmListeningHoursView(span: hoursSpanBinding.wrappedValue)
+                }
+            }
+        }
+    }
+
+    private var hoursSpanBinding: Binding<ListeningHours.Span> {
+        Binding(
+            get: { ListeningHours.Span(rawValue: hoursSpanRaw) ?? .month },
+            set: { hoursSpanRaw = $0.rawValue }
+        )
+    }
+
+    /// 跟榜单同名时段共用文案(`LastfmStatsService.Period.displayName`)。
+    private static func hoursSpanLabel(_ span: ListeningHours.Span) -> String {
+        switch span {
+        case .month: return LastfmStatsService.Period.month.displayName
+        case .year: return LastfmStatsService.Period.year.displayName
+        case .overall: return LastfmStatsService.Period.overall.displayName
         }
     }
 
