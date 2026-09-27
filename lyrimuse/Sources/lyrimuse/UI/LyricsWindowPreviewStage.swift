@@ -47,10 +47,19 @@ struct LyricsWindowPreviewStage: View {
     /// 跟 Content 无关;随便填一个具体类型把泛型参数占掉即可,取到的是同一个值。
     private static var previewWidth: CGFloat { SettingsPage<EmptyView>.maxCardColumnWidth }
 
-    /// 这一档要按哪个尺寸渲染再缩。迷你直接取真窗口那份常量,别另写一个数 —— 两边一漂,
-    /// 预览就不是"它真打开的样子"了。
+    /// 迷你预览的渲染高度,比真窗口默认的 `LyricsWindowMiniMetrics.size` 高。
+    ///
+    /// 宽度必须取真窗口那份:字号和折行都跟着宽度走,宽度一漂,预览里一句话折几行就跟真窗对不上。
+    /// 高度不能照搬 250:「多行」布局当前句折成两行再带译文时,下一行会被视口底边切掉一半(当前行锚在
+    /// 视口 41% 处,见 `activeLineAnchor`),预览就看不出下一行长什么样。高出来的只落在歌词区,
+    /// 「两行」布局多出的是上下留白。
+    private static let miniPreviewHeight: CGFloat = 300
+
+    /// 这一档要按哪个尺寸渲染再缩。
     private var contentSize: CGSize {
-        mini ? LyricsWindowMiniMetrics.size : Self.contentSize
+        mini
+            ? CGSize(width: LyricsWindowMiniMetrics.size.width, height: Self.miniPreviewHeight)
+            : Self.contentSize
     }
     private var scale: CGFloat { Self.previewWidth / contentSize.width }
     private var previewHeight: CGFloat { contentSize.height * scale }
