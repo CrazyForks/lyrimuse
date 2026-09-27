@@ -416,8 +416,30 @@ type kkboxTrack struct {
 	} `json:"artist_roles"`
 	Album *struct {
 		Name string `json:"name"`
+		// Images:单曲详情里带专辑封面三档(large 600 / medium 300 / small 80),曲目表接口不一定带。
+		Images *struct {
+			Large  *kkboxImage `json:"large"`
+			Medium *kkboxImage `json:"medium"`
+		} `json:"images"`
 	} `json:"album"`
 	DurationMs float64 `json:"duration_ms"`
+}
+
+type kkboxImage struct {
+	URL string `json:"url"`
+}
+
+// albumCover:专辑封面地址,优先 600 那档;没有就空串。
+func (t kkboxTrack) albumCover() string {
+	if t.Album == nil || t.Album.Images == nil {
+		return ""
+	}
+	for _, img := range []*kkboxImage{t.Album.Images.Large, t.Album.Images.Medium} {
+		if img != nil && img.URL != "" {
+			return img.URL
+		}
+	}
+	return ""
 }
 
 // hasOwnArtist:曲目表里这一条自己带着歌手(歌单、歌曲集、自动续播都带;专辑接口的不带)。

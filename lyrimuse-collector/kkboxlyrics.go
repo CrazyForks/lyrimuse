@@ -39,6 +39,7 @@ const kkboxLyricsDurationTolerance = 2.0
 
 type kkboxLyricResult struct {
 	lyrics, title, artist, album string
+	cover                        string // 单曲详情里的专辑封面,候选列表显示用
 	durationSecs                 float64
 	// coarse:每一句的时间都是整秒。
 	coarse bool
@@ -153,7 +154,7 @@ func (c kkboxCache) lyricFor(artist, title string, durationSecs float64) (kkboxL
 			album = d.Data.Album.Name
 		}
 		return kkboxLyricResult{
-			lyrics: lrc, title: d.Data.Name, artist: kkboxArtistName(d.Data, ""), album: album,
+			lyrics: lrc, title: d.Data.Name, artist: kkboxArtistName(d.Data, ""), album: album, cover: d.Data.albumCover(),
 			durationSecs: d.Data.DurationMs / 1000, coarse: coarse,
 		}, true
 	}
@@ -177,7 +178,7 @@ func kkboxLocalLyricsFor(artist, title string, durationSecs float64) (lyricSourc
 	}
 	return lyricSourceResult{
 		source: kkboxLocalLyricsSource, lyr: r.lyrics, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album,
-		srcDur: r.durationSecs, identityFromLocalClient: !r.coarse,
+		matchCover: r.cover, srcDur: r.durationSecs, identityFromLocalClient: !r.coarse,
 	}, true
 }
 

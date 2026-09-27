@@ -3804,6 +3804,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			source: kkboxLocalLyricsSource, lyrics: kk.lyr,
 			sourceReportedDurationSecs: kk.srcDur,
 			title:                      kk.matchTitle, artist: kk.matchArtist, album: kk.matchAlbum,
+			cover:                   kk.matchCover,
 			identityFromLocalClient: kk.identityFromLocalClient,
 		})
 	}
