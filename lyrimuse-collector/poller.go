@@ -557,6 +557,8 @@ func (p *poller) mirrorScrobbleTracked(artist, title, album string, timestamp in
 		return err
 	}, func(err error) {
 		recordFailedMirror(err, rawArtist, title, album, timestamp, durationSecs)
+		enqueueLastfmRetryIfSafe(err, lfmRetryItem{User: lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album,
+			Duration: durationSecs, NotAudio: notAudio})
 	})
 }
 
@@ -619,8 +621,9 @@ func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album st
 	if p.lfm.dead.Load() {
 		// 同 mirrorAsync 的入口:不发请求,但这一条确定没写进去,该留痕 —— 退出路径尤其
 		// 不能漏,进程正要结束,没有"下一拍"能补。
-		recordFailedMirror(&lastfmAPIError{Code: 9, Message: "mirror disabled (credentials judged dead)", Method: "track.scrobble"},
-			rawArtist, title, album, timestamp, durationSecs)
+		deadErr := &lastfmAPIError{Code: 9, Message: "mirror disabled (credentials judged dead)", Method: "track.scrobble"}
+		recordFailedMirror(deadErr, rawArtist, title, album, timestamp, durationSecs)
+		enqueueLastfmRetryIfSafe(deadErr, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album, Duration: durationSecs})
 		return
 	}
 	if p.lfmMirrored[timestamp] {
@@ -633,6 +636,7 @@ func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album st
 		// 退出路径同样要留痕 —— 而且这里比活路径更需要:进程正在退出,没有"下一拍"
 		// 可言。这条是同步调用,本来就在主 goroutine 上,不涉及上面那条并发约束。
 		recordFailedMirror(err, rawArtist, title, album, timestamp, durationSecs)
+		enqueueLastfmRetryIfSafe(err, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album, Duration: durationSecs})
 	}
 }
 
@@ -1943,13 +1947,15 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 		lastListenSeedCh:    make(chan lastListenSeed, 1),
 	}
 	enrichNotify = make(chan struct{}, 1) // 后台 enrich 完成后触发一次重推
-	p.poll()                              // render immediately, don't wait a full interval on startup
+	lfmRetryTarget.Store(p.lfm)
+	p.poll() // render immediately, don't wait a full interval on startup
 	if cfg.StateRelayURL != "" && cfg.User != "" && lb != nil {
 		go seedLastListen(ctx, lb.apiRoot(), cfg.User, p.lastListenSeedCh)
 	}
 	if cfg.User != "" && cfg.Token != "" && lb != nil {
 		go startLBRetryLoop(ctx, lb) // 会话结束后才失败的收听,后台重发,见 lbretry.go
 	}
+	go startLfmRetryLoop(ctx)           // 确定没写进 Last.fm 的收听,后台重发,见 lfmretry.go
 	go startCompanionLaunchWatcher(ctx) // 独立节奏,见 companionlaunch.go 顶部注释
 	go startEnrichCancelWatcher(ctx)    // 独立节奏,见 enrichcancel.go 顶部注释
 	go startEnrichEditWatcher(ctx)      // App 侧改歌词缓存的请求,见 enrichedit.go 顶部注释

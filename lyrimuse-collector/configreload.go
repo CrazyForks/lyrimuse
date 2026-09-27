@@ -170,6 +170,7 @@ func (p *poller) syncLiveConfig() {
 	if want := lastfmScrobblerKeyOf(p.cfg); want != p.lfmKey {
 		p.lfmKey = want
 		p.lfm = lastfmScrobblerIfEnabled(p.cfg)
+		lfmRetryTarget.Store(p.lfm)
 		log.Printf("config: lastfm mirror writer rebuilt enabled=%v", p.lfm != nil)
 	}
 }

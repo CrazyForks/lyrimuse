@@ -32,7 +32,9 @@ import (
 // 社交/统计门面时的历史。凭证是经一次性网页授权换取的永久 session key(sk)。
 type lastfmScrobbler struct {
 	apiKey, secret, sk string
-	hc                 *http.Client
+	// user:这把授权属于哪个账号(小写)。待重发队列按它认条目,换账号后不把旧账号的收听交到新账号上。
+	user string
+	hc   *http.Client
 	// dead:session key / API key 已被 Last.fm 判死(error 9/10/26 一击、error 4 两击,
 	// 见 shouldDisable)。置位后停止一切后续提交 —— 原来这种情况下每首歌照样白打 2 个
 	// 注定失败的请求,且除了日志刷屏没有任何机制让用户知道 scrobble 早就全停了
@@ -72,6 +74,10 @@ func lastfmScrobblerIfEnabled(cfg *config) *lastfmScrobbler {
 	}
 	s := newLastfmScrobbler(cfg.LastfmScrobbleAPIKey, cfg.LastfmScrobbleSecret, cfg.LastfmScrobbleSessionKey)
 	if s != nil {
+		s.user = strings.ToLower(strings.TrimSpace(cfg.LastfmScrobbleUsername))
+		if s.user == "" {
+			s.user = strings.ToLower(strings.TrimSpace(cfg.LastfmUser))
+		}
 		// 用**只读**的那把 api_key:track.getInfo 不需要签名/session key,判定这一步不碰写凭据。
 		// 三档都建(匹配器只是读了一下缓存文件),档位在 resolveScrobbleTags 里判。
 		s.catalog = newLastfmCatalogMatcher(cfg.lastfmBridgeAPIKey())

@@ -38,6 +38,8 @@ type config struct {
 	LastfmScrobbleAPIKey     string `json:"lastfm_scrobble_api_key,omitempty"`
 	LastfmScrobbleSecret     string `json:"lastfm_scrobble_secret,omitempty"`
 	LastfmScrobbleSessionKey string `json:"lastfm_scrobble_session_key,omitempty"`
+	// LastfmScrobbleUsername:打卡授权属于哪个账号(App 连接时写)。collector 只拿它认账号,见 lfmretry.go。
+	LastfmScrobbleUsername string `json:"lastfm_scrobble_username,omitempty"`
 	// 推送提醒目的地：LB 连不上或读不到播放状态持续异常时推一条告警,每周听歌小结也走
 	// 这个通道。NotificationPlatform 选平台("bark"默认/"dingtalk"/"wecom"/"discord"/
 	// "feishu"/"serverchan"),NotificationWebhookURL 是对应平台的 webhook 地址,留空

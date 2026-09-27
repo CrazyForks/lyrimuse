@@ -415,6 +415,7 @@ func main() {
 	lfmMirroredPath = filepath.Join(filepath.Dir(*cfgPath), clientName+"-lastfm-mirrored.json")
 	// ListenBrainz 待重发队列(lbretry.go):会话结束后才失败的收听存在这里,后台重发。
 	lbRetryPath = filepath.Join(filepath.Dir(*cfgPath), clientName+"-lb-retry.json")
+	lfmRetryPath = filepath.Join(filepath.Dir(*cfgPath), clientName+"-lastfm-retry.json")
 	lastfmStatusPath = filepath.Join(filepath.Dir(*cfgPath), clientName+"-lastfm-status.json")
 	// 「智能」档的编目判定缓存(见 lastfmcatalog.go)。必须在 lastfmScrobblerIfEnabled
 	// 之前设好 —— 匹配器构造时就读它。backfillcli.go 用同一个文件名,两条路径共读一份。
