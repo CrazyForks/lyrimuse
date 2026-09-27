@@ -36696,6 +36696,29 @@
         }
       }
     },
+    "已更新 %@ 首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ updated"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更新 %@ 首"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更新 %@ 首"
+          }
+        }
+      }
+    },
     "最近完成" : {
       "extractionState" : "manual",
       "localizations" : {

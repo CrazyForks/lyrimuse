@@ -634,6 +634,7 @@
 "已显示菜单栏歌词" = "Menu bar lyrics shown";
 "已显示译文" = "Translation shown";
 "已显示读音" = "Romanization shown";
+"已更新 %@ 首" = "%@ updated";
 "已更新到 %@" = "Updated to %@";
 "已校准" = "Calibrated";
 "已校准 %d 首歌的歌词时间轴" = "%d songs with calibrated timing";

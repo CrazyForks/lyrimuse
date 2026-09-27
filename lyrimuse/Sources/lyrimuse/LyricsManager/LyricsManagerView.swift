@@ -2056,16 +2056,20 @@ struct LyricsManagerView: View {
                 // 单轮互斥、取消都共用,见 collector/lyricsfullscan.go 头注),所以文案都得
                 // 按 isFullScan 分流 —— 全量跑着的时候说「停止补搜」「正在补搜」,说的跟做的就不是一回事。
                 let isFull = status.isFullScan
-                // 顶上是此刻在做什么(标题)+ 进度与结果分布 + 大约还要多久;全量扫库的详情在设置页
-                // 「歌词库」那几行,这里只留标题和停止。
+                // 顶上是此刻在做什么(标题)+ 进度与结果分布 + 大约还要多久。全量扫库的 Done / Filled 是跨重启
+                // 的累计值,Skipped 只记这个进程这一轮,凑不出「没变」的准确数,所以全量只报更新了几首。
                 Section {
-                    if !isFull {
-                        Text(String(format: L10n.t("已完成 %1$@ / %2$@ 首"), "\(status.done)", "\(status.total)"))
+                    Text(String(format: L10n.t("已完成 %1$@ / %2$@ 首"),
+                                status.done.formatted(), status.total.formatted()))
+                    if isFull {
+                        Text(String(format: L10n.t("已更新 %@ 首"), status.filled.formatted()))
+                    } else {
                         Text(String(format: L10n.t("补全 %1$@ · 没找到 %2$@ · 跳过 %3$@"),
                                     "\(status.filled)", "\(status.missedCount)", "\(status.skippedCount)"))
-                        if status.done < status.total {
-                            Text(String(format: L10n.t("大约还要%@"), Self.fillSweepRemainingText(status)))
-                        }
+                    }
+                    if status.done < status.total {
+                        Text(String(format: L10n.t("大约还要%@"), Self.fillSweepRemainingText(
+                            status, fallbackSecondsPerTrack: isFull ? fullScanFallbackSecondsPerTrack : 20)))
                     }
                 } header: {
                     // 上一首一个歌词源都没连上时 collector 在原地等网络,那时说这个,不说「正在搜索」。
@@ -2081,11 +2085,11 @@ struct LyricsManagerView: View {
                         Text(status.done > 0 ? L10n.t("等待下一首…") : L10n.t("正在准备补搜…"))
                     }
                 }
-                // 最近几首:结果只用图标说(上面那行已经用文字写了三种各几首),行里只放「歌名 — 歌手」。
-                if !isFull, let recent = status.recent, !recent.isEmpty {
+                // 最近几首:结果只用图标说,行里只放「歌名 — 歌手」。全量那一轮的 missed 是「重选后没变」,换成等号图标。
+                if let recent = status.recent, !recent.isEmpty {
                     Section {
                         ForEach(Array(recent.enumerated()), id: \.offset) { _, item in
-                            Self.fillSweepRecentRow(item)
+                            Self.fillSweepRecentRow(item, isFullScan: isFull)
                         }
                     } header: {
                         Text(L10n.t("最近完成"))
@@ -2194,6 +2198,11 @@ struct LyricsManagerView: View {
               : L10n.t("立即联网补搜缺失的歌词，不必等歌曲再次播放"))
     }
 
+    /// 全量扫库还没跑完一首时估剩余时长用的每首秒数(collector 发布的值,没有时是设置页同一个兜底)。
+    private var fullScanFallbackSecondsPerTrack: Double {
+        LyricsLibraryStatsPanel.fullScanSecondsPerTrack(fullScanState)
+    }
+
     /// 「全量重新扫库？」确认框正文:只在确认框弹出时算一次,不进工具栏菜单的渲染路径。
     private var fullScanConfirmMessage: String {
         guard let state = fullScanState else { return "" }
@@ -2205,20 +2214,20 @@ struct LyricsManagerView: View {
     }
 
     /// 补搜菜单里最近一首的那一行:结果图标 + 「歌名 — 歌手」。纯展示,不可点。
-    private static func fillSweepRecentRow(_ item: LyricsFillSweep.Info.Recent) -> some View {
+    private static func fillSweepRecentRow(_ item: LyricsFillSweep.Info.Recent, isFullScan: Bool) -> some View {
         let symbol: String
         switch item.result {
         case "filled": symbol = "checkmark.circle"
         case "skipped": symbol = "forward.circle"
-        default: symbol = "xmark.circle"
+        default: symbol = isFullScan ? "equal.circle" : "xmark.circle"
         }
         return Label(LyricsFillSweep.displayName(key: item.key), systemImage: symbol)
     }
 
-    /// 补搜「大约还要」的时长:这一轮通常几十分钟,按分钟说(设置页那句按小时,是给全量扫库的)。
-    /// 还没跑完一首时按每首约 20 秒估(两首之间的间隔加上一首的搜索本身)。
-    private static func fillSweepRemainingText(_ status: LyricsFillSweep.Info) -> String {
-        let seconds = LyricsFillSweep.remainingSeconds(status, now: Date(), fallbackSecondsPerTrack: 20)
+    /// 「大约还要」的时长,按这一轮实测速度外推;还没跑完一首时按 `fallbackSecondsPerTrack` 估
+    /// (补搜约 20 秒:两首之间的间隔加上一首的搜索;全量取 collector 发布的每首耗时)。
+    private static func fillSweepRemainingText(_ status: LyricsFillSweep.Info, fallbackSecondsPerTrack: Double) -> String {
+        let seconds = LyricsFillSweep.remainingSeconds(status, now: Date(), fallbackSecondsPerTrack: fallbackSecondsPerTrack)
         let minutes = Int((seconds / 60).rounded(.up))
         if minutes < 1 { return L10n.t("不到 1 分钟") }
         if minutes < 60 { return String(format: L10n.t("%@ 分钟"), "\(minutes)") }

@@ -6,7 +6,8 @@ import (
 	"testing"
 )
 
-// 补搜的进度里带上跳过数和最近几条的结果(新的在前、最多 lyricsFillRecentMax 条);全量扫库那一轮不记最近结果。
+// 补搜的进度里带上跳过数和最近几条的结果(新的在前、最多 lyricsFillRecentMax 条);全量扫库那一轮同样记,
+// 界面按 Full 把 missed 读成「重选后没变」。
 func TestLyricsFillSweepRecentAndSkipped(t *testing.T) {
 	outcomes := map[string]lyricsSweepOutcome{
 		"a": {filled: true},
@@ -23,8 +24,9 @@ func TestLyricsFillSweepRecentAndSkipped(t *testing.T) {
 	if !reflect.DeepEqual(st.Recent, want) {
 		t.Fatalf("最近结果 got %+v want %+v", st.Recent, want)
 	}
-	full := runLyricsFillSweepKeys(context.Background(), []string{"a", "b"}, true, 0, lyricsFillStatus{Running: true, Total: 2})
-	if len(full.Recent) != 0 {
-		t.Fatalf("全量扫库不记最近结果: %+v", full.Recent)
+	full := runLyricsFillSweepKeys(context.Background(), []string{"a", "b"}, true, 0, lyricsFillStatus{Running: true, Full: true, Total: 2})
+	wantFull := []lyricsFillRecent{{Key: "b", Result: "missed"}, {Key: "a", Result: "filled"}}
+	if !reflect.DeepEqual(full.Recent, wantFull) {
+		t.Fatalf("全量扫库的最近结果 got %+v want %+v", full.Recent, wantFull)
 	}
 }

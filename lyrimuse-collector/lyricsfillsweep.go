@@ -118,7 +118,8 @@ type lyricsSweepOutcome struct {
 	skipped bool
 }
 
-// lyricsFillRecent 是最近跑完的一条,给界面列「刚才搜了哪几首、结果如何」。Result 取 filled / missed / skipped。
+// lyricsFillRecent 是最近跑完的一条,给界面列「刚才搜了哪几首、结果如何」。Result 取 filled / missed / skipped;
+// 全量扫库那一轮 filled = 歌词更新了、missed = 重选后没变(不是「没找到」),界面按 Full 换措辞和图标。
 type lyricsFillRecent struct {
 	Key    string `json:"key"`
 	Result string `json:"result"`
@@ -485,10 +486,7 @@ func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, gap t
 		if out.skipped {
 			status.Skipped++
 		}
-		if !full {
-			// 全量扫库那一轮「没更新」不是「没找到」,不列进最近结果(界面也只在补搜时显示它)。
-			status.noteRecent(keys[i], out)
-		}
+		status.noteRecent(keys[i], out)
 		status.Done++
 		status.RoundDone++
 		status.Current = ""
