@@ -17492,6 +17492,23 @@
         }
       }
     },
+    "放一首歌，歌词会自动出现" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play a song and lyrics will appear here"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放一首歌，歌詞會自動出現"
+          }
+        }
+      }
+    },
     "测试" : {
       "extractionState" : "manual",
       "localizations" : {

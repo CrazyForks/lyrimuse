@@ -19,6 +19,11 @@ import SwiftUI
 ///   3. **按真窗口尺寸渲染再整体缩小** —— 不是把视图塞进一个 600pt 宽的小 frame。歌词窗口在窄
 ///      宽度下会**退化成单列**(见 `LyricsWindowView` 根容器那段注释),直接塞小 frame 预览出来
 ///      的就是单列版,而用户真打开看到的是双列,那就谈不上"一致"了。
+///
+/// 迷你尺寸下顶部信息那一组可以点:悬停描一圈虚线框,点一下弹出「顶部信息」浮层(跟灵动岛编辑台
+/// 的可点区域同一套观感,见 `NotchEditorStage.hotspotView`)。这块可点区域叠在**预览外面**,
+/// 不在被 `allowsHitTesting(false)` 挡住的那一层里;浮层内容由设置页传进来(`headerPopover`),
+/// 跟工具栏「顶部信息」那颗按钮是同一份。
 struct LyricsWindowPreviewStage: View {
     /// 预览在看哪个形态的存储键。
     ///
@@ -32,6 +37,20 @@ struct LyricsWindowPreviewStage: View {
 
     /// 画完整尺寸还是迷你尺寸(由上面那个偏好驱动,留参数是为了将来能从别处指定)。
     private var mini: Bool { showsMini }
+
+    /// 迷你顶部信息那一块可点区域点开的浮层内容。擦成 AnyView 而不是做成泛型:这个类型上有静态
+    /// 存储属性(`showsMiniStorageKey` 等,设置页也读),泛型类型不支持。
+    private let headerPopover: () -> AnyView
+
+    init<Popover: View>(@ViewBuilder headerPopover: @escaping () -> Popover) {
+        self.headerPopover = { AnyView(headerPopover()) }
+    }
+
+    /// 顶部信息那一组在**预览内容坐标**(缩放之前)里的范围,由 `LyricsWindowView` 经
+    /// `LyricsWindowPreviewHeaderAnchorKey` 报上来;没有(完整尺寸、三样全关)就是 nil。
+    @State private var headerRect: CGRect?
+    @State private var headerHovered = false
+    @State private var headerPopoverShown = false
 
     /// 按哪个尺寸渲染。取 `App.swift` 里那个 Window 场景声明的 ideal 尺寸 ——
     /// 也就是用户第一次打开歌词窗口看到的那个样子。
@@ -85,9 +104,31 @@ struct LyricsWindowPreviewStage: View {
     }
 
     private var stage: some View {
+        ZStack(alignment: .topLeading) {
+            preview
+            if mini, let headerRect {
+                headerHotspot(headerRect)
+            }
+        }
+        .frame(width: Self.previewWidth, height: previewHeight, alignment: .topLeading)
+        .onChange(of: mini) { _, isMini in
+            if !isMini { headerPopoverShown = false }
+        }
+    }
+
+    private var preview: some View {
         let shape = RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
         return LyricsWindowView(previewMode: true, previewMini: mini)
             .frame(width: contentSize.width, height: contentSize.height)
+            // 在缩放之前取范围:这里拿到的是内容坐标,下面叠可点区域时再乘 scale。
+            .overlayPreferenceValue(LyricsWindowPreviewHeaderAnchorKey.self) { anchor in
+                GeometryReader { geo in
+                    let rect = anchor.map { geo[$0].integral }
+                    Color.clear
+                        .onAppear { headerRect = rect }
+                        .onChange(of: rect) { _, new in headerRect = new }
+                }
+            }
             .scaleEffect(scale, anchor: .topLeading)
             // scaleEffect 是渲染期变换、**不改变布局尺寸**,所以要再套一层缩小后的 frame 把
             // 版面占位收回来,否则这一块会按原尺寸占位、把下面的卡片全顶到屏幕外。
@@ -100,5 +141,52 @@ struct LyricsWindowPreviewStage: View {
             // 预览是给眼睛看的,不该出现在辅助技术的浏览顺序里 —— 里面那一堆按钮既点不动、
             // 也不是真窗口的那几个。
             .accessibilityHidden(true)
+    }
+
+    /// 顶部信息那一块可点区域:平时透明,悬停描一圈白色虚线细框 + 一层极淡的白底,指针换成手形;
+    /// 点一下弹出「顶部信息」浮层,锚在这块下面。线型、透明度、圆角跟灵动岛编辑台的可点区域
+    /// 一个样(`NotchEditorStage.hotspotView`),白色不跟深浅色走,理由同那边:它压在模糊封面上。
+    ///
+    /// 在缩放后的舞台坐标里画(范围乘 scale),线宽才是实打实的 1pt;四周外扩 6pt,框不贴着字。
+    /// 用 padding 定位而不是 offset:浮层认的是布局 frame,offset 是几何效果、挪不动它。
+    private func headerHotspot(_ contentRect: CGRect) -> some View {
+        let rect = CGRect(x: contentRect.minX * scale, y: contentRect.minY * scale,
+                          width: contentRect.width * scale, height: contentRect.height * scale)
+            .insetBy(dx: -6, dy: -6)
+        let lit = headerHovered || headerPopoverShown
+        return RoundedRectangle(cornerRadius: 6)
+            .fill(Color.white.opacity(lit ? 0.07 : 0))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.white.opacity(lit ? 0.7 : 0),
+                                  style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            .frame(width: rect.width, height: rect.height)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                headerHovered = inside
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            .onTapGesture { headerPopoverShown = true }
+            // 悬停着切到完整尺寸时这块直接消失、收不到移出事件,手形指针得在这里还回去。
+            .onDisappear {
+                if headerHovered { NSCursor.pop() }
+                headerHovered = false
+            }
+            .animation(.easeOut(duration: 0.12), value: lit)
+            .popover(isPresented: $headerPopoverShown, arrowEdge: .bottom) { headerPopover() }
+            .accessibilityElement()
+            .accessibilityLabel(String(format: L10n.t("打开「%@」设置"), L10n.t("顶部信息")))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { headerPopoverShown = true }
+            .padding(.leading, max(0, rect.minX))
+            .padding(.top, max(0, rect.minY))
+    }
+}
+
+/// 迷你顶部信息那一组的范围,只在预览里报(见 `LyricsWindowView.miniTopInfo`)。
+struct LyricsWindowPreviewHeaderAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }

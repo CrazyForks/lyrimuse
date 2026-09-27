@@ -498,6 +498,11 @@ private struct IdleLastTrackHero: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: trackKey) { load() }
+        // 取数那一刻缓存还没解码完(App 刚启动)、或 collector 还没写上封面时 coverURL 是空的:
+        // 缓存换了内容就再补一次封面。只补封面,不重选歌词句。
+        .onReceive(LocalPlaybackSource.shared.$enrichContentVersion.removeDuplicates()) { _ in
+            reloadCoverIfMissing()
+        }
     }
 
     // MARK: 有上次那首
@@ -659,8 +664,16 @@ private struct IdleLastTrackHero: View {
 
     // MARK: 取数
 
+    /// 还没有封面时按当前缓存再查一次。EnrichCacheReader 只许在主线程用,这里本来就在主线程。
+    private func reloadCoverIfMissing() {
+        guard coverURL == nil, !lastTitle.isEmpty,
+              let raw = EnrichCacheReader.coverURL(artist: lastArtist, title: lastTitle, album: lastAlbum)
+        else { return }
+        coverURL = EnrichCacheReader.nativeSizedCoverURL(raw)
+    }
+
     /// 封面地址和歌词正文在主线程读(EnrichCacheReader 只许在主线程用:它的静态缓存没有锁,
-    /// 后台线程调它就是跟轮询并发改同一批字典;缓存已加载时这两次读取是 µs 级),解析与选句放后台。
+    /// 后台线程调它就是跟轮询并发改同一批字典;缓存已加载时这两次读取是 µs 级),歌词解析与选句放后台。
     private func load() {
         let a = lastArtist, t = lastTitle, al = lastAlbum
         guard !t.isEmpty else {
@@ -668,11 +681,11 @@ private struct IdleLastTrackHero: View {
             quotes = []
             return
         }
-        let raw = EnrichCacheReader.coverURL(artist: a, title: t, album: al)
+        // 封面当场赋值(地址换算是纯字符串处理):放进下面的后台任务里赋,会盖掉 reloadCoverIfMissing 在这期间补上的那张。
+        // nativeSizedCoverURL 去掉网易云那个 `?param=600y600`(只降不升,对 216pt = 432px 的大图是白扔分辨率)。
+        coverURL = EnrichCacheReader.coverURL(artist: a, title: t, album: al).map { EnrichCacheReader.nativeSizedCoverURL($0) }
         let lyrics = EnrichCacheReader.lookup(artist: a, title: t, album: al)?.lyrics ?? ""
         Task.detached(priority: .userInitiated) {
-            // 去掉网易云那个 `?param=600y600`(只降不升,对 216pt = 432px 的大图是白扔分辨率)
-            let cover = raw.map { EnrichCacheReader.nativeSizedCoverURL($0) }
             var picked: [[String]] = []
             if !lyrics.isEmpty {
                 // 必须走 LRCParser:酷狗那批 CRLF 歌词自己 split("\n") 切不开,会把整首歌
@@ -685,7 +698,6 @@ private struct IdleLastTrackHero: View {
                 picked = LyricQuotePicker.phrases(parsed, trackTitle: t, trackArtist: a)
             }
             await MainActor.run {
-                coverURL = cover
                 quotes = picked
                 quoteIndex = picked.isEmpty ? 0 : Int.random(in: 0 ..< picked.count)
             }

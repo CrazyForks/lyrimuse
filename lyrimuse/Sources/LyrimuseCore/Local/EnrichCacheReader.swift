@@ -591,11 +591,7 @@ public enum EnrichCacheReader {
     /// (App 刚启动)或落后于它时,`lookup` 从这份拿得到歌词,封面也得从这份拿,不然是有词没图。
     public static func albumMatchedCoverURL(artist: String, title: String, album: String) -> URL? {
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        if let p = freshPlayingEntry(),
-           EnrichCacheKeys.looseKey(EnrichCacheKeys.strippingDurationVariant(p.key)) == EnrichCacheKeys.looseKey(key),
-           let s = p.entry.coverURL, let url = URL(string: s) {
-            return url
-        }
+        if let s = freshPlayingEntry(forKey: key)?.coverURL, let url = URL(string: s) { return url }
         guard let all = loadEntries() else { return nil }
         if let s = matchedEntry(key, in: all)?.coverURL, let url = URL(string: s) { return url }
         return nil
@@ -612,9 +608,15 @@ public enum EnrichCacheReader {
     public static func albumMatchedMotionCover(
         artist: String, title: String, album: String
     ) -> (master: URL, preview: String?, identityVerified: Bool)? {
-        guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        let entry = matchedEntry(key, in: all)
+        // 「正在放的这一条」比已解码缓存新时先看它,同 albumMatchedCoverURL。
+        let entry: EnrichCacheEntry?
+        if let fresh = freshPlayingEntry(forKey: key) {
+            entry = fresh
+        } else {
+            guard let all = loadEntries() else { return nil }
+            entry = matchedEntry(key, in: all)
+        }
         guard let entry, let s = entry.motionCoverURL, let url = URL(string: s) else { return nil }
         return (url, entry.motionPreviewURL, entry.motionCoverIdentityVerified ?? false)
     }
@@ -627,9 +629,15 @@ public enum EnrichCacheReader {
     ///
     /// 给「最近记录」第①级纠错用,见 LastfmStatsService.coverURL(for:)。
     public static func albumVerifiedCoverURL(artist: String, title: String, album: String) -> URL? {
-        guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        let entry = matchedEntry(key, in: all)
+        // 「正在放的这一条」比已解码缓存新时先看它,同 albumMatchedCoverURL。
+        let entry: EnrichCacheEntry?
+        if let fresh = freshPlayingEntry(forKey: key) {
+            entry = fresh
+        } else {
+            guard let all = loadEntries() else { return nil }
+            entry = matchedEntry(key, in: all)
+        }
         guard let entry, coverAlbumVerified(coverAlbum: entry.coverAlbum, requestedAlbum: album),
               let s = entry.coverURL, let url = URL(string: s) else { return nil }
         return url
@@ -989,6 +997,15 @@ public enum EnrichCacheReader {
     /// 「当前已解码内容」对应的文件 mtime。给 apply() 当重灌触发键(见上面那段注释)。
     /// 单条快照比它新时取快照的 mtime:快照一落盘就触发重灌,不等整份写完。
     public static var decodedContentVersion: Date? { freshPlayingEntry()?.mtime ?? cachedMTime }
+
+    /// 比已解码内容新、而且就是 key 这一首的单条快照(判据同 lookup:去掉 `~durN` 之后按 looseKey 认)。
+    /// 查封面的几个函数用它,主缓存还没解码完时封面跟歌词一样拿得到。
+    private static func freshPlayingEntry(forKey key: String) -> EnrichCacheEntry? {
+        guard let p = freshPlayingEntry(),
+              EnrichCacheKeys.looseKey(EnrichCacheKeys.strippingDurationVariant(p.key)) == EnrichCacheKeys.looseKey(key)
+        else { return nil }
+        return p.entry
+    }
 
     /// 比已解码内容新的单条快照;没有、比缓存旧、或解不开都是 nil。
     private static func freshPlayingEntry() -> (key: String, entry: EnrichCacheEntry, mtime: Date)? {

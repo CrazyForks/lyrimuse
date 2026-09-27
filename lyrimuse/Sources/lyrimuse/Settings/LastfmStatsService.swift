@@ -63,7 +63,10 @@ final class LastfmStatsService: ObservableObject {
     private func startFeedWatcher() {
         pollFeedFile()
         let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pollFeedFile() }
+            Task { @MainActor in
+                self?.pollFeedFile()
+                self?.refreshLocalCoversOnCacheAdvance()
+            }
         }
         t.tolerance = 2 // 差几秒无所谓,让系统合并唤醒
         RunLoop.main.add(t, forMode: .common)
@@ -2922,6 +2925,14 @@ final class LastfmStatsService: ObservableObject {
     /// 还没解码采纳"的窗口里把这次变化盖章烧掉——空闲态(没有 poll 在推进解码)collector
     /// 的落盘在统计页就永远看不到了。先 refreshIfNeeded() 让 Reader 自己推进(空闲态这里
     /// 就是唯一的推进者),再按已解码版本判变化。
+    /// 本机缓存的已解码版本推进了(App 刚启动那一轮解码完、collector 补上了封面)就重算本机封面兜底。挂在 5 秒的
+    /// feed 定时器上:设置页统计卡那一拍是 2 分钟一次,歌词窗口的停播页、榜单单独开着、又停着播时 feed 不再变化,
+    /// 没有别的入口推动重算,本机补的封面会一直灰着。版本没变只是一次比较。
+    private func refreshLocalCoversOnCacheAdvance() {
+        guard credentials != nil, EnrichCacheReader.decodedContentVersion != localCoversStamp else { return }
+        refreshLocalCoversIfCacheChanged()
+    }
+
     func refreshLocalCoversIfCacheChanged() {
         EnrichCacheReader.refreshIfNeeded()
         refreshArtistRegionsIfChanged()

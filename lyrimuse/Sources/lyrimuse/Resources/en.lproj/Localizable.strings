@@ -838,6 +838,7 @@
 "数据源" = "Data Source";
 "整份配置都在这里，纯文本可直接编辑；里面含账号凭据，不要发给别人" = "Everything lives here in plain text you can edit directly. It holds your account credentials, so don't send it to anyone";
 "整行时间轴" = "Line timing";
+"放一首歌，歌词会自动出现" = "Play a song and lyrics will appear here";
 "文件里包含账号登录凭证和密钥，妥善保管，不要发给别人" = "This file contains your account credentials and keys. Keep it safe and don't send it to anyone";
 "文字" = "Text";
 "文字描边" = "Text Outline";

@@ -7,6 +7,42 @@ import Foundation
 
 @MainActor
 func runSourceContractTests() {
+    // 待机页「刚才在听」的封面:取数那一刻主缓存还没解码完时,歌词经「正在放的这一条」拿得到、封面拿不到,
+    // 卡片又只在换歌时取一次 —— 有词没图一直挂到下一首。两头都要守:查封面也看那份快照,卡片在缓存换了内容时补封面。
+    do {
+        let sourcesRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func code(_ path: String) -> String {
+            guard let text = try? String(contentsOfFile: sourcesRoot.appendingPathComponent(path).path, encoding: .utf8) else { return "" }
+            return text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+        }
+        let reader = code("LyrimuseCore/Local/EnrichCacheReader.swift")
+        if let r = reader.range(of: "public static func albumMatchedCoverURL(") {
+            let body = String(reader[r.lowerBound...].prefix(700))
+            expectEqual(body.contains("freshPlayingEntry(forKey: key)"), true,
+                        "待机封面(契约): albumMatchedCoverURL 要先看「正在放的这一条」,跟 lookup 同一条判据")
+        } else {
+            expectEqual(true, false, "待机封面(契约): 读不到 albumMatchedCoverURL(改名了?)")
+        }
+        for fn in ["albumMatchedMotionCover(", "albumVerifiedCoverURL("] {
+            if let r = reader.range(of: "public static func " + fn) {
+                expectEqual(String(reader[r.lowerBound...].prefix(700)).contains("freshPlayingEntry(forKey: key)"), true,
+                            "待机封面(契约): \(fn) 也要先看「正在放的这一条」")
+            } else {
+                expectEqual(true, false, "待机封面(契约): 读不到 \(fn)(改名了?)")
+            }
+        }
+        let recent = code("lyrimuse/UI/RecentListensPanel.swift")
+        expectEqual(recent.contains("$enrichContentVersion") && recent.contains("let _ = enrichVersion"), true,
+                    "待机封面(契约): 待补提交那几行现查封面,缓存换了内容要重绘")
+        let stats = code("lyrimuse/Settings/LastfmStatsService.swift")
+        expectEqual(stats.contains("self?.refreshLocalCoversOnCacheAdvance()"), true,
+                    "待机封面(契约): 本机封面兜底要挂在 5 秒的 feed 定时器上跟着缓存版本重算")
+        let idle = code("lyrimuse/UI/IdleStandbyView.swift")
+        expectEqual(idle.contains("$enrichContentVersion") && idle.contains("reloadCoverIfMissing()"), true,
+                    "待机封面(契约): 「刚才在听」要在缓存换了内容时补封面")
+    }
+
     // ---- 「歌词显示」页分段的跨文件契约 ----
     //
     // 菜单栏面板的「全部设置…」靠往一个 UserDefaults 键写这几个字符串,把设置窗口直接翻到
@@ -1906,7 +1942,7 @@ func runSourceContractTests() {
         if let settings = read("SettingsView.swift") {
             // 「歌词窗口」设置段同另外三段:预览上面一排工具栏(浮层 + 重置)、预览下面一张卡(打开窗口)、
             // 默认折叠的全部设置抽屉,外观行只有一份、两处共用(07 章决策 44、45)。
-            expectEqual(settings.contains("lyricsWindowToolbar\n            LyricsWindowPreviewStage()"), true,
+            expectEqual(settings.contains("lyricsWindowToolbar\n            LyricsWindowPreviewStage {"), true,
                         "歌词窗口设置: 工具栏在预览上面")
             expectEqual(settings.contains("LyricsWindowAllSettingsDrawer {"), true,
                         "歌词窗口设置: 全量配置收进「全部设置」抽屉")
@@ -1923,6 +1959,39 @@ func runSourceContractTests() {
                               "BrowserPairing.rememberManualBrowser(",
                               "BrowserPairing.chooseFromApplications(",
                               "BrowserPairing.forgetManualBrowserIfUnpaired("] {
+            expectEqual(settings.contains("LyricsWindowPreviewStage { lyricsWindowPopoverContent(.info) }"), true,
+                        "歌词窗口设置: 预览里顶部信息那块点开的浮层跟工具栏「顶部信息」是同一份")
+            if let stage = read("UI/LyricsWindowPreviewStage.swift"), let view = read("UI/LyricsWindowView.swift") {
+                expectEqual(stage.contains("StrokeStyle(lineWidth: 1, dash: [4, 3])"), true,
+                            "歌词窗口预览: 顶部信息可点区域悬停是虚线框(跟灵动岛编辑台同一套)")
+                expectEqual(stage.contains(".popover(isPresented: $headerPopoverShown, arrowEdge: .bottom) { headerPopover() }"), true,
+                            "歌词窗口预览: 点顶部信息弹出浮层")
+                expectEqual(stage.contains("preview\n            if mini, let headerRect {"), true,
+                            "歌词窗口预览: 可点区域叠在预览外面(预览本体仍整块 allowsHitTesting(false))")
+                expectEqual(view.components(separatedBy: "anchorPreference(key: LyricsWindowPreviewHeaderAnchorKey.self").count - 1, 2,
+                            "歌词窗口预览: 迷你顶部信息两种形态(有文字 / 只有封面)都报出范围")
+                // 迷你窗的停播页(07 章决策 64、67):跟完整布局同一个判据、同一层柔光底,停播时不出控制条。
+                expectEqual(view.contains("if isIdle {\n                    miniIdleView"), true,
+                            "迷你停播页: 停播时整块换成停播页,不摆顶部信息 / 歌词 / 进度条")
+                expectEqual(view.contains("IdleStandbyBackground(wide: false)\n                        .opacity(isIdle ? 1 : 0)"), true,
+                            "迷你停播页: 背景叠完整布局那层中心柔光,透明度交叉淡入")
+                expectEqual(view.contains("if !previewMode, !isIdle {\n                    miniDeck"), true,
+                            "迷你停播页: 停播时悬停控制条不出来")
+                expectEqual(view.contains("return MiniIdleStandby("), true,
+                            "迷你停播页: 版式在 MiniIdleStandby(上次那首 + 一句歌词)")
+                if let mini = read("UI/MiniIdleStandby.swift") {
+                    expectEqual(mini.contains("在 %@ 播放任意歌曲"), false,
+                                "迷你停播页: 不用一句话点名某家播放器(用户往往勾了好几家)")
+                    expectEqual(mini.contains("LyricQuotePicker.phrases("), true,
+                                "迷你停播页: 挑句子跟完整停播页同一个 LyricQuotePicker")
+                    expectEqual(mini.components(separatedBy: "ViewThatFits(in: .vertical)").count - 1, 3,
+                                "迷你停播页: 三种数据情形都按窗口高度逐档退化")
+                } else {
+                    expectEqual(true, false, "迷你停播页: 读不到 MiniIdleStandby.swift")
+                }
+            } else {
+                expectEqual(true, false, "歌词窗口预览: 读不到 LyricsWindowPreviewStage.swift / LyricsWindowView.swift")
+            }
                 expectEqual(settings.contains(forwarded), true,
                             "引导页一份实现: SettingsView 里 \(forwarded) 这条转发不见了(逻辑被抄回去了?)")
             }

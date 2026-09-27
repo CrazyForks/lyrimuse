@@ -325,6 +325,8 @@ struct PendingListensPanel: View {
 
     @ObservedObject private var backfill = ScrobbleBackfillService.shared
     @State private var hoveredID: String?
+    /// 行里的封面在 body 里现查本机缓存(见 row):缓存换了内容要重绘一次,不然启动那一刻没解码完查空的行一直是占位。
+    @State private var enrichVersion: Date?
 
     private enum Item: Identifiable {
         case header(String)
@@ -343,6 +345,7 @@ struct PendingListensPanel: View {
     private var hoverFillColor: Color { onArtwork ? .white.opacity(0.10) : Color.primary.opacity(0.07) }
 
     var body: some View {
+        let _ = enrichVersion
         VStack(alignment: .leading, spacing: 0) {
             header
             content
@@ -360,6 +363,7 @@ struct PendingListensPanel: View {
             }
         }
         .onAppear { backfill.refreshPending() }
+        .onReceive(LocalPlaybackSource.shared.$enrichContentVersion.removeDuplicates()) { enrichVersion = $0 }
         // 面板开着的这段时间里盯住收听日志:同 AccountLinkingTab.pendingListensRow
         // 那份 5 秒 mtime 轮询(理由同它的注释:按秒轮询 collector 子进程太重,
         // stat 一个文件几乎免费,变了才真去重算)。

@@ -1352,7 +1352,13 @@ struct LyricsWindowView: View {
     private var miniBody: some View {
         GeometryReader { geo in
             let fontSize = Self.miniFontSize(geo.size, cap: playback.miniFontSizeCap)
+            // 判据跟完整布局的停播页同一个(停播时 LocalPlaybackSource 清曲目,title 空)。
+            let isIdle = playback.title.isEmpty
             VStack(spacing: 0) {
+                if isIdle {
+                    miniIdleView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
                 miniTopInfo
                 if miniUsesLyricsList {
                     // 「多行」:完整布局那份整页列表原样搬进来(行、间奏点、自动滚动、点行跳转都是
@@ -1372,13 +1378,23 @@ struct LyricsWindowView: View {
                 // 下一行照常显示、谁也不压谁,而且悬停进出时歌词一个像素都不动。
                 Color.clear.frame(height: miniDeckReserve)
                 miniProgressBar
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(artworkBackground.ignoresSafeArea())
+            // 停播页背景跟完整布局同一层(中心柔光),叠在 artworkBackground 之上、用透明度交叉淡入,
+            // 理由见 fullBody 那处。迷你窗只有居中一种排布,柔光锚点取窄窗那一档。
+            .background(
+                ZStack {
+                    artworkBackground
+                    IdleStandbyBackground(wide: false)
+                        .opacity(isIdle ? 1 : 0)
+                }
+                .animation(.easeInOut(duration: 0.45), value: isIdle)
+                .ignoresSafeArea())
             // 控制条**钉在最底部**,而且是 overlay、**不参与布局** —— 它进出时上面的歌词
             // 一个像素都不动。不压到下一行,靠的是上面那格 `miniDeckReserve`。
             .overlay(alignment: .bottom) {
-                if !previewMode {
+                if !previewMode, !isIdle {
                     miniDeck
                         .padding(.bottom, Self.miniDeckBottomInset)
                         .opacity(miniControlsVisible ? 1 : 0)
@@ -1403,6 +1419,17 @@ struct LyricsWindowView: View {
             }
             .onHover { miniHovered = $0 }
         }
+    }
+
+    /// 迷你窗的停播页。版式与三种数据情形见 `MiniIdleStandby`(IdleStandbyView.swift);
+    /// 不摆顶部信息、进度条和悬停控制条:这时没有曲目可显示、也没有可控制的播放。
+    private var miniIdleView: some View {
+        let player = idlePlayer
+        return MiniIdleStandby(
+            player: player,
+            breathing: !reduceMotion && windowController.isSurfaceVisible,
+            onResume: { resumeFromIdle(player: player) },
+            onOpenPlayer: { openIdlePlayerApp(player) })
     }
 
     /// 迷你「多行」这一刻走不走整页列表。没有同步歌词(空态 / 纯文本兜底)和电台口白时退回两行那套:
@@ -1459,11 +1486,19 @@ struct LyricsWindowView: View {
                     Color.clear.frame(width: miniCoverSide, height: 1)
                 }
             }
+            // 预览里报出这一组的范围,设置页在上面叠一块可点区域(见 LyricsWindowPreviewStage)。
+            // 挂在 padding 之前:可点的是这组内容本身,不是两侧留给窗口控件的空。
+            .anchorPreference(key: LyricsWindowPreviewHeaderAnchorKey.self, value: .bounds) {
+                previewMode ? $0 : nil
+            }
             .padding(.horizontal, 76)
             .padding(.top, 12)
             .frame(maxWidth: .infinity)
         } else if hasCover {
             miniCover
+                .anchorPreference(key: LyricsWindowPreviewHeaderAnchorKey.self, value: .bounds) {
+                    previewMode ? $0 : nil
+                }
                 .padding(.top, 12)
                 .frame(maxWidth: .infinity)
         }

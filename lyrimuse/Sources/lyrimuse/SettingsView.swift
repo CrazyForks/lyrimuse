@@ -2420,7 +2420,7 @@ private struct AppearanceSettingsTab: View {
             // 设置页只会误触真实播放。理由和做法见 LyricsWindowPreviewStage。
             // 工具栏在预览上面,跟另外三段编辑台同一个位置:先看到能调什么,再看效果。
             lyricsWindowToolbar
-            LyricsWindowPreviewStage()
+            LyricsWindowPreviewStage { lyricsWindowPopoverContent(.info) }
             // 预览下面那张卡,位置同另外三段的总开关卡。歌词窗口没有"开不开"这件事,这里放的是
             // 打开那扇真窗口(走 `AppActions.openLyricsWindow`,跟菜单栏面板、快捷键同一个入口)。
             SettingsCard {
