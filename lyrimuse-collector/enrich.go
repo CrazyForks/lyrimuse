@@ -583,6 +583,8 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 	if bundleID == kkboxBundleID {
 		kkboxInfo = kkboxPlayingInfoFor(artist, title, durationSecs)
 	}
+	// Spotify 缓存里现在有没有这首的词:同理放在锁外(记忆 30 秒,见 spotifyLocalLyricsAvailable)。
+	spotifyLyricsAvail := bundleID == spotifyBundleID && spotifyLocalLyricsAvailable(artist, title)
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	if !ok {
@@ -671,6 +673,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		} else if kkboxLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, kkboxInfo.lyrics) &&
 			!enrichInflight[key] && kkboxLyricsRecheckOnce(key) {
 			// KKBOX 自己的词在这首被预解析之后才有(见 kkboxLyricsWorthRecheck),让它进一次打分。
+			enrichInflight[key] = true
+			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
+		} else if spotifyLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, spotifyLyricsAvail) &&
+			!enrichInflight[key] && spotifyLyricsRecheckOnce(key) {
+			// Musixmatch 当初没给出词,Spotify 缓存里现在有(见 spotifyLyricsWorthRecheck),让它进一次打分。
 			enrichInflight[key] = true
 			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
 		} else if needsLyricsRetry(e, wrongDuration, pinned, features().LyricsAutoUpgrade) && !enrichInflight[key] {
@@ -2790,10 +2797,12 @@ func pickLyricCandidate(scored []scoredLyricCandidateResult) *scoredLyricCandida
 				}
 			}
 		}
-		// KKBOX 本地歌词不在用户排的顺序里(它不是歌词源):顺序里的源都没给出可用的,才轮到它。
-		for i := range scored {
-			if scored[i].Source == kkboxLocalLyricsSource && scored[i].Score >= 0 {
-				return &scored[i]
+		// KKBOX / Spotify 本地歌词不在用户排的顺序里(它们不是歌词源):顺序里的源都没给出可用的,才轮到它们。
+		for _, local := range []string{kkboxLocalLyricsSource, spotifyLocalLyricsSource} {
+			for i := range scored {
+				if scored[i].Source == local && scored[i].Score >= 0 {
+					return &scored[i]
+				}
 			}
 		}
 		return nil
@@ -3732,6 +3741,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	soda := raw["soda"]
 	kk := raw[kkboxLocalLyricsSource]
 	sodaLyr, sodaYRC, sodaTitle, sodaArtist, sodaAlbum, sodaCover, sodaDur := soda.lyr, soda.yrc, soda.matchTitle, soda.matchArtist, soda.matchAlbum, soda.matchCover, soda.srcDur
+	spl := raw[spotifyLocalLyricsSource]
 	amll := raw["amll"].amll
 	// 候选的封面只用它自己那个源给的,没有就空着(「搜索候选歌词」弹窗显示占位图,「解析决策」全空时整列不出现)。
 	// 别拿按本地歌名搜来的 Apple 封面给它兜底:那是"本地这首"的封面、不是这条候选的出处,候选缩略图本来是帮人
@@ -3842,6 +3852,15 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			title:                      kk.matchTitle, artist: kk.matchArtist, album: kk.matchAlbum,
 			cover:                   kk.matchCover,
 			identityFromLocalClient: kk.identityFromLocalClient,
+		})
+	}
+	if spl.lyr != "" {
+		// Spotify 本地歌词(Spotify 自己拉过的那份,逐行,多是 Musixmatch 供词,见 spotifylyrics.go)。Spotify 没有配同源
+		// 歌词,不置 identityFromLocalClient,跟各源公平打分。
+		candidates = append(candidates, lyricCandidate{
+			source: spotifyLocalLyricsSource, lyrics: spl.lyr,
+			sourceReportedDurationSecs: spl.srcDur,
+			title:                      spl.matchTitle, artist: spl.matchArtist, album: spl.matchAlbum,
 		})
 	}
 	if !amll.empty() {
@@ -4391,6 +4410,10 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 	if lyricQueryReasonFrom(ctx) == lyricQueryReasonPrimary {
 		if r, ok := kkboxLocalLyricsFor(artist, title, durationSecs); ok {
 			raw[kkboxLocalLyricsSource] = r
+		}
+		// Spotify 本地歌词同理(Musixmatch 的备用管道,见 spotifylyrics.go),不看当前播放器:按曲目 ID 找得到就放。
+		if r, ok := spotifyLocalLyricsFor(artist, title); ok {
+			raw[spotifyLocalLyricsSource] = r
 		}
 	}
 	// scoreAndSort 用目前为止已经到手的原始结果重新构建候选、算 corroboratedEndings、

@@ -253,6 +253,9 @@ func sourceColor(_ source: String) -> Color {
     // KKBOX 本地歌词(不是歌词源:用 KKBOX 放歌时读它自己缓存里的那份,见 collector/kkboxlyrics.go 头注)。
     // 品牌色是青蓝一系,.cyan / .teal / .blue 都被占了,取最后一个未占用色 .yellow。
     case "kkbox": return .yellow
+    // Spotify 本地歌词(不是歌词源:Spotify 自己拉过的那份,多是 Musixmatch 供词,见 collector/spotifylyrics.go)。
+    // 系统色都被占了,品牌绿跟 QQ 音乐的 .green 分不开,用 .gray。
+    case "spotify": return .gray
     default: return .secondary
     }
 }
@@ -291,6 +294,8 @@ func sourceDisplayName(_ source: String) -> String {
     // KKBOX 本地歌词——品牌名,中文界面里也写 KKBOX,保留原名。不在 LyricsSource 里(设置里没有它的开关),
     // 只在这份词确实来自 KKBOX 时显示出来。
     case "kkbox": return "KKBOX"
+    // Spotify 本地歌词——品牌名,保留原名。同 KKBOX,不在 LyricsSource 里,只在这份词确实来自 Spotify 缓存时显示。
+    case "spotify": return "Spotify"
     case "": return L10n.t("无来源")
     default: return source
     }
