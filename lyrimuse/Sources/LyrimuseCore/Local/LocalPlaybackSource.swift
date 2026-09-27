@@ -42,6 +42,9 @@ public final class LocalPlaybackSource: ObservableObject {
     /// LyricsSyncEngine.scrollLeadIndex;这里跟 currentLineIndex 同一套 tick、同一条
     /// "只在真的变化时才赋值"纪律。
     @Published public private(set) var scrollLineIndex: Int?
+    /// 歌词窗口:跟当前行重叠着、还没唱完的前几行(对唱 / 背景人声唱进下一句),升序,平时是空数组。
+    /// 语义见 LyricsSyncEngine.TickResolution.overlappingIndices;同一套 tick、同一条"只在真的变化时才赋值"纪律。
+    @Published public private(set) var overlappingLineIndices: [Int] = []
     /// 单行展示面(灵动岛 / 菜单栏)该显示的那一行(「唱完就切到下一句,
     /// 好提前看到歌词跟唱」)。跟 currentLine 的区别是**唱完就切走**;长间奏中段为 nil,
     /// 由 compactShowsPlaceholder 区分成因。规则见 CompactLyricLead —— 它跟歌词窗口的
@@ -2224,6 +2227,7 @@ public final class LocalPlaybackSource: ObservableObject {
         if nextLineWordGroups != nil { nextLineWordGroups = nil }
         if currentLineIndex != nil { currentLineIndex = nil }
         if scrollLineIndex != nil { scrollLineIndex = nil }
+        if !overlappingLineIndices.isEmpty { overlappingLineIndices = [] }
         if compactLine != nil { compactLine = nil }
         if compactShowsPlaceholder { compactShowsPlaceholder = false }
         if compactDwellMs != nil { compactDwellMs = nil }
@@ -2256,9 +2260,10 @@ public final class LocalPlaybackSource: ObservableObject {
         if r.nextWordGroups != nextLineWordGroups { nextLineWordGroups = r.nextWordGroups }
         if r.index != currentLineIndex { currentLineIndex = r.index }
         if r.scrollIndex != scrollLineIndex { scrollLineIndex = r.scrollIndex }
+        if r.overlappingIndices != overlappingLineIndices { overlappingLineIndices = r.overlappingIndices }
         if r.gapIndex != currentGapIndex { currentGapIndex = r.gapIndex }
         if r.rawGapWindow != rawGapWindow { rawGapWindow = r.rawGapWindow }
-        updateLineFillSettled(line: r.line, atRawMs: frozen)
+        updateLineFillSettled(line: r.line, index: r.index, atRawMs: frozen)
     }
 
     private func fastTick() {
@@ -2299,9 +2304,10 @@ public final class LocalPlaybackSource: ObservableObject {
         if r.nextWordGroups != nextLineWordGroups { nextLineWordGroups = r.nextWordGroups }
         if r.index != currentLineIndex { currentLineIndex = r.index }
         if r.scrollIndex != scrollLineIndex { scrollLineIndex = r.scrollIndex }
+        if r.overlappingIndices != overlappingLineIndices { overlappingLineIndices = r.overlappingIndices }
         if r.gapIndex != currentGapIndex { currentGapIndex = r.gapIndex }
         if r.rawGapWindow != rawGapWindow { rawGapWindow = r.rawGapWindow }
-        updateLineFillSettled(line: r.line, atRawMs: pos)
+        updateLineFillSettled(line: r.line, index: r.index, atRawMs: pos)
     }
 
     /// 见 currentLineFillSettled 的注释。阈值(该行从哪一毫秒起定格)是纯数值,算法在
@@ -2314,14 +2320,17 @@ public final class LocalPlaybackSource: ObservableObject {
     private var settledThresholdLine: SyncedLyricLine?
     private var settledThresholdMs = 0
 
-    private func updateLineFillSettled(line: SyncedLyricLine?, atRawMs rawMs: Int) {
+    private func updateLineFillSettled(line: SyncedLyricLine?, index: Int?, atRawMs rawMs: Int) {
         let settled: Bool
         if let words = line?.words {
             if line != settledThresholdLine {
                 settledThresholdLine = line
-                // 背景人声也在歌词窗口里逐字填色,常常唱到主句结束之后,一并算进去。
+                // 按歌词窗口那一版的词算(跟下一行重叠的行不压末字、保留真实时间,见 windowLineWords),
+                // 不然窗口里这一行会在词唱完之前被定格成全填色。背景人声也在歌词窗口里逐字填色,常常唱到
+                // 主句结束之后,一并算进去。
+                let fillWords = index.flatMap { syncEngine.windowLineWords(at: $0) } ?? words
                 settledThresholdMs = KaraokeFill.lineFillSettledMs(
-                    words: words + (line?.backgroundWords ?? []), groups: line?.wordGroups)
+                    words: fillWords + (line?.backgroundWords ?? []), groups: line?.wordGroups)
             }
             // 必须用 effectiveOffsetMs(含歌词自带的 [offset:]),不能用 offsetMs:
             // settledThresholdMs 来自词时间戳(歌词原始时间轴),而"播放位置 → 歌词时间轴"
@@ -2368,6 +2377,7 @@ public final class LocalPlaybackSource: ObservableObject {
             nextLineWordGroups = nil
             currentLineIndex = nil
             scrollLineIndex = nil
+            overlappingLineIndices = []
             compactLine = nil
             compactShowsPlaceholder = false
             compactDwellMs = nil

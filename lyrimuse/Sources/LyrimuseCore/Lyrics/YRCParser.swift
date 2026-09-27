@@ -14,16 +14,20 @@ public struct LyricWord: Equatable {
 public struct LyricLineWords: Equatable {
     public let timeMs: Int
     public let words: [LyricWord]
-    public init(timeMs: Int, words: [LyricWord]) {
+    /// 行头声明的行长(`[行始,行长]` 的第二段),nil = 没有声明。只有时间轴归一化看它:声明的行长盖住了
+    /// 越过下一行的词,说明这一行本来就跟下一行重叠(对唱),不是时间轴错位(见 LyricTimelineNormalizer)。
+    public let durationMs: Int?
+    public init(timeMs: Int, words: [LyricWord], durationMs: Int? = nil) {
         self.timeMs = timeMs
         self.words = words
+        self.durationMs = durationMs
     }
 }
 
 // 网易云逐字 yrc 解析,算法照抄 web/index.html 的 parseYRC():每行 [行始ms,行长ms] 后跟
 // 若干 (词始ms,词长ms,0)文字;跳过没有任何非空词的行(NetEase 会吐一些零宽标记行)。
 public enum YRCParser {
-    private static let headRegex = try! NSRegularExpression(pattern: #"^\[(\d+),\d+\]"#)
+    private static let headRegex = try! NSRegularExpression(pattern: #"^\[(\d+),(\d+)\]"#)
     // 词文字捕获组(第 3 组)不能简单写 [^(]*——实测排查坐实:如果某个词的
     // 原文本身含字面 "("(和声/口白标注常见,比如 "(oh)"),[^(]* 会在遇到这个字面 "("
     // 时就把这个词截断成空(空词在下面 wordText.isEmpty 判断里被整个丢弃),而剩下的
@@ -63,6 +67,7 @@ public enum YRCParser {
             let headRange = NSRange(location: 0, length: rawNsLine.length)
             guard let head = headRegex.firstMatch(in: rawLineString, range: headRange) else { continue }
             let lineTimeMs = Int(rawNsLine.substring(with: head.range(at: 1))) ?? 0
+            let lineDurationMs = Int(rawNsLine.substring(with: head.range(at: 2)))
             // 畸形两段式元组统一切掉——见 malformedTupleRegex 定义处的注释,必须先做这一步
             // 再跑 wordRegex,不然这些碎片会被 wordRegex 的负向前瞻误判成字面词文字整个
             // 吃进去,把裸数字显示给用户看。
@@ -78,7 +83,7 @@ public enum YRCParser {
                 let dur = Int(nsLine.substring(with: m.range(at: 2))) ?? 0
                 words.append(LyricWord(startMs: start, durationMs: dur, text: wordText))
             }
-            if !words.isEmpty { out.append(LyricLineWords(timeMs: lineTimeMs, words: words)) }
+            if !words.isEmpty { out.append(LyricLineWords(timeMs: lineTimeMs, words: words, durationMs: lineDurationMs)) }
         }
         return out.sorted { $0.timeMs < $1.timeMs }
     }

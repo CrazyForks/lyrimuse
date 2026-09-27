@@ -33,7 +33,9 @@ private let logger = Logger(subsystem: "me.yudaotor.lyrimuse", category: "lyrics
 ///   3. 字起点**不早于下一行起点**:差 ≤250ms 就拉到「下一行起点 − tailWindowMs」(换行提前量
 ///      140ms + 最短填色 120ms,见 KaraokeFill),终点不动,让它在换行前那 260ms 里能被看见填完;
 ///      超过 → 整行退化。拉的时候不越过前一个字的起点、不早于行首。相邻两行时间戳相同(对唱/
-///      重复行)时没有可用边界,这条不判。
+///      重复行)时没有可用边界,这条不判。**例外**:行头声明的行长盖住了这一行所有词的终点,越过下一行
+///      的词是真的在跟下一行重叠着唱(对唱),照原样保留,行头时间记进 `keptOverlapLineTimes`;只有一行
+///      位置的展示面换行时再用 `singleLineForm` 套这条规则。见 08 章决策 24。
 ///
 /// 退化 = 这一行只剩一个覆盖全部文字的字,从行首扫到下一行开始(没有下一行就到原来最后一个字
 /// 的终点)。选"均匀扫过"而不是"整行高亮":同一首歌里其它行还在逐字,突然一行不动比匀速扫过
@@ -54,17 +56,27 @@ public enum LyricTimelineNormalizer {
         public var clampedToLineStart = 0
         public var clampedBeforeNextLine = 0
         public var degradedLines: [DegradeReason: Int] = [:]
+        /// 行头声明的行长盖住了越过下一行的词、照原样保留的行数(规则 3 的例外)。
+        public var keptDeclaredOverlap = 0
         public init() {}
         public var degradedLineCount: Int { degradedLines.values.reduce(0, +) }
         public var isEmpty: Bool {
-            clampedToLineStart == 0 && clampedBeforeNextLine == 0 && degradedLines.isEmpty
+            clampedToLineStart == 0 && clampedBeforeNextLine == 0 && degradedLines.isEmpty && keptDeclaredOverlap == 0
         }
     }
 
+    /// 行头声明的行长跟词的实际终点之间的容差。
+    public static let declaredEndToleranceMs = 50
+
     /// `lines` 必须已按 timeMs 升序(YRCParser.parse 的输出就是)。
-    public static func normalize(_ lines: [LyricLineWords]) -> (lines: [LyricLineWords], report: Report) {
+    ///
+    /// 规则 3 的例外:行头声明的行长盖住了这一行所有词的终点(`durationMs` 非 nil),越过下一行起点的词
+    /// 就是真的跟下一行重叠在唱(对唱),照原样保留,行头时间记进 `keptOverlapLineTimes`。
+    public static func normalize(_ lines: [LyricLineWords])
+        -> (lines: [LyricLineWords], report: Report, keptOverlapLineTimes: Set<Int>) {
         var report = Report()
         var out: [LyricLineWords] = []
+        var kept: Set<Int> = []
         out.reserveCapacity(lines.count)
         for (i, line) in lines.enumerated() {
             // 相邻行同一时间戳 → 没有可用的下一行边界(对唱两声部 / 重复行都会这样)。
@@ -72,46 +84,74 @@ public enum LyricTimelineNormalizer {
             if i + 1 < lines.count, lines[i + 1].timeMs > line.timeMs {
                 nextStart = lines[i + 1].timeMs
             }
-            var words: [LyricWord] = []
-            words.reserveCapacity(line.words.count)
-            var previousStart: Int? = nil
-            var degrade: DegradeReason? = nil
-            for w in line.words {
-                var start = w.startMs
-                let end = w.startMs + max(0, w.durationMs)
-                if let previousStart, start < previousStart {
-                    degrade = .wordStartDecreased
+            if let nextStart, declaresOverlap(line, nextStart: nextStart) {
+                let keptLine = normalizeLine(line, nextStart: nil, report: &report)
+                if singleLineForm(line, nextStart: nextStart) != keptLine {
+                    kept.insert(line.timeMs)
+                    report.keptDeclaredOverlap += 1
+                }
+                out.append(keptLine)
+                continue
+            }
+            out.append(normalizeLine(line, nextStart: nextStart, report: &report))
+        }
+        return (out, report, kept)
+    }
+
+    /// 只有一行位置、必须在下一行开始时换走的展示面用的形态:照规则 3 把越过下一行起点的词拉回或整行退化。
+    public static func singleLineForm(_ line: LyricLineWords, nextStart: Int) -> LyricLineWords {
+        var scratch = Report()
+        return normalizeLine(line, nextStart: nextStart, report: &scratch)
+    }
+
+    /// 行头声明的行长盖住了所有词的终点,而且确实有词的终点越过了下一行起点。
+    static func declaresOverlap(_ line: LyricLineWords, nextStart: Int) -> Bool {
+        guard let dur = line.durationMs, dur > 0 else { return false }
+        let declaredEnd = line.timeMs + dur + declaredEndToleranceMs
+        let ends = line.words.map { $0.startMs + max(0, $0.durationMs) }
+        guard let lastEnd = ends.max(), lastEnd > nextStart else { return false }
+        return lastEnd <= declaredEnd
+    }
+
+    /// 一行按三条规则归一化;nextStart 为 nil 时不套规则 3。
+    static func normalizeLine(_ line: LyricLineWords, nextStart: Int?, report: inout Report) -> LyricLineWords {
+        var words: [LyricWord] = []
+        words.reserveCapacity(line.words.count)
+        var previousStart: Int? = nil
+        var degrade: DegradeReason? = nil
+        for w in line.words {
+            var start = w.startMs
+            let end = w.startMs + max(0, w.durationMs)
+            if let previousStart, start < previousStart {
+                degrade = .wordStartDecreased
+                break
+            }
+            if start < line.timeMs {
+                if line.timeMs - start <= maxClampMs {
+                    start = line.timeMs
+                    report.clampedToLineStart += 1
+                } else {
+                    degrade = .wordBeforeLine
                     break
                 }
-                if start < line.timeMs {
-                    if line.timeMs - start <= maxClampMs {
-                        start = line.timeMs
-                        report.clampedToLineStart += 1
-                    } else {
-                        degrade = .wordBeforeLine
-                        break
-                    }
-                }
-                if let nextStart, start >= nextStart {
-                    if start - nextStart <= maxClampMs {
-                        start = max(line.timeMs, previousStart ?? line.timeMs, nextStart - tailWindowMs)
-                        report.clampedBeforeNextLine += 1
-                    } else {
-                        degrade = .wordAfterNextLine
-                        break
-                    }
-                }
-                words.append(LyricWord(startMs: start, durationMs: max(0, end - start), text: w.text))
-                previousStart = start
             }
-            if let degrade {
-                report.degradedLines[degrade, default: 0] += 1
-                out.append(degraded(line, nextStart: nextStart))
-            } else {
-                out.append(LyricLineWords(timeMs: line.timeMs, words: words))
+            if let nextStart, start >= nextStart {
+                if start - nextStart <= maxClampMs {
+                    start = max(line.timeMs, previousStart ?? line.timeMs, nextStart - tailWindowMs)
+                    report.clampedBeforeNextLine += 1
+                } else {
+                    degrade = .wordAfterNextLine
+                    break
+                }
             }
+            words.append(LyricWord(startMs: start, durationMs: max(0, end - start), text: w.text))
+            previousStart = start
         }
-        return (out, report)
+        if let degrade {
+            report.degradedLines[degrade, default: 0] += 1
+            return degraded(line, nextStart: nextStart)
+        }
+        return LyricLineWords(timeMs: line.timeMs, words: words, durationMs: line.durationMs)
     }
 
     static func degraded(_ line: LyricLineWords, nextStart: Int?) -> LyricLineWords {
@@ -120,7 +160,8 @@ public enum LyricTimelineNormalizer {
         let end = nextStart ?? originalEnd
         return LyricLineWords(
             timeMs: line.timeMs,
-            words: [LyricWord(startMs: line.timeMs, durationMs: max(0, end - line.timeMs), text: text)])
+            words: [LyricWord(startMs: line.timeMs, durationMs: max(0, end - line.timeMs), text: text)],
+            durationMs: line.durationMs)
     }
 
     /// 每次加载只记一行汇总,不逐行打——全库 2.8% 的行会被夹,逐行打就是噪音。
@@ -130,6 +171,6 @@ public enum LyricTimelineNormalizer {
             .map { "\($0.key.rawValue)=\($0.value)" }
             .sorted()
             .joined(separator: ",")
-        logger.notice("word timeline normalized track=\(track, privacy: .public) clamped_to_line_start=\(report.clampedToLineStart) clamped_before_next_line=\(report.clampedBeforeNextLine) degraded_lines=\(report.degradedLineCount) reasons=\(reasons, privacy: .public)")
+        logger.notice("word timeline normalized track=\(track, privacy: .public) clamped_to_line_start=\(report.clampedToLineStart) clamped_before_next_line=\(report.clampedBeforeNextLine) kept_declared_overlap=\(report.keptDeclaredOverlap) degraded_lines=\(report.degradedLineCount) reasons=\(reasons, privacy: .public)")
     }
 }

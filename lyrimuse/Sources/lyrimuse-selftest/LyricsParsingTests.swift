@@ -177,8 +177,8 @@ func runLyricsParsingTests() {
     expectEqual(
         YRCParser.parse("[1000,500](1000,500,0)la \r\n[2000,500](2000,500,0)la \r\n"),
         [
-            LyricLineWords(timeMs: 1000, words: [LyricWord(startMs: 1000, durationMs: 500, text: "la ")]),
-            LyricLineWords(timeMs: 2000, words: [LyricWord(startMs: 2000, durationMs: 500, text: "la ")]),
+            LyricLineWords(timeMs: 1000, words: [LyricWord(startMs: 1000, durationMs: 500, text: "la ")], durationMs: 500),
+            LyricLineWords(timeMs: 2000, words: [LyricWord(startMs: 2000, durationMs: 500, text: "la ")], durationMs: 500),
         ],
         "YRC: CRLF换行正确切成两条独立行,而非整份解析失败"
     )
@@ -268,6 +268,33 @@ func runLyricsParsingTests() {
         expectEqual(r9.lines[0].words[0].startMs, 1900, "时间轴归一化: 行比 W 短时拉回到行首为止")
 
         expectEqual(LyricTimelineNormalizer.normalize([]).lines, [], "时间轴归一化: 空输入")
+
+        // 行头声明的行长盖住了越过下一行的词(对唱重叠):照原样保留,单行展示面另用 singleLineForm 套规则 3。
+        func declared(_ t: Int, _ dur: Int, _ ws: [(Int, Int, String)]) -> LyricLineWords {
+            LyricLineWords(timeMs: t, words: ws.map { LyricWord(startMs: $0.0, durationMs: $0.1, text: $0.2) },
+                           durationMs: dur)
+        }
+        let duet = [declared(1000, 1600, [(1000, 300, "a"), (2400, 200, "b")]), declared(2000, 500, [(2000, 500, "c")])]
+        let rd = LyricTimelineNormalizer.normalize(duet)
+        expectEqual(rd.lines[0].words, duet[0].words, "时间轴归一化: 声明行长盖住的重叠词原样保留")
+        expectEqual(rd.keptOverlapLineTimes, [1000], "时间轴归一化: 记下保留重叠的行")
+        expectEqual(LyricTimelineNormalizer.singleLineForm(rd.lines[0], nextStart: 2000).words,
+                    [LyricWord(startMs: 1000, durationMs: 1000, text: "ab")],
+                    "时间轴归一化: 单行展示面拿规则 3 的退化形态")
+        expectEqual(rd.report.keptDeclaredOverlap, 1, "时间轴归一化: 保留重叠计数")
+        expectEqual(rd.report.degradedLineCount, 0, "时间轴归一化: 保留的行不算退化")
+        let nearDuet = [declared(1000, 1400, [(1000, 300, "a"), (2100, 300, "b")]), declared(2000, 500, [(2000, 500, "c")])]
+        let rn = LyricTimelineNormalizer.normalize(nearDuet)
+        expectEqual(rn.lines[0].words, nearDuet[0].words, "时间轴归一化: 越过 100ms 的重叠词也不拉回")
+        expectEqual(LyricTimelineNormalizer.singleLineForm(rn.lines[0], nextStart: 2000).words[1].startMs, 2000 - W,
+                    "时间轴归一化: 单行形态照旧拉回")
+        let overrun = [declared(1000, 1000, [(1000, 300, "a"), (2400, 200, "b")]), declared(2000, 500, [(2000, 500, "c")])]
+        let ro = LyricTimelineNormalizer.normalize(overrun)
+        expectEqual(ro.lines[0].words, [LyricWord(startMs: 1000, durationMs: 1000, text: "ab")],
+                    "时间轴归一化: 词超出声明行长的照旧退化")
+        expectEqual(ro.keptOverlapLineTimes.isEmpty, true, "时间轴归一化: 超出声明行长的不算保留重叠")
+        expectEqual(YRCParser.parse("[1000,1600](1000,300,0)a(2400,200,0)b\n").first?.durationMs, 1600,
+                    "YRC 解析: 保留行头声明的行长")
     }
 
     // ---- LyricsPreviewText ----

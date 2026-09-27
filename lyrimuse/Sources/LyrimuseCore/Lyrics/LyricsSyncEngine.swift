@@ -180,6 +180,11 @@ public final class LyricsSyncEngine {
     private var trLines: [LyricLine] = []
     /// 背景人声轨(collector `lyrics_bg`),每行的 timeMs 是它所属主句的行头,见 backgroundWords(forLineAt:)。
     private var bgLines: [LyricLineWords] = []
+    /// 行头声明的行长盖住了越过下一行的词、归一化照原样保留的那些行的行头时间(见 LyricTimelineNormalizer)。
+    /// 只有一行位置的展示面换行时对这些行再套一次规则 3(buildLine)。
+    private var keptOverlapLineTimes: Set<Int> = []
+    /// 跟 wordLines 逐下标对应:这一行跟下一行真重叠时唱到哪一刻,不重叠是 nil(见 overlapHoldEnds)。
+    private var overlapHoldEndMs: [Int?] = []
     /// 行级歌词里只有时间戳、没有文字的那些行的时间(升序,见 LRCParser.parseEndMarks)。逐字模式不用。
     private var baseEndMarks: [Int] = []
     private var usingWords = false
@@ -1506,6 +1511,7 @@ public final class LyricsSyncEngine {
         // 引擎不再替任何一个面做这个决定。
         let normalizedYRC = LyricTimelineNormalizer.normalize(YRCParser.parse(lyricsYRC))
         let yrc = normalizedYRC.lines
+        keptOverlapLineTimes = normalizedYRC.keptOverlapLineTimes
         LyricTimelineNormalizer.logSummary(normalizedYRC.report, track: trackTitle)
         // 过滤前先把整份的文本取出来判一次(结构化规则是整份粒度的,见
         // shouldApplyStructuralCreditFilter),不能像原来那样逐行独立 filter。
@@ -1607,6 +1613,7 @@ public final class LyricsSyncEngine {
         // 背景人声不过时间轴归一化:那一步把词夹回行的起止之内,而背景人声本来就常常唱到主句结束之后。
         // 署名行被删掉的那几行主句,它们的背景人声按行头挂不上任何一行,自然就不显示。
         bgLines = YRCParser.parse(lyricsBG)
+        overlapHoldEndMs = overlapHoldEnds()
         romaLines = LRCParser.parse(lyricsRoma).filter { !creditTimesMs.contains($0.timeMs) }.map {
             LyricLine(timeMs: $0.timeMs, text: LyricDuet.strippingKnownLabel($0.text, speakers: allSpeakers))
         }
@@ -2234,7 +2241,15 @@ public final class LyricsSyncEngine {
         if idx < 0 {
             line = nil
         } else if usingWords {
-            let ln = wordLines[idx]
+            let nextStart = idx + 1 < wordLines.count ? wordLines[idx + 1].timeMs : nil
+            // 这一行给只有一行位置的展示面(悬浮歌词 / 灵动岛 / 菜单栏)用,下一行开始就换走:跟下一行
+            // 重叠着唱的行照规则 3 压回去,跟归一化保留重叠之前一样。歌词窗口用 windowWords,不走这里。
+            let ln: LyricLineWords
+            if let nextStart, keptOverlapLineTimes.contains(wordLines[idx].timeMs) {
+                ln = LyricTimelineNormalizer.singleLineForm(wordLines[idx], nextStart: nextStart)
+            } else {
+                ln = wordLines[idx]
+            }
             // 末字的填色终点压到"换行前一点",理由见 KaraokeFill.tailClamped(实测约四成的行
             // 会出现"最后一点不走完就换行")。必须在 wordGroups 之前做 —— 逐词罗马音那一组
             // 的填色跟着同一份时长走。
@@ -2242,7 +2257,7 @@ public final class LyricsSyncEngine {
                 ln.words.map { w in
                     SyncedLyricWord(text: w.text, startMs: w.startMs, durationMs: w.durationMs)
                 },
-                nextLineStartMs: idx + 1 < wordLines.count ? wordLines[idx + 1].timeMs : nil)
+                nextLineStartMs: nextStart)
             // 整行文本只拼一次:romanizationText / wordGroups / plainText 三个消费方共用。
             let joined = words.map(\.text).joined()
             line = SyncedLyricLine(
@@ -2281,6 +2296,9 @@ public final class LyricsSyncEngine {
         /// 染色/加粗/虚化仍看 index,滚动看这个;非空档时刻两者相等。语义见
         /// scrollLeadIndex(activeIdx:posMs:)。
         public let scrollIndex: Int?
+        /// 跟当前行重叠着、还没唱完的前几行(升序),歌词窗口把它们跟当前行一起点亮。只收真重叠
+        /// (见 overlapHoldEndMs),时间轴误差造成的一点点越界不算。平时是空数组。
+        public let overlappingIndices: [Int]
         public let line: SyncedLyricLine?
         /// 单行展示面(灵动岛 / 菜单栏)该显示的那一行 —— 跟 line 的区别是**唱完就切走**:
         /// 本行唱完之后它指向下一句(提前量,给跟唱用),长间奏中段则是 nil。规则与两条
@@ -2380,6 +2398,7 @@ public final class LyricsSyncEngine {
         return TickResolution(
             index: idx >= 0 ? idx : nil,
             scrollIndex: scrollLeadIndex(activeIdx: idx, posMs: posMs),
+            overlappingIndices: overlappingIndices(activeIdx: idx, posMs: posMs),
             line: lineAt(idx),
             compactLine: compactLine,
             compactPlaceholder: compactPlaceholder,
@@ -2483,13 +2502,7 @@ public final class LyricsSyncEngine {
     public func allLines(idPrefix: String) -> [LyricsWindowLine] {
         if usingWords {
             return wordLines.enumerated().map { i, ln in
-                // 跟 activeLine 走同一份末字压缩 —— 歌词窗口和悬浮窗必须看到同一条时间轴,
-                // 否则同一句在两处填色进度不一样。
-                let words = KaraokeFill.tailClamped(
-                    ln.words.map { w in
-                        SyncedLyricWord(text: w.text, startMs: w.startMs, durationMs: w.durationMs)
-                    },
-                    nextLineStartMs: i + 1 < self.wordLines.count ? self.wordLines[i + 1].timeMs : nil)
+                let words = self.windowWords(at: i)
                 let joined = words.map(\.text).joined()
                 let line = SyncedLyricLine(
                     romanization: romanizationText(timeMs: ln.timeMs, plainText: joined),
@@ -2580,6 +2593,53 @@ public final class LyricsSyncEngine {
 
     /// 背景人声行头跟主句行头的最大差值。两者来自同一行的起点,逐字行完全相等;逐行 LRC 只有 10ms 精度。
     static let backgroundLineToleranceMs = 30
+
+    /// 主句末字越过下一行起点至少这么多才算真重叠。更小的越界多是各家给末字加的一截尾巴(中位约 300ms),
+    /// 按真重叠处理会平白多出一行同时高亮;那种由 KaraokeFill.tailClamped 压回去。
+    static let overlapMainMinMs = 500
+    /// 背景人声唱进下一句至少这么多就算真重叠:背景人声是人工逐字对过的,越界就是真在唱。
+    static let overlapBackgroundMinMs = 100
+
+    /// 每一行跟下一行真重叠时唱到哪一刻(主句末字与背景人声末字的较晚者),不重叠是 nil。真重叠 = 归一化
+    /// 按声明行长保留了越过下一行的词,或者主句末字越界 ≥ overlapMainMinMs,或者背景人声越界 ≥
+    /// overlapBackgroundMinMs。
+    private func overlapHoldEnds() -> [Int?] {
+        guard usingWords else { return [] }
+        return wordLines.indices.map { i -> Int? in
+            guard i + 1 < wordLines.count else { return nil }
+            let ln = wordLines[i]
+            let next = wordLines[i + 1].timeMs
+            let mainEnd = ln.words.map { $0.startMs + max(0, $0.durationMs) }.max() ?? ln.timeMs
+            let bgEnd = backgroundLine(forLineAt: ln.timeMs)?.words.last.map { $0.startMs + max(0, $0.durationMs) }
+            let intentional = keptOverlapLineTimes.contains(ln.timeMs)
+                || mainEnd - next >= Self.overlapMainMinMs
+                || (bgEnd.map { $0 - next >= Self.overlapBackgroundMinMs } ?? false)
+            return intentional ? max(mainEnd, bgEnd ?? mainEnd) : nil
+        }
+    }
+
+    /// 此刻还在跟当前行重叠着唱的前几行。只往前看三行:真实数据里重叠最多跨一两行。
+    private func overlappingIndices(activeIdx idx: Int, posMs: Int) -> [Int] {
+        guard usingWords, idx > 0 else { return [] }
+        return (max(0, idx - 3)..<idx).filter { j in
+            overlapHoldEndMs.indices.contains(j) && (overlapHoldEndMs[j].map { posMs < $0 } ?? false)
+        }
+    }
+
+    /// 歌词窗口那一版的逐字词:跟下一行真重叠的行保留真实时间(窗口里它跟下一行同时亮着,唱完为止),
+    /// 其余行跟单行展示面一样压末字(KaraokeFill.tailClamped)。
+    private func windowWords(at i: Int) -> [SyncedLyricWord] {
+        let ln = wordLines[i]
+        let words = ln.words.map { SyncedLyricWord(text: $0.text, startMs: $0.startMs, durationMs: $0.durationMs) }
+        if overlapHoldEndMs.indices.contains(i), overlapHoldEndMs[i] != nil { return words }
+        return KaraokeFill.tailClamped(words, nextLineStartMs: i + 1 < wordLines.count ? wordLines[i + 1].timeMs : nil)
+    }
+
+    /// 第 index 行在歌词窗口里的逐字词(allLines 用的同一份);没有逐字时是 nil。填色定格阈值要按它算。
+    public func windowLineWords(at index: Int) -> [SyncedLyricWord]? {
+        guard usingWords, wordLines.indices.contains(index) else { return nil }
+        return windowWords(at: index)
+    }
 
     /// 行头在 timeMs 这一句的背景人声行;没有是 nil。gapLineEndMs 每个 tick 都问,这里不分配。
     private func backgroundLine(forLineAt timeMs: Int) -> LyricLineWords? {

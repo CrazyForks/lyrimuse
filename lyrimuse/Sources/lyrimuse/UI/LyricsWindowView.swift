@@ -27,6 +27,8 @@ private final class WindowPlayback: ObservableObject {
     /// 滚动锚(AM 式"滚动先于染色"):滚动看它,染色/加粗/虚化仍看
     /// currentLineIndex。空档语义见 LyricsSyncEngine.scrollLeadIndex。
     @Published private(set) var scrollLineIndex: Int?
+    /// 跟当前行重叠着还在唱的前几行(对唱 / 背景人声唱进下一句),按当前行的样式点亮。见 07 章决策 65。
+    @Published private(set) var overlappingLineIndices: [Int] = []
     @Published private(set) var currentGapIndex: Int?
     @Published private(set) var allLines: [LyricsWindowLine] = []
     @Published private(set) var lyricsGapMarkers: [LyricsGapMarker] = []
@@ -116,6 +118,7 @@ private final class WindowPlayback: ObservableObject {
             p.$isPlayingSmoothed.removeDuplicates().sink { [weak self] in self?.isPlayingSmoothed = $0 },
             p.$currentLineIndex.removeDuplicates().sink { [weak self] in self?.currentLineIndex = $0 },
             p.$scrollLineIndex.removeDuplicates().sink { [weak self] in self?.scrollLineIndex = $0 },
+            p.$overlappingLineIndices.removeDuplicates().sink { [weak self] in self?.overlappingLineIndices = $0 },
             p.$currentGapIndex.removeDuplicates().sink { [weak self] in self?.currentGapIndex = $0 },
             p.$allLines.removeDuplicates().sink { [weak self] in self?.allLines = $0 },
             p.$lyricsGapMarkers.removeDuplicates().sink { [weak self] markers in
@@ -2664,7 +2667,8 @@ struct LyricsWindowView: View {
                             item: item,
                             distance: distance(for: index),
                             // 间奏进行中"当前"是那排「•••」,唱完的行不再保持活跃态。
-                            isActive: item.id == activeID && playback.currentGapIndex == nil,
+                            isActive: (item.id == activeID || playback.overlappingLineIndices.contains(index))
+                                && playback.currentGapIndex == nil,
                             isHovered: hoveredLineID == item.id,
                             // 这个值在 LyricsLineRow → KaraokeLineText → KaraokeWordText 一路只喂两处
                             // TimelineView 的 paused(粗时钟 / 细时钟),不参与任何画面判断,所以窗口面不可见
@@ -4042,8 +4046,10 @@ struct LyricsWindowView: View {
         // 清晰。钉在 currentLineIndex 上的话,页面先滚过去、下一句却还挂着 d=1 的暗度和模糊,
         // 开唱才"对焦",正好比 AM 慢一拍。染色(逐字填色)仍看 currentLineIndex/词时间轴,
         // 这里只管清晰度。
+        // 跟当前行重叠着还在唱的行跟当前行一样清晰。
         // 间奏进行中整体退一档(此刻的"当前"是那排「•••」),见 LyricsWindowDepth.distance。
-        LyricsWindowDepth.distance(index: index,
+        if playback.overlappingLineIndices.contains(index) { return 0 }
+        return LyricsWindowDepth.distance(index: index,
                                    anchorIndex: playback.scrollLineIndex ?? playback.currentLineIndex,
                                    inGap: playback.currentGapIndex != nil)
     }

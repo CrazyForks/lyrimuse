@@ -231,6 +231,40 @@ func runSyncEngineTests() {
         expectEqual(plain.tickQuery(atMs: 14600).scrollIndex, 1, "背景人声: 没有背景人声时照旧一唱完就滚")
     }
 
+    // ---- 两行同时在唱(对唱重叠):歌词窗口一起点亮,单行展示面照旧按下一行起点换行 ----
+    do {
+        // 第一句声明行长 2600,末字 3000 才开口,比第二句的起点 2000 晚 1 秒:真重叠(《于是》的形状)。
+        let engine = LyricsSyncEngine()
+        let yrc = "[1000,2600](1000,500,0)a1 (1500,500,0)a2 (3000,500,0)a3\n"
+            + "[2000,1500](2000,700,0)b1 (2700,800,0)b2\n"
+            + "[5000,1000](5000,1000,0)c\n"
+        engine.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc)
+        let lines = engine.allLines(idPrefix: "d")
+        expectEqual(lines[0].line.words?.map(\.startMs), [1000, 1500, 3000], "重叠: 歌词窗口保留越过下一行的词的真实时间")
+        expectEqual(engine.windowLineWords(at: 0)?.last?.durationMs, 500, "重叠: 窗口版末字不压")
+        expectEqual(engine.activeLine(atMs: 1500)?.words?.count, 1, "重叠: 单行展示面照旧退化成匀速扫过")
+        expectEqual(engine.tickQuery(atMs: 2500).index, 1, "重叠: 当前行按起点换到第二句")
+        expectEqual(engine.tickQuery(atMs: 2500).overlappingIndices, [0], "重叠: 第一句还没唱完,一起点亮")
+        expectEqual(engine.tickQuery(atMs: 3600).overlappingIndices, [], "重叠: 第一句唱完就熄")
+        expectEqual(engine.tickQuery(atMs: 1500).overlappingIndices, [], "重叠: 第一句自己是当前行时不算重叠")
+
+        // 各家给末字加的一截尾巴(越界 300ms、没有声明行长盖住):不算重叠,照旧压末字。
+        let tail = LyricsSyncEngine()
+        tail.load(lyrics: "", lyricsTr: "", lyricsRoma: "",
+                  lyricsYRC: "[1000,1000](1000,500,0)x (1500,800,0)y\n[2000,1000](2000,1000,0)z\n")
+        expectEqual(tail.tickQuery(atMs: 2100).overlappingIndices, [], "重叠: 300ms 的尾巴不算重叠")
+        expectEqual(tail.windowLineWords(at: 0).map { $0.last!.startMs + $0.last!.durationMs }.map { $0 <= 2000 }, true,
+                    "重叠: 尾巴照旧压到换行之前")
+
+        // 背景人声唱进下一句 ≥100ms:真重叠。
+        let bg = LyricsSyncEngine()
+        bg.load(lyrics: "", lyricsTr: "", lyricsRoma: "",
+                lyricsYRC: "[1000,900](1000,900,0)p\n[2000,1000](2000,1000,0)q\n",
+                lyricsBG: "[1000,900](1500,700,0)(oh)\n")
+        expectEqual(bg.tickQuery(atMs: 2100).overlappingIndices, [0], "重叠: 背景人声唱进下一句也一起点亮")
+        expectEqual(bg.tickQuery(atMs: 2250).overlappingIndices, [], "重叠: 背景人声唱完就熄")
+    }
+
     // ---- LyricsSyncEngine: 单曲歌词时间轴微调(offsetMs) ----
 
     do {

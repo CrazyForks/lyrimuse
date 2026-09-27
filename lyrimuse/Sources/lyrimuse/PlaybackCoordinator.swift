@@ -134,6 +134,8 @@ final class PlaybackCoordinator: ObservableObject {
     @Published private(set) var currentLineIndex: Int?
     // 歌词窗口滚动锚(AM 式"滚动先于染色"),见 LocalPlaybackSource 同名属性的注释。
     @Published private(set) var scrollLineIndex: Int?
+    // 歌词窗口里跟当前行重叠着还在唱的前几行,见 LocalPlaybackSource 同名属性的注释。
+    @Published private(set) var overlappingLineIndices: [Int] = []
     // 单行展示面(灵动岛/菜单栏)专用的三个值,见 LocalPlaybackSource 同名属性与 CompactLyricLead。
     @Published private(set) var compactLine: SyncedLyricLine?
     @Published private(set) var compactShowsPlaceholder: Bool = false
@@ -873,6 +875,7 @@ final class PlaybackCoordinator: ObservableObject {
             s.$currentAdSlot.assign(to: \.currentAdSlot, on: self),
             s.$currentLineIndex.assign(to: \.currentLineIndex, on: self),
             s.$scrollLineIndex.assign(to: \.scrollLineIndex, on: self),
+            s.$overlappingLineIndices.assign(to: \.overlappingLineIndices, on: self),
             s.$compactLine.assign(to: \.compactLine, on: self),
             s.$compactShowsPlaceholder.assign(to: \.compactShowsPlaceholder, on: self),
             s.$compactDwellMs.assign(to: \.compactDwellMs, on: self),
