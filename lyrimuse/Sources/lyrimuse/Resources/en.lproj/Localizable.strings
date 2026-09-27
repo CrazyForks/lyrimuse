@@ -474,6 +474,7 @@
 "在 Chrome 菜单栏依次打开「显示 → 开发者 → 允许 Apple 事件中的 JavaScript」。（Chrome 自己的帮助里把这个菜单写成「查看」，是它的文案错了，菜单栏上实际叫「显示」。）" = "In Chrome’s menu bar: View → Developer → Allow JavaScript from Apple Events.";
 "在 Dock 中显示" = "Show in Dock";
 "在 Edge 菜单栏依次打开「查看 → 开发人员 → 允许 Apple 事件中的 JavaScript」。" = "In Edge’s menu bar: View → Developer → Allow JavaScript from Apple Events.";
+"在 GitHub 提 issue" = "Request it on GitHub";
 "在 KKBOX 中显示" = "Show in KKBOX";
 "在 Last.fm 上喜欢" = "Love on Last.fm";
 "在 Last.fm 打开" = "Open on Last.fm";
@@ -712,6 +713,7 @@
 "悬浮歌词宽度" = "Overlay lyrics width";
 "悬浮淡化" = "Fade on hover";
 "想法与建议" = "Ideas & Suggestions";
+"想用的播放器不在这里？" = "Don't see your player?";
 "成立时间" = "Formed";
 "我已完成授权，继续" = "I've Authorized";
 "我的配色主题" = "My Themes";

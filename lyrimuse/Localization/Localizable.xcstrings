@@ -36393,6 +36393,52 @@
         }
       }
     },
+    "想用的播放器不在这里？" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't see your player?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想用的播放器不在这里？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "想用的播放器不在這裡？"
+          }
+        }
+      }
+    },
+    "在 GitHub 提 issue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request it on GitHub"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 GitHub 提 issue"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 GitHub 提 issue"
+          }
+        }
+      }
+    },
     "打不开这个文件夹：%@" : {
       "extractionState" : "manual",
       "localizations" : {

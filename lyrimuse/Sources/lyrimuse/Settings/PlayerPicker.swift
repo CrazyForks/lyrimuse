@@ -87,9 +87,23 @@ struct PlayerPicker<Trailing: View>: View {
                     }
                 }
             }
+            HStack(spacing: 4) {
+                Text(L10n.t("想用的播放器不在这里？"))
+                    .foregroundStyle(.secondary)
+                Link(L10n.t("在 GitHub 提 issue"), destination: Self.playerRequestURL)
+            }
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 330)
+    }
+
+    /// 「更多播放器」弹层底部那条链接:GitHub 新建 issue,标题先填好前缀。
+    static var playerRequestURL: URL {
+        var components = URLComponents(string: LegalNoticeLinks.repo + "/issues/new")!
+        components.queryItems = [URLQueryItem(name: "title", value: "Player request: ")]
+        return components.url!
     }
 
     /// 切换一个具体播放器。「最后一个不能取消」的判断在 `FeatureSettingsStore.togglePlayer`;
