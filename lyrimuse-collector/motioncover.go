@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -170,12 +171,18 @@ func motionCoverFor(collectionID int64) (motionCover, bool) {
 	}()
 
 	page, err := fetchAlbumPage(collectionID)
-	if err != nil {
+	var mc motionCover
+	switch {
+	case errors.Is(err, errAlbumPageUnavailable):
+		// 这张专辑没有取得到的页面:跟「查过了、没有动态封面」一样记下来,不再每首歌重抓一遍。
+		log.Printf("motion-cover: album %d has no fetchable page: %v", collectionID, err)
+	case err != nil:
 		// 请求失败**不写缓存**:跟"这张没有"是两件事,下次还该再试。
 		log.Printf("motion-cover: album %d fetch failed: %v", collectionID, err)
 		return motionCover{}, false
+	default:
+		mc, _ = parseMotionCover(page, key)
 	}
-	mc, _ := parseMotionCover(page, key)
 	mc.Checked = true
 
 	motionCoverMu.Lock()
@@ -649,9 +656,30 @@ func motionCoverWorthBackfill(e enrichEntry, title, album string) bool {
 	return mc.Master != ""
 }
 
+// errAlbumPageUnavailable:这张专辑没有取得到的页面 —— 404 / 410,或者重定向绕回已经访问过的地址(专辑名带某些
+// 特殊字符时,Apple 把带名字的地址重定向回它自己,跟多少次都一样)。是确定结论,不是网络失败。
+var errAlbumPageUnavailable = errors.New("album page unavailable")
+
+// motionCoverPageURL 是专辑页地址。单测换成假服务器。
+var motionCoverPageURL = func(collectionID int64) string {
+	return fmt.Sprintf("https://music.apple.com/%s/album/x/%d", motionCoverStorefront, collectionID)
+}
+
+// albumPageCheckRedirect:重定向到这次已经访问过的地址,或者跳满 10 次,都按 errAlbumPageUnavailable 停下。
+func albumPageCheckRedirect(req *http.Request, via []*http.Request) error {
+	for _, prev := range via {
+		if prev.URL.String() == req.URL.String() {
+			return errAlbumPageUnavailable
+		}
+	}
+	if len(via) >= 10 {
+		return errAlbumPageUnavailable
+	}
+	return nil
+}
+
 func fetchAlbumPage(collectionID int64) ([]byte, error) {
-	u := fmt.Sprintf("https://music.apple.com/%s/album/x/%d", motionCoverStorefront, collectionID)
-	req, err := http.NewRequest(http.MethodGet, u, nil)
+	req, err := http.NewRequest(http.MethodGet, motionCoverPageURL(collectionID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -659,11 +687,14 @@ func fetchAlbumPage(collectionID int64) ([]byte, error) {
 	// 桌面 Safari 的 UA,拿到的就是网页版真正渲染用的那份 serialized-server-data。
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "+
 		"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
-	resp, err := doHTTPTracked(&http.Client{Timeout: motionCoverTimeout}, req)
+	resp, err := doHTTPTracked(&http.Client{Timeout: motionCoverTimeout, CheckRedirect: albumPageCheckRedirect}, req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return nil, fmt.Errorf("http %d: %w", resp.StatusCode, errAlbumPageUnavailable)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}

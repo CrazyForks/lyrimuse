@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -525,5 +528,46 @@ func TestPickCollectionArtwork(t *testing.T) {
 	odd := []itunesCollectionResult{{WrapperType: "collection", CollectionID: 1, ArtworkURL100: "https://a/x.jpg"}}
 	if got := pickCollectionArtwork(odd, 1); got != "https://a/x.jpg" {
 		t.Errorf("尾部尺寸认不出来时该原样保留, got %q", got)
+	}
+}
+
+// 取不到页面的专辑(404,或重定向绕回自己)记成「查过了、没有」,不再每首歌重抓;普通失败(5xx)不记,下次再试。
+func TestMotionCoverUnfetchablePageIsCached(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/1":
+			http.Redirect(w, r, "/1", http.StatusMovedPermanently)
+		case "/2":
+			http.NotFound(w, r)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	oldURL, oldPath := motionCoverPageURL, motionCoverPath
+	motionCoverPageURL = func(id int64) string { return fmt.Sprintf("%s/%d", srv.URL, id) }
+	motionCoverMu.Lock()
+	motionCoverPath = ""
+	for _, k := range []string{"1", "2", "3"} {
+		delete(motionCoverCache, k)
+	}
+	motionCoverMu.Unlock()
+	t.Cleanup(func() {
+		motionCoverPageURL = oldURL
+		motionCoverMu.Lock()
+		motionCoverPath = oldPath
+		for _, k := range []string{"1", "2", "3"} {
+			delete(motionCoverCache, k)
+		}
+		motionCoverMu.Unlock()
+	})
+	for _, id := range []int64{1, 2} {
+		mc, done := motionCoverFor(id)
+		if !done || mc.Master != "" || !mc.Checked {
+			t.Errorf("album %d: done=%v mc=%+v,want 有定论且没有动态封面", id, done, mc)
+		}
+	}
+	if _, done := motionCoverFor(3); done {
+		t.Error("album 3: 5xx 是暂时失败,不该有定论")
 	}
 }
