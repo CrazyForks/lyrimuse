@@ -113,19 +113,32 @@ func TestRequestEnrichSaveThrottle(t *testing.T) {
 		t.Fatalf("flush must cancel the pending trailing save: %d → %d", before, n)
 	}
 
-	// 正在播的这首:间隔内也当场写;别的歌仍然节流。
+	// 正在播的这首:单条快照当场写(App 读它出词),整份落盘跟别的歌一样节流。
+	savedPath, savedCache := enrichPath, enrichCache
+	t.Cleanup(func() { enrichPath, enrichCache = savedPath, savedCache })
+	enrichPath = filepath.Join(t.TempDir(), "lyrimuse-enrich-cache.json")
+	enrichMu.Lock()
+	enrichCache = map[string]enrichEntry{"a|now|b": {Lyrics: "[00:01.00]hi"}}
+	enrichMu.Unlock()
 	noteEnrichPlayingKey("a|now|b")
+	requestEnrichSave() // 刚写过:接下来都在间隔内
 	before = saves.Load()
 	commitEnrichSave("x|prefetch|y")
-	commitEnrichSave("x|prefetch|y")
 	commitEnrichSave("a|now|b")
-	if n := saves.Load(); n != before+1 && n != before+2 {
-		t.Fatalf("playing key must save immediately: %d → %d", before, n)
+	commitEnrichSave("a|now|b")
+	if n := saves.Load(); n != before {
+		t.Fatalf("playing key must go through the throttle too: %d → %d", before, n)
 	}
-	after := saves.Load()
+	if _, err := os.Stat(playingEntryPath()); err != nil {
+		t.Fatalf("playing entry must be written at once: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for saves.Load() == before && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	time.Sleep(150 * time.Millisecond)
-	if n := saves.Load(); n != after {
-		t.Fatalf("immediate save must cancel the pending trailing save: %d → %d", after, n)
+	if n := saves.Load(); n != before+1 {
+		t.Fatalf("three commits within the interval must coalesce into one trailing save: %d → %d", before, n)
 	}
 }
 

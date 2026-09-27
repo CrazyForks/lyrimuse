@@ -40,8 +40,8 @@ import (
 // 就当场写;间隔内再来的请求只排一次到点补写,期间再多的请求都合进这一次。后续更新(晚到的译文、
 // 换上来的更好的歌词)最多晚 2 秒,落在 App 轮询的粒度之内。
 //
-// 例外:`commitEnrichEntry` 提交的若是**正在播的这首**,当场写(`commitEnrichSave`),并且在整份写盘
-// 之前先写一份这一首的单条快照(`writePlayingEntry`)。
+// 例外:`commitEnrichEntry` 提交的若是**正在播的这首**,当场写一份这一首的单条快照(`writePlayingEntry`),
+// App 读它出词;整份落盘跟别的歌一样走节流。
 //
 // 只在常驻进程里节流(`enableEnrichSaveThrottle`,main 在进 run 之前打开):命令行子命令存完就退出,
 // 排上的补写会随进程一起丢;测试也要同步写才能读回。默认关着 = 跟原来一样当场写。
@@ -109,17 +109,22 @@ func noteEnrichPlayingKey(key string) {
 	enrichPlayingKey.Store(&key)
 }
 
-// commitEnrichSave 是 `commitEnrichEntry` 的落盘入口:**正在播的这首**当场写(那一刻就是歌词出现在
-// 界面上的时刻 —— App 读的是这个文件,见 09 章决策 78「首次出词提速」;前 2 秒内刚写过盘,比如上一首
-// 的收尾或预解析刚落盘,也不能让它等),预解析别的歌走节流。当场写也顺手取消排着的补写:这次快照
-// 已经把它们带上了。整份写盘要好几秒,所以先写这一首的单条快照(playingentry.go),App 读它先出词。
+// commitEnrichSave 是 `commitEnrichEntry` 的落盘入口。**正在播的这首**当场写单条快照(playingentry.go):
+// 那一刻就是歌词出现在界面上的时刻,App 查当前这首先看它,不等整份缓存。整份落盘一律走
+// requestEnrichSave 的节流 —— 一首新歌现场解析会连着提交三次(首轮先上屏、选定歌词、带外围字段的
+// 最终结果),每次都当场整份写要写三遍、App 跟着整份重解三遍。见 09 章决策 108。
 func commitEnrichSave(key string) {
+	commitEnrichSaveTimed(key, nil)
+}
+
+// commitEnrichSaveTimed 同 commitEnrichSave,顺带给 commitEnrichEntrySince 的分段计时记两段。
+func commitEnrichSaveTimed(key string, timer *stepTimer) {
 	if cur := enrichPlayingKey.Load(); cur != nil && *cur == key {
 		writePlayingEntry(key)
-		flushEnrichSave()
-		return
+		timer.mark("playing_entry")
 	}
 	requestEnrichSave()
+	timer.mark("save")
 }
 
 // flushEnrichSave 取消排着的补写并当场保存一次(没有脏数据时 saveEnrichCache 自己会直接返回)。

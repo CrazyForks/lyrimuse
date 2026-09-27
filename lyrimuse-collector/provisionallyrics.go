@@ -41,11 +41,8 @@ func notifyProvisionalLyrics(ctx context.Context, ne neteaseInfo, results []scor
 	h.fn(ne, results)
 }
 
-// lyricsEntryFromScored 按一轮检索结果拼出条目里歌词那部分:网易云封面与链接、各源到场情况、决策存档、
-// 选中的歌词。首次解析的最终结果和首轮先上屏的那一份都走这里,两份字段口径一致。选不出歌词时 picked 为 nil,
-// 纯音乐 / 纯文本兜底由调用方处理。
-func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSecs float64, ne neteaseInfo,
-	scored []scoredLyricCandidateResult, skipped []string, queries []lyricQueryRecord) (enrichEntry, *scoredLyricCandidateResult) {
+// neteasePeripheralFields 网易云这一趟带回的外围字段(封面、单曲链接)和曲长。
+func neteasePeripheralFields(ne neteaseInfo, durationSecs float64) enrichEntry {
 	var e enrichEntry
 	e.CoverURL = ne.Cover
 	if e.CoverURL != "" {
@@ -54,6 +51,15 @@ func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSe
 	}
 	e.NeteaseURL = ne.SongURL
 	e.DurationSecs = durationSecs
+	return e
+}
+
+// lyricsEntryFromScored 按一轮检索结果拼出条目里歌词那部分:网易云封面与链接、各源到场情况、决策存档、
+// 选中的歌词。首次解析的最终结果和首轮先上屏的那一份都走这里,两份字段口径一致。选不出歌词时 picked 为 nil,
+// 纯音乐 / 纯文本兜底由调用方处理。
+func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSecs float64, ne neteaseInfo,
+	scored []scoredLyricCandidateResult, skipped []string, queries []lyricQueryRecord) (enrichEntry, *scoredLyricCandidateResult) {
+	e := neteasePeripheralFields(ne, durationSecs)
 	// 不管选没选中,都记下这一轮到底有哪些源真的给出了可用候选 —— needsLyricsRetry
 	// 靠"有启用的源这轮没露面"来判断这次结果是不是在信息不全的情况下做的决定。
 	e.LyricsSourcesSeen = lyricSourcesWithCandidates(scored)
@@ -77,7 +83,8 @@ func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSe
 	e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
 	e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 	e.dropHokkienRoma()
-	e.maybeGenerateRoma()
+	// 这里只做粤拼(纯查表)。helper 那一步要起子进程,排在出词之后由 resolveTrackEnrichment 补。
+	e.maybeGenerateJyutpingRoma()
 	// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
 	// 来源(否则上一轮机翻留下的 "machine" 会让新来的社区译文被标成机翻)。
 	e.LyricsTrLang, e.LyricsTrSource = picked.LyricsTrLang, ""

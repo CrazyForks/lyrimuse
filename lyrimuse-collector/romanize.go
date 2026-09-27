@@ -85,6 +85,9 @@ func onDeviceRomanize(lyrics string) (string, error) {
 	return res.Roma, nil
 }
 
+// onDeviceRomanizer 是 maybeGenerateHelperRoma 实际调用的 helper;测试换成计数的假实现。
+var onDeviceRomanizer = onDeviceRomanize
+
 // maybeGenerateHelperRoma:这一轮没有任何源给出罗马音、粤拼也没接手时,交给 helper 生成
 // 一份(日文/韩文/中文)。
 //
@@ -101,7 +104,7 @@ func (e *enrichEntry) maybeGenerateHelperRoma() {
 	if !e.shouldGenerateHelperRoma() {
 		return
 	}
-	roma, err := onDeviceRomanize(e.Lyrics)
+	roma, err := onDeviceRomanizer(e.Lyrics)
 	if err != nil || roma == "" {
 		return
 	}

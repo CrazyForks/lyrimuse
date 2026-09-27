@@ -2021,7 +2021,10 @@ func commitEnrichEntry(key string, e enrichEntry) {
 // (保存、采纳、删除、清空……),这一轮的结果作废、不落盘。取消这一轮的正是那次改动
 // (cancelInFlightEnrichLocked),而取消分支本身也会落盘,不核对就会把删掉的条目写回、把刚存的歌词换掉。
 func commitEnrichEntrySince(key string, e enrichEntry, stamp uint64) {
+	timer := newStepTimer()
+	defer timer.logIfSlow("commit for "+key, slowCommitThreshold)
 	enrichMu.Lock()
+	timer.mark("lock")
 	// 被撤回的身份(播放中途被纠正顶掉)不再落盘,见 enrichretract.go。
 	if enrichKeyRetractedLocked(key) {
 		enrichMu.Unlock()
@@ -2040,6 +2043,7 @@ func commitEnrichEntrySince(key string, e enrichEntry, stamp uint64) {
 	enrichCache[key] = e
 	enrichDirty = true
 	enrichMu.Unlock()
+	timer.mark("cross_album")
 	// 非阻塞通知 poll 立刻重推(带上刚解析好的封面/歌词);没人在听就跳过。排在落盘之前:
 	// poll 读的是内存里的 enrichCache,不必等写盘。App 读的是磁盘文件,由下面的落盘负责。
 	if enrichNotify != nil {
@@ -2048,8 +2052,9 @@ func commitEnrichEntrySince(key string, e enrichEntry, stamp uint64) {
 		default:
 		}
 	}
-	commitEnrichSave(key)
+	commitEnrichSaveTimed(key, timer)
 	exportLyricsFilesFor(key) // 歌词为空的条目导出时自己会跳过,取消场景常见的空歌词记录不会被误导出成文件
+	timer.mark("export")
 }
 
 // applyDeviceCoverUpgrade 把设备直送的封面(已经过质量检查、已经落盘,见
@@ -2242,6 +2247,7 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	// 开跑时的改动序号:这一轮顺带收下歌词之前要核对这期间没人改过这条(见 adoptBackfilledLyrics)。
 	enrichMu.Lock()
 	stamp := enrichEditStampLocked()
+	skipLyrics := peripheralBackfillSkipsLyrics(enrichCache[key])
 	enrichMu.Unlock()
 	defer func() {
 		enrichMu.Lock()
@@ -2251,6 +2257,9 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	// 没有对应的"停止"入口——这条路径补的是**已存在**条目的外围字段(不是首次搜索的
 	// 占位行),没有可以取消它的 UI,context.Background() 就够。
 	ctx := context.Background()
+	if skipLyrics {
+		ctx = withPeripheralOnly(ctx)
+	}
 	// deviceCoverURL 传空串,理由见 resolveTrackEnrichment 参数注释:补的是已存在条目的
 	// 外围字段,补的这一刻播的多半已经是别的歌,不能假装这是"正在播的这首"。设备封面的
 	// 升级另有专门路径(applyDeviceCoverUpgrade),不走这里。
@@ -2426,11 +2435,23 @@ func resolveTrackEnrichment(ctx context.Context, artist, title, album string, du
 	// 首轮先上屏(见 provisionallyrics.go):首轮挑得出歌词、还要接着跑补查轮时,先把首轮的结果提交一份。
 	if onLyrics != nil {
 		roundCtx = withProvisionalLyrics(roundCtx, func(ne neteaseInfo, scored []scoredLyricCandidateResult) {
+			timer := newStepTimer()
 			if p, picked := lyricsEntryFromScored(decisionPath, artist, title, album, durationSecs, ne, scored,
 				round.skippedSources(), queries.queries()); picked != nil {
+				timer.mark("build")
 				onLyrics(p)
+				timer.mark("commit")
+				timer.logIfSlow("provisional lyrics for "+artist+" - "+title, slowCommitThreshold)
 			}
 		})
+	}
+	if peripheralOnly(ctx) {
+		// 周边补全、条目已有歌词:只单查网易云拿封面和链接,见 peripheralonly.go。
+		if lyricSourceEnabled("netease") {
+			ne = neteaseLookup(ctx, artist, title, album, durationSecs)
+		}
+		e = neteasePeripheralFields(ne, durationSecs)
+		return finishTrackEnrichment(ctx, e, nil, artist, title, album, durationSecs, deviceCoverURL)
 	}
 	ne, scored = scoredLyricCandidates(roundCtx, artist, title, album, durationSecs)
 	// 封面/主色/平台跳转链接是基础展示信息,不做成可关闭的开关,以下逻辑无条件执行——
@@ -2464,8 +2485,21 @@ func resolveTrackEnrichment(ctx context.Context, artist, title, album string, du
 	// 这一串是串行的联网请求,都不影响歌词本身(挑选只看 scored)。没拿到歌词时不提前提交,
 	// 交给调用方原有的「全空不写入」守卫判断。
 	if onLyrics != nil && e.Lyrics != "" {
+		timer := newStepTimer()
 		onLyrics(e)
+		timer.mark("commit")
+		timer.logIfSlow("early lyrics for "+artist+" - "+title, slowCommitThreshold)
 	}
+	// 读音在出词之后才补:日 / 韩 / 中要起 lyrics-romanize 子进程(中文一首实测 0.7~1.1 秒),App 播放时
+	// 本来就用同一个函数现算兜底,出词那一刻不需要预生成的这份。lyricsEntryFromScored 只做了粤拼。
+	e.maybeGenerateRoma()
+	return finishTrackEnrichment(ctx, e, scored, artist, title, album, durationSecs, deviceCoverURL)
+}
+
+// finishTrackEnrichment 是 resolveTrackEnrichment 选完歌词之后的外围字段那一段(规范歌手名、封面级联、
+// 主色、各平台链接、动态封面)。scored 只用来给封面专辑回填提供旁证,周边补全只查网易云时传 nil。
+func finishTrackEnrichment(ctx context.Context, e enrichEntry, scored []scoredLyricCandidateResult,
+	artist, title, album string, durationSecs float64, deviceCoverURL string) enrichEntry {
 	// canonical_artist 解析链路,依次尝试、命中就用。**两级都按「歌手本身」查,不按
 	// 「这一首曲目」匹配**:
 	// ①MusicBrainz(按歌手整体查、按歌手整体缓存,见 musicbrainz.go 顶部注释 —— 按歌手整体查
