@@ -54,9 +54,10 @@ public enum OpenCCT2S {
     /// 词组表条目(selftest 对账用)。
     public static var phraseEntries: [[Unicode.Scalar]: [Unicode.Scalar]] { tables.phrases }
 
+    /// collector 的 toSimplified 的 Swift 版:先转 NFC 再繁转简(Go 侧 toSimplified 同一顺序,见 nfc.go)。
     public static func toSimplified(_ s: String) -> String {
         let t = tables
-        let scalars = Array(s.unicodeScalars)
+        let scalars = Array(s.precomposedStringWithCanonicalMapping.unicodeScalars)
         var out = String.UnicodeScalarView()
         var i = 0
         while i < scalars.count {

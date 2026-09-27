@@ -605,8 +605,9 @@ func cleanMediaTag(s string) string {
 		}
 		return r
 	}, s)
-	// Fields 按空白切分并丢掉空片段,Join 回去等于"连续空白折成一个 + 去掉首尾"。
-	return strings.Join(strings.Fields(s), " ")
+	// Fields 按空白切分并丢掉空片段,Join 回去等于"连续空白折成一个 + 去掉首尾"。最后转 NFC:
+	// 播放器偶尔报分解形式(见 nfc.go),不转的话同一首歌会算出两个 key。Swift 侧 cleanTag 同一顺序。
+	return composeNFC(strings.Join(strings.Fields(s), " "))
 }
 
 type mediaControlRawState struct {

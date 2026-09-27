@@ -15,10 +15,10 @@ func TestKeyParityVectors(t *testing.T) {
 		"不瞭解|一目瞭然|乾杯":       "不了解|一目了然|干杯",
 		"İSTANBUL|ΣΟΦΙΑΣ|X": "istanbul|σοφιασ|x",
 		"A/B、C|T|X":         "a&b&c|t|x",
-		"A\uff0cB|T|X":      "a&b|t|x",     // 全角逗号也是分隔符
-		"妳|祂|牠":             "你|他|它",       // OpenCC 表里没有,走异体字表兜底
-		"藉藉无名|X|Y":          "藉藉无名|x|y",    // 词组取最长:「藉藉」单独也是词组,先命中它会变成「借借」
-		"上\uf99b|X|Y":       "上\uf99b|x|y", // 兼容表意字符与「鍊」规范等价,但按字节不等,不命中「上鍊」
+		"A\uff0cB|T|X":      "a&b|t|x",  // 全角逗号也是分隔符
+		"妳|祂|牠":             "你|他|它",    // OpenCC 表里没有,走异体字表兜底
+		"藉藉无名|X|Y":          "藉藉无名|x|y", // 词组取最长:「藉藉」单独也是词组,先命中它会变成「借借」
+		"上\uf99b|X|Y":       "上链|x|y",   // 兼容表意字符先经 NFC 转成规范的「鍊」,再繁转简
 	}
 	for in, want := range loose {
 		if got := loosenEnrichKey(in); got != want {
@@ -31,6 +31,7 @@ func TestKeyParityVectors(t *testing.T) {
 		"A\u2009B":         "A B",
 		"\u3000X\u2028":    "X",
 		" A\u00a0\u00a0B ": "A B",
+		"Sa\u0304n-Z":      "S\u0101n-Z", // 分解形式转 NFC
 	}
 	for in, want := range clean {
 		if got := cleanMediaTag(in); got != want {
@@ -43,7 +44,7 @@ func TestKeyParityVectors(t *testing.T) {
 		"歌 (Live)":        "歌 (Live)",
 		"歌（译名）[Explicit]": "歌",
 		"(Interlude)":     "(Interlude)",
-		"歌 (Live\u0301)":  "歌 (Live\u0301)", // 版本词按字节找,后面跟组合符也算
+		"歌 (Live\u0301)":  "歌", // 先转 NFC:e + 组合重音成了 é,「Livé」不是版本词 live,当译名括号剥掉
 	}
 	for in, want := range title {
 		if got := normEnrichTitle(in); got != want {

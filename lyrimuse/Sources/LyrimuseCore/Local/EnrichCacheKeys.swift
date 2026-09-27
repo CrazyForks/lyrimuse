@@ -44,7 +44,8 @@ public enum EnrichCacheKeys {
     // 两侧必须逐字节一致,lyrimuse-selftest 与 docs 08 章「宽松匹配兜底」那条有对拍方法。
 
     /// collector 的 cleanMediaTag 的 Swift 版:各种不换行/全角空格折成普通空格,零宽字符
-    /// 删掉,连续空白(Go `unicode.IsSpace` 口径)折成一个并去掉首尾。
+    /// 删掉,连续空白(Go `unicode.IsSpace` 口径)折成一个并去掉首尾,最后转 NFC(顺序跟 Go 一致,
+    /// Go 侧的 NFC 数据表由 scripts/gen-nfc-table.swift 从 Foundation 导出)。
     public static func cleanTag(_ s: String) -> String {
         var out = String.UnicodeScalarView()
         var pendingSpace = false
@@ -63,7 +64,7 @@ public enum EnrichCacheKeys {
             }
             out.append(u)
         }
-        return String(out)
+        return String(out).precomposedStringWithCanonicalMapping
     }
 
     /// 反复剥掉歌名结尾的译名括号,碰到版本标记就停手;剥到空串则整个放弃(有些曲目的歌名

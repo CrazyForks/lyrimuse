@@ -325,7 +325,7 @@ func runCacheKeyTests() {
             ("A\u{ff0c}B|T|X", "a&b|t|x"),       // 全角逗号也是分隔符
             ("妳|祂|牠", "你|他|它"),              // OpenCC 表里没有,走异体字表兜底
             ("藉藉无名|X|Y", "藉藉无名|x|y"),      // 词组取最长:先命中「藉藉」会变成「借借」
-            ("上\u{f99b}|X|Y", "上\u{f99b}|x|y"), // 兼容表意字符与「鍊」规范等价但按字节不等,不命中「上鍊」
+            ("上\u{f99b}|X|Y", "上链|x|y"), // 兼容表意字符先经 NFC 转成规范的「鍊」,再繁转简
         ]
         for (input, want) in parityLoose {
             expectEqual(Array(K.looseKey(input).unicodeScalars), Array(want.unicodeScalars), "跨语言对拍 looseKey: \(input)")
@@ -336,6 +336,7 @@ func runCacheKeyTests() {
             ("A\u{2009}B", "A B"),
             ("\u{3000}X\u{2028}", "X"),
             (" A\u{00a0}\u{00a0}B ", "A B"),
+            ("Sa\u{0304}n-Z", "S\u{0101}n-Z"), // 分解形式转 NFC
         ]
         for (input, want) in parityClean {
             expectEqual(Array(K.cleanTag(input).unicodeScalars), Array(want.unicodeScalars), "跨语言对拍 cleanTag: \(input.unicodeScalars.map { String($0.value, radix: 16) })")
@@ -346,7 +347,7 @@ func runCacheKeyTests() {
             ("歌 (Live)", "歌 (Live)"),
             ("歌（译名）[Explicit]", "歌"),
             ("(Interlude)", "(Interlude)"),
-            ("歌 (Live\u{0301})", "歌 (Live\u{0301})"), // 版本词按字节找,后面跟组合符也算
+            ("歌 (Live\u{0301})", "歌"), // 先转 NFC:e + 组合重音成了 é,「Livé」不是版本词 live,当译名括号剥掉
         ]
         for (input, want) in parityTitle {
             expectEqual(Array(K.normalizedTitle(input).unicodeScalars), Array(want.unicodeScalars), "跨语言对拍 normalizedTitle: \(input)")

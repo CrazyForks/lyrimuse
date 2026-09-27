@@ -1840,8 +1840,10 @@ func isNeteaseImpersonatorRidden(artist string) bool {
 // 五个源全部搜不到候选。实现细节(词典解析/最长前缀匹配算法)见 t2s.go 顶部注释——那里
 // 曾经是通过 github.com/liuzl/gocc 引入的,因为它间接依赖的 cedar-go 是 GPL-2.0-only、
 // 跟本项目 GPLv3 许可证不兼容,换成了自带同一份 OpenCC 词典数据的零依赖实现。
+//
+// 先转 NFC:搜索词和比对都从这里进,分解形式的标签(见 nfc.go)不转就一条候选都对不上。
 func toSimplified(s string) string {
-	return toSimplifiedT2S(s)
+	return toSimplifiedT2S(composeNFC(s))
 }
 
 // albumStop are filler words ignored when comparing album names by shared tokens.
