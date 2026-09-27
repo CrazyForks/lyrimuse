@@ -226,8 +226,8 @@ public enum SettingsSearchCatalog {
 
         // ---- 歌词显示 › 悬浮歌词 ----
         surface(.overlay, "桌面悬浮歌词", kw: ["开关", "悬浮窗", "总开关"], inDrawer: false),
-        surface(.overlay, "配色主题", kw: ["预设", "经典白字", "白字描边", "经典黑字", "黑字描边", "深色卡片", "浅色卡片"], group: "主题"),
-        surface(.overlay, "我的配色主题", kw: ["自存", "保存主题"], group: "主题"),
+        surface(.overlay, "配色主题", kw: ["预设", "默认", "墨字白边", "卡拉OK", "夜幕卡片", "磨砂玻璃", "纸白卡片", "霓虹"], group: "主题"),
+        surface(.overlay, "我的配色主题", kw: ["自存", "保存主题", "改名", "覆盖"], group: "主题"),
         surface(.overlay, "字体", kw: ["字体族", "font"], group: "文字"),
         surface(.overlay, "粗细", kw: ["字重", "weight"], group: "文字"),
         surface(.overlay, "字号", kw: ["大小", "font size"], group: "文字"),

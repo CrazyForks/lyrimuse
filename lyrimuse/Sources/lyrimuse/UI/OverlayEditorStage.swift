@@ -105,12 +105,13 @@ struct OverlayEditorStage: View {
     /// 而偏低的直接后果是卡片底部被裁掉一截。
     @State private var overlayContentHeight: CGFloat = 0
 
-    /// 当前开着哪个浮层(nil = 都没开)。
-    ///
-    /// 用一个可空枚举而不是两个 Bool,是为了让"同时只能开一个"成为**类型上**的事实:
-    /// 一个浮层还开着的时候点开另一个,SwiftUI 会把两个 NSPopover 都摆出来,它们互相
-    /// 遮挡、而且各自的 transient 关闭时机会打架。
+    /// 当前开着哪个浮层(nil = 都没开)。可空枚举让"同时只开一个"成为类型上的事实:两个 NSPopover
+    /// 同时摆出来会互相遮挡,各自的 transient 关闭时机还会打架。
     @State private var popover: StagePopover?
+
+    /// 浮层高度上限 = 点开那一刻舞台上沿到屏幕顶的距离(见 stagePopoverAnchors)。
+    @State private var popoverMaxHeight: CGFloat = SettingsPopoverMetrics.defaultMaxHeight
+    @State private var stageTopProbe = StageTopProbe()
 
     /// 用户此刻正按着宽度调整条(Slider 的 onEditingChanged)。
     ///
@@ -497,7 +498,7 @@ struct OverlayEditorStage: View {
     /// 悬浮淡化 / 悬停控制条)+ `AutoHideItem` 两项(截屏隐藏 / 暂停隐藏,从撤掉的
     /// 独立「自动隐藏」卡并进「行为」的)。项数跟着 `allCases` 走,这里不写死。
     ///
-    /// **两个来源必须都算,而且要跟 `OverlayBehaviorPopover` /
+    /// **两个来源必须都算,而且要跟「行为」浮层 /
     /// `OverlayAllSettingsDrawer.behaviorGroup`(两处调同一份 `OverlayBehaviorSettingsRows`)
     /// 的内容一致**:少算自动隐藏那两项不会编译报错,
     /// 只会让这颗按钮在它们开着时照旧显示「全部关闭」—— 一个会撒谎的派生值。灵动岛那边
@@ -525,36 +526,67 @@ struct OverlayEditorStage: View {
         icon: String, title: String, summary: String, target: StagePopover
     ) -> some View {
         Button {
+            popoverMaxHeight = stageTopProbe.popoverHeightLimit()
             popover = target
         } label: {
             EditorToolbarButtonLabel(icon: icon, title: title, summary: summary)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .popover(isPresented: popoverBinding(target), arrowEdge: .bottom) {
-            popoverContent(for: target)
-        }
     }
 
     // MARK: - 浮层
 
-    /// 当前该开哪个浮层(nil = 都没开)。
+    /// 六个浮层都从**舞台上沿往上**弹,盖住的是工具栏和页面标题,不碰预览(04 章决策 34)。
     ///
-    /// (第十步之前每个 case 还带一个 `Anchor`:同一个浮层有工具栏按钮和画布命中区两个入口,
-    ///  而 SwiftUI 的 `.popover` 绑在具体视图上、没法"一份状态、按需换锚点",只能两个入口各挂
-    ///  一份修饰符,再用 Anchor 把"该开哪一份"编进同一个可空状态里。入口只剩工具栏之后 Anchor
-    ///  跟着没了,但"一个可空枚举而不是几个 Bool"这条没变 —— 两个 NSPopover 同时摆出来会互相
-    ///  遮挡、transient 关闭时机还打架。)
-    private enum StagePopover: Equatable {
-        /// `.color` 拆成了 `.theme` + `.background`(把「配色」按内容分开)。
+    /// 挂在按钮上往下弹会正好压在舞台上;NSPopover 在首选方向放不下时会自己翻到对面,所以高度必须
+    /// 封顶在"舞台上沿到屏幕可用区顶"这段距离里(`StageTopProbe`,点开那一刻现量),内容更高就在浮层里
+    /// 滚动,而不是让系统翻下来盖住预览。每个浮层各挂一个 1×1 的透明锚点(叠在同一处),保留"各自一份
+    /// isPresented"的关闭语义 —— 同一个视图上叠多个 `.popover` 修饰符不可靠。
+    private var stagePopoverAnchors: some View {
+        ZStack {
+            ForEach(StagePopover.allCases, id: \.self) { target in
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .popover(isPresented: popoverBinding(target), arrowEdge: .top) {
+                        SettingsPopoverShell(title: target.title, width: target.width, maxHeight: popoverMaxHeight) {
+                            popoverRows(for: target)
+                        }
+                    }
+            }
+        }
+        .background(StageTopProbeView(probe: stageTopProbe))
+    }
+
+    private enum StagePopover: Hashable, CaseIterable {
         case theme
         case text
         case background
         case layout
-        /// 加,跟 `.layout` 一起挂在工具栏第二行。见 `toolbarRow2`。
         case behavior
-        /// 加,第二行第三颗。见 `toolbarRow2`。
         case placement
+
+        var title: String {
+            switch self {
+            case .theme: return L10n.t("主题")
+            case .text: return L10n.t("文字")
+            case .background: return L10n.t("背景")
+            case .layout: return L10n.t("排版")
+            case .behavior: return L10n.t("行为")
+            case .placement: return L10n.t("位置")
+            }
+        }
+
+        /// 各浮层按自己内容的自然宽度取值。「主题」720:7 张预览卡排成一行,浮层更矮,更容易放进舞台上方;
+        /// 「排版」460:对齐方式那组分段选择器要的宽度;「文字」380:滑杆和取色盘;其余 420。
+        var width: CGFloat {
+            switch self {
+            case .theme: return 720
+            case .text: return 380
+            case .layout: return 460
+            case .background, .behavior, .placement: return 420
+            }
+        }
     }
 
     private func popoverBinding(_ target: StagePopover) -> Binding<Bool> {
@@ -568,14 +600,14 @@ struct OverlayEditorStage: View {
     }
 
     @ViewBuilder
-    private func popoverContent(for target: StagePopover) -> some View {
+    private func popoverRows(for target: StagePopover) -> some View {
         switch target {
-        case .theme: OverlayThemePopover()
-        case .text: OverlayTextPopover()
-        case .background: OverlayBackgroundPopover()
-        case .layout: OverlayLayoutPopover()
-        case .behavior: OverlayBehaviorPopover()
-        case .placement: OverlayPlacementPopover()
+        case .theme: OverlayThemeSettingsRows()
+        case .text: OverlayTextSettingsRows()
+        case .background: OverlayBackgroundSettingsRows()
+        case .layout: OverlayLayoutSettingsRows()
+        case .behavior: OverlayBehaviorSettingsRows()
+        case .placement: OverlayPlacementSettingsRows()
         }
     }
 
@@ -626,6 +658,7 @@ struct OverlayEditorStage: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .overlay(alignment: .top) { stagePopoverAnchors }
     }
 
     /// 把一块**跟卡片同高**的内容摆进"窗口那一格":在舞台上半部(去掉底部那条调整条通道)
@@ -1038,5 +1071,38 @@ private extension View {
             .background(Capsule().fill(Color.black.opacity(0.7)))
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
+    }
+}
+
+/// 量"舞台上沿到屏幕可用区顶"还剩多高,给浮层封顶用。点开时现量(窗口可能被拖到任何位置)。
+@MainActor
+final class StageTopProbe {
+    fileprivate weak var view: NSView?
+
+    /// 浮层外框(箭头 + 边距)与菜单栏之间再留的余量。
+    private static let chromeAllowance: CGFloat = 36
+    /// 太矮的浮层没法用;真到这一步说明窗口顶到了屏幕最上面,只能让系统翻下来。
+    private static let minimumHeight: CGFloat = 160
+
+    func popoverHeightLimit() -> CGFloat {
+        let fallback = SettingsPopoverMetrics.defaultMaxHeight
+        guard let view, let window = view.window, let screen = window.screen ?? NSScreen.main else { return fallback }
+        let rectInScreen = window.convertToScreen(view.convert(view.bounds, to: nil))
+        let space = screen.visibleFrame.maxY - rectInScreen.maxY - Self.chromeAllowance
+        return max(Self.minimumHeight, min(fallback, space))
+    }
+}
+
+private struct StageTopProbeView: NSViewRepresentable {
+    let probe: StageTopProbe
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        probe.view = view
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        probe.view = nsView
     }
 }

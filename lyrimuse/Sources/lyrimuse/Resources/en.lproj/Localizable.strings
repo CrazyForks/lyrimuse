@@ -126,7 +126,6 @@
 "✓ 此刻驱动得动——但这是重启前的暂时状态：上面那个开关已经被关掉，重启后就会失效" = "Works right now — but only until this browser restarts: the switch above has been turned off, so it will stop working after a restart.";
 "、" = ", ";
 "「%@」不能用来同步歌词进度。这项功能要靠浏览器执行一小段 JavaScript 来读播放进度，而这个应用没有提供对应的脚本命令。Firefox 至今没有提供，非浏览器的应用也一样。" = "“%@” can’t be used to sync lyric timing. This feature reads playback position by having the browser run a small piece of JavaScript, and this app provides no scripting command for that. Firefox has never added one, and non-browser apps don’t have one either.";
-"「%@」删除后无法恢复" = "%@ can't be recovered once deleted";
 "「%@」已经在这个列表里了。" = "“%@” is already in this list.";
 "「%@」已经是内置播放器了，在上面那张「播放器」卡里勾选它就行。" = "“%@” is already a built-in player — just tick it in the Players card above.";
 "「第 N 次听」把同一首歌的不同写法（繁简、括号风格、合唱署名等）合并计数。这里列出并进这一行的每种写法、各自的次数和原因，以及逐次的时刻" = "\"Play #N\" merges different spellings of the same track (Traditional/Simplified, bracket styles, artist credits and so on). This lists every spelling folded into this row with its own count and the reason, plus every individual play";
@@ -247,7 +246,6 @@
 "从资料库删除" = "Delete from Library";
 "以下播放器尚未安装，可提前选择，安装后自动生效" = "These players aren't installed yet. Select one now and it takes effect once installed.";
 "企业微信" = "WeCom";
-"会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题" = "Saves the current text, background, and stroke colors as a theme you can reapply anytime";
 "会覆盖当前所有设置，包括已连接的账号和播放数据发往的地址，并立即重启 Lyrimuse" = "Overwrites every current setting, including connected accounts and where your playback data is sent, then restarts Lyrimuse";
 "位置" = "Position";
 "位置已固定为「%@」，在 ⚙ 菜单里可改" = "Position is fixed to “%@” — change it in the ⚙ menu";
@@ -347,6 +345,7 @@
 "刚才在听" = "Last played";
 "删除" = "Delete";
 "删除 %@ 条" = "Delete %@";
+"删除「%@」？删除后无法恢复" = "Delete “%@”? This can’t be undone.";
 "删除中…" = "Removing…";
 "删除失败" = "Couldn't Remove";
 "删除本地记录" = "Delete Saved Lyrics";
@@ -449,6 +448,7 @@
 "右侧颜色" = "Right Color";
 "右对齐" = "Right-Aligned";
 "右耳" = "Right Ear";
+"右键点主题可以改名、用当前配色覆盖或删除" = "Right-click a theme to rename it, overwrite it with the current colors, or delete it";
 "合唱署名" = "Artist credit";
 "合并明细" = "Play Breakdown";
 "同步你的收听记录" = "Sync your listening history";
@@ -512,6 +512,7 @@
 "在飞书群里：设置 → 群机器人 → 添加机器人 → 自定义机器人，创建后复制 Webhook 地址。想加一层校验可以开启「签名校验」，把密钥填进下面的「签名密钥」" = "In your Feishu group: Settings → Group Bots → Add Bot → Custom Bot, then copy the webhook URL after creating it. For an extra layer of verification, enable “Signature Verification” and enter the secret in the “Signature Secret” field below";
 "域名解析失败（DNS），请求根本没发出去——常见于 VPN / 公司网络接管了 DNS；浏览器能开网页不代表这里能通" = "DNS lookup failed, so no request was ever sent. Common when a VPN or corporate network takes over DNS; a browser loading pages doesn't mean this can get through.";
 "域名解析失败（DNS）：%@" = "DNS lookup failed: %@";
+"墨字白边" = "Ink Outline";
 "声波" = "Waveform";
 "备份与迁移" = "Backup & Migrate";
 "备份到「%@」，还没存过" = "Backing up to “%@” — nothing saved yet";
@@ -523,9 +524,9 @@
 "外观" = "Appearance";
 "多" = "More";
 "多行" = "Full";
+"夜幕卡片" = "Night Card";
 "大小写/空格" = "Case/spacing";
 "大约还要%@" = "about %@ to go";
-"套用" = "Apply";
 "好" = "OK";
 "好的" = "OK";
 "字体" = "Font";
@@ -534,7 +535,6 @@
 "存一份" = "Save a Copy";
 "存一份到 iCloud，换 Mac 时直接读回来" = "Save a copy to iCloud and pull it back on your next Mac";
 "存为新配色主题" = "Save as New Theme";
-"存为新配色主题…" = "Save as New Theme…";
 "存到 iCloud" = "Save to iCloud";
 "存到 iCloud 的这份包含账号登录凭证和密钥的原文，会同步到登录同一个 iCloud 账号的所有设备" = "The copy saved to iCloud contains your account credentials and keys in clear text, and syncs to every device signed in to the same iCloud account.";
 "完全同名 120 · 仅括号差异 60 · 中英双语同名 30" = "Exact title 120 · parenthetical-only difference 60 · bilingual same name 30";
@@ -700,6 +700,7 @@
 "当前启用的其余源没有应答：%@" = "Other enabled sources did not answer: %@";
 "当前歌词的出处" = "Where the current lyrics came from";
 "当前连续 · 最长 %@ 天" = "Current streak · longest %@ days";
+"当前配色还没存过，点一下存成主题" = "These colors aren't saved yet. Click to save them as a theme";
 "待推送的收听" = "Pending Scrobbles";
 "待播清单" = "Playing Next";
 "循环播放" = "Repeat";
@@ -831,14 +832,15 @@
 "收听足迹" = "Listening Footprint";
 "收起" = "Collapse";
 "收起面板后生效" = "Takes effect after this panel closes";
+"改名…" = "Rename…";
 "改回 iCloud" = "Switch Back to iCloud";
 "放一首歌试试" = "Play a song to try it";
+"放一首歌，歌词会自动出现" = "Play a song and lyrics will appear here";
 "放不下的句子会横向滚动，鼠标悬停也能看到完整的这一行" = "Lines too long to fit scroll horizontally; hover to see the full line";
 "放弃坏文件并重建" = "Discard and Rebuild";
 "数据源" = "Data Source";
 "整份配置都在这里，纯文本可直接编辑；里面含账号凭据，不要发给别人" = "Everything lives here in plain text you can edit directly. It holds your account credentials, so don't send it to anyone";
 "整行时间轴" = "Line timing";
-"放一首歌，歌词会自动出现" = "Play a song and lyrics will appear here";
 "文件里包含账号登录凭证和密钥，妥善保管，不要发给别人" = "This file contains your account credentials and keys. Keep it safe and don't send it to anyone";
 "文字" = "Text";
 "文字描边" = "Text Outline";
@@ -1083,6 +1085,7 @@
 "歌词超出曲长" = "Lyrics overshoot track length";
 "歌词跟着" = "Lyrics follow";
 "歌词进度" = "Lyrics Timing";
+"歌词预览" = "Lyrics";
 "歌词（LRC）" = "Lyrics (LRC)";
 "正在下载…" = "Downloading…";
 "正在从 iCloud 下载这份备份，下载完再点一次「恢复这份」" = "Downloading this backup from iCloud — click Restore This One again once it finishes";
@@ -1225,6 +1228,7 @@
 "现场版场次不符" = "Live recording from a different show";
 "玻璃浓淡" = "Glass Density";
 "生成一个 .zip 文件，其中会保留最近播放的曲目名与本机文件路径，公开发布前可以先解压查看" = "Creates a .zip file. It keeps recently played track names and local file paths, so review it before posting publicly";
+"用当前配色覆盖" = "Overwrite with Current Colors";
 "用户名（听歌报告需要）" = "Username (needed for listening digests)";
 "用户名（选填，用于界面显示）" = "Username (optional, for display only)";
 "用来把当前播放状态推送到网页小组件和状态徽章" = "Pushes the current playback status to the web widget and status badge";
@@ -1248,6 +1252,7 @@
 "确定要清空全部歌词缓存吗？" = "Clear all cached lyrics?";
 "确定要清空全部电台校正吗？" = "Clear all radio calibrations?";
 "确定要清除全部设置吗？" = "Erase all settings?";
+"磨砂玻璃" = "Frosted Glass";
 "秒" = "s";
 "移除" = "Remove";
 "移除配对" = "Unpair";
@@ -1302,11 +1307,13 @@
 "纯色" = "Solid";
 "纯音乐" = "Instrumental";
 "纯黑" = "Solid Black";
+"纸白卡片" = "Paper Card";
 "细" = "Light";
 "经典" = "Classic";
 "经典白字" = "Classic White";
 "经典黑字" = "Classic Black";
 "结束点获印证" = "End time corroborated";
+"给当前配色起个名字" = "Name these colors";
 "给每个来源打分，取分最高的" = "Scores every source and keeps the best match";
 "统计" = "Stats";
 "继续即表示你已了解" = "By continuing, you acknowledge the";
@@ -1447,6 +1454,7 @@
 "读音" = "Romanization";
 "调整" = "Adjust";
 "调整宽度" = "Adjust Width";
+"调过颜色后，这里会出现「自定义」，点它就能存成主题" = "After you change any colors, a Custom card appears here. Click it to save them as a theme.";
 "账号" = "Account";
 "账号 Token" = "Account Token";
 "账号信息" = "Account Info";
@@ -1672,6 +1680,7 @@
 "隐藏读音" = "Hide Romanization";
 "需要先完全退出该浏览器，再点一次" = "Please fully quit this browser first, then try again";
 "需要先配置「%@」（%@）" = "Set up “%@” first — %@";
+"霓虹" = "Neon";
 "静音" = "Mute";
 "韩语" = "Korean";
 "音叉" = "Tuning Fork";
@@ -1713,6 +1722,7 @@
 "麦克风" = "Microphone";
 "黑字描边" = "Black Text with Outline";
 "黑胶唱片" = "Vinyl";
+"默认" = "Default";
 "默认排序" = "Default Order";
 "默认跟随系统菜单栏，可在 10～16pt 间调，16pt 仍在菜单栏项高度内。拖回系统字号那一格即恢复跟随。" = "Follows the system menu bar by default; adjustable from 10 to 16pt, and 16pt still fits the menu bar item. Drag back to the system size to follow it again.";
 "鼠标悬停在灵动岛上时能看到什么" = "What you see when hovering over the Dynamic Island";

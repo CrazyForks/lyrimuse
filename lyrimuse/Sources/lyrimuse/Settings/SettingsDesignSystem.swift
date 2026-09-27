@@ -696,8 +696,7 @@ struct SettingsSubRow<Trailing: View>: View {
                 // labelsHidden 吃掉了 Button 标题,离屏渲染逐个变量排除才定到挤压上)。
                 // 给按钮加 `.fixedSize()` 只是把亏空转嫁给左边那句说明(它会被压成一列单字)。
                 // 所以:尾部插槽只适合放**一个**控件或几个窄控件;又要一段说明、又要输入框
-                // 加两颗按钮的场合,别用这一行,自己搭一个"说明一行、控件另起一行"的容器
-                // (例见 OverlayStyleSettingsRows.swift 里的 OverlayInlineConfirmRow)。
+                // 加两颗按钮的场合,别用这一行,自己搭一个"说明一行、控件另起一行"的容器。
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .settingsGlassButtons()
@@ -779,10 +778,12 @@ struct SettingsPopoverShell<Content: View>: View {
     ///
     /// **别把这个默认值当成"所有浮层的统一宽度"**。它只是那两个浮层量出来的数,不是设计
     /// 基线;每个调用点都该按自己内容的 `fittingSize` 取一个带余量的值,理由(带实测数字)
-    /// 分别写在 `OverlayLayoutPopover`(必须更宽)、`NotchStylePopover`、`NotchEarPopover`
-    /// (都该更窄)上面。直接吃这个默认值会让内容自然宽只有 124pt(中文)/ 136pt(英文)
+    /// 分别写在 `NotchStylePopover`、`NotchEarPopover`(都该更窄)上面。直接吃这个默认值会让内容自然宽只有 124pt(中文)/ 136pt(英文)
     /// 的浮层(如「左耳」「右耳」)被硬撑到 380,明显偏空。
     var width: CGFloat = 380
+    /// 高度上限,内容更高就在浮层里滚动。默认 `SettingsPopoverMetrics.defaultMaxHeight`;悬浮歌词编辑台
+    /// 按舞台上方剩下的空间传更小的值,免得 NSPopover 放不下时翻到另一边盖住预览。
+    var maxHeight: CGFloat = SettingsPopoverMetrics.defaultMaxHeight
     @ViewBuilder let content: () -> Content
 
     /// 内容的真实(未裁剪)高度,由下面的 `GeometryReader` 实测上报。
@@ -811,13 +812,17 @@ struct SettingsPopoverShell<Content: View>: View {
             )
         }
         .frame(width: width)
-        // measuredHeight 还没测出来之前(刚弹出的第一帧)不施加高度约束,让 ScrollView
-        // 按内容自身高度走首次弹出这一档还成立的行为;测出来之后就交给实测值 —— 封顶
-        // 460 是「我的配色主题」这类随用户数据变长的列表仍然需要的滚动上限,没超过
-        // 460 时就是"多大内容给多大空间",不再出现滚动条。
-        .frame(height: measuredHeight > 0 ? min(measuredHeight, 460) : nil)
+        // measuredHeight 还没测出来之前(刚弹出的第一帧)只按上限约束,让 ScrollView 按内容自身高度走;
+        // 测出来之后就交给实测值 —— 封顶是「我的配色主题」这类随用户数据变长的内容仍然需要的滚动上限,
+        // 没超过时就是"多大内容给多大空间",不出现滚动条。
+        .frame(height: measuredHeight > 0 ? min(measuredHeight, maxHeight) : nil)
+        .frame(maxHeight: maxHeight)
         .onPreferenceChange(PopoverContentHeightKey.self) { measuredHeight = $0 }
     }
+}
+
+enum SettingsPopoverMetrics {
+    static let defaultMaxHeight: CGFloat = 460
 }
 
 /// `SettingsPopoverShell` 专用的内容高度上报 key。

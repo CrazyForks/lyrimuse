@@ -167,8 +167,7 @@ enum AutoHideItem: String, CaseIterable, Identifiable {
 
 /// 两行标准设置行。四个宿主都调这一份,只把 `surface` 换掉。
 ///
-/// `@ObservedObject` 是**必需**的,不是照抄的样板:四个宿主里 `OverlayBehaviorPopover` 和
-/// `NotchBehaviorPopover` 自己都不观察 `AppSettings`,现在只靠父层(`AppearanceSettingsTab` /
+/// `@ObservedObject` 是**必需**的,不是照抄的样板:宿主里 `NotchBehaviorPopover` 自己不观察 `AppSettings`,现在只靠父层(`AppearanceSettingsTab` /
 /// `NotchEditorStage`)的对象级失效顺带刷新。新组件继续吃这个隐式依赖的话,哪天它被放进第五个
 /// 不观察 AppSettings 的宿主,开关就会显示陈旧值("在另一个入口改完再回来看,还是旧的")。
 /// 同 `NotchLyricRowSettingsRows`。

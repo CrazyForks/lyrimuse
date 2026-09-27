@@ -128,9 +128,8 @@ struct OverlayTextSettingsRows: View {
             }
             // ── 以下两行从原「配色」组并过来 ──
             //
-            // 「跟随封面 / 自定义颜色」这两行共用的取色控件用下拉菜单(`colorModeMenu`,照抄
-            // "配色主题"那颗 `Menu` 的写法,这个仓库里唯一验证过好用的下拉形态,见 themeItem
-            // 上方注释)——下拉本身就是**当前模式的文字**,不依赖 Toggle 的标签渲染,选
+            // 「跟随封面 / 自定义颜色」这两行共用的取色控件用下拉菜单(`colorModeMenu`,纯文字
+            // `Menu(标题) { Button(...) }`,这个仓库里验证过好用的下拉形态,见 04 章决策 21)——下拉本身就是**当前模式的文字**,不依赖 Toggle 的标签渲染,选
             // "自定义颜色"才在旁边露出取色器。 别退回独立开关(切模式要跨两个浮层,体验
             // 割裂)或带文字标签的 `Toggle`(那个文字标签在 macOS 上不渲染,行里只剩一颗
             // 看不出意义的光秃秃开关)。
@@ -199,10 +198,9 @@ struct OverlayTextSettingsRows: View {
     }
 
     /// 「文字颜色」「未唱颜色」共用的取色控件:下拉菜单选"跟随封面"还是"自定义颜色",
-    /// 选了自定义才在旁边露出取色器。下拉照抄这个文件里「配色主题」那颗 `Menu` 的写法
-    /// (`Menu(标题) { Button(...) }`,纯文字条目、不带图标/勾选)——这是本仓唯一验证过
-    /// 好用的下拉形态,`Menu` 条目里塞 `Toggle`/`Image` 会整个菜单画成空白(见 themeItem
-    /// 上方那段"为什么不继续试哪一样能用")。
+    /// 选了自定义才在旁边露出取色器。下拉用 `Menu(标题) { Button(...) }`(纯文字条目、不带图标/勾选)
+    /// ——这是本仓验证过好用的下拉形态,`Menu` 条目里塞 `Toggle`/`Image` 会整个菜单画成空白
+    /// (04 章决策 21)。
     ///
     /// 这里**不用** `Toggle(带文字标签, isOn:)`:macOS 上这个标签
     /// 实测不渲染,行里只剩一颗光秃秃看不出含义的开关。
@@ -387,8 +385,7 @@ struct OverlayAlignmentSegmentedControl: View {
         // Spacer 去分。
         //
         // 代价是亏空会转嫁给左边的标题(宿主太窄时标题换行)—— 这正是要的取舍:标题换行还
-        // 读得出来,选项被截成"Automa…"就没法用了。宿主的宽度按这条取舍来定,见
-        // OverlayLayoutPopover。
+        // 读得出来,选项被截成"Automa…"就没法用了。「排版」浮层按这条取舍定成 460pt 宽(`OverlayEditorStage.StagePopover.width`)。
         .fixedSize()
     }
 }
@@ -457,298 +454,200 @@ struct OverlayBackgroundSettingsRows: View {
 
 // MARK: - 主题
 
-/// 「主题」那一组:配色主题 / 我的配色主题。
+/// 「主题」那一组:内置预设和「我的配色主题」都画成预览卡(`ThemePreviewCard`),点一下套用。
 ///
-/// 单独立成第三个入口。它本来跟文字色、背景色挤在「配色」里,而按"改的是哪一层"
-/// 这条判据它**两层都改** —— 塞进「文字」或「背景」任何一边都是错的分类。
+/// 当前生效的那张描强调色边框,判据是配色字段完全相等(`ColorTheme.hasSameColors`,含两处「跟随封面」
+/// 开关;跟随时不比那个备用色)。套用会按主题自己的值写两处跟随封面(`ColorTheme.apply(to:)`)。
+/// 悬浮窗右键的「配色主题」子菜单(`OverlayQuickSettingsMenu.colorThemeMenu`)是同一张清单、同一条判据。
 ///
-/// 下面这段是「跟随封面」曾经住在这一组时的记录 —— **它又搬回「文字」浮层**、
-/// 内联成「文字颜色」那一行的一个取值(跟随封面 / 自定义颜色),这一组从此只剩选配色主题
-/// 这一件事。留着这段是因为那次改动(见下面第二条 提醒)正是冲着它的前提去的。
-///
-/// **「跟随封面」从「文字」搬到这一组的第一行**(整页按"不要这一个那一个"
-/// 重排)。09-02 把它归「文字」的理由是"它接管的只有文字色";但从用户这一侧看,它跟「配色主题」
-/// 是**同一个问题的两个答案**——文字色从哪来:封面主色,还是某一套主题。两个答案拆在两个浮层里,
-/// 结果是「主题」浮层顶着一个「—」、原因却在别处;右键快捷菜单那份子菜单后来也去掉了
-/// 跟随封面,只列主题(`OverlayQuickSettingsMenu.colorThemeMenu`)。09-02 那条"别搬"的警告因此撤销;「文字」组那边「文字颜色」一行改成常显、
-/// 跟随时尾部写「跟随封面」指回这里。工具栏「主题」按钮的摘要也随之在跟随时报「跟随封面」
-/// (见 `OverlayStyleSummary.theme`)—— 现在那颗按钮管的浮层里就有这个开关,报它就是报真实状态。
-///
-/// **「配色主题」那一行任何时候都显示,不再被「跟随封面」收起**(
-/// 「勾选了跟随封面之后依然可以选择主题,但是你去选了主题之后跟随封面就自动取消勾选」)。
-///
-/// 在此之前它的显隐条件是 `!followsCoverArt`,理由是"文字颜色被封面主色接管时,留着它只会
-/// 让人以为选了有用"。**那条理由现在不成立**:`ColorTheme.apply(to:)` 第一行就是
-/// `settings.followsCoverArt = false` —— 选一个主题**本来就会**把跟随封面关掉、四个颜色
-/// 字段当场生效。所以它不是"选了没用",而是"选了就切过去",藏起来反而把一步的操作变成两步
-/// (先去「文字」浮层关掉跟随封面,再回这一组选)。
-///
-/// **跟随封面开着时这一行照常报主题名/「自定义」,不再报占位符「—」**。
-///
-/// 占位符是加的(「当我跟随封面开着的时候,主题这边摘要和详情都指向一个
-/// 占位符」),成立的前提是「跟随封面」跟「配色主题」同处这一组、是同一个问题的两个答案 ——
-/// 一个模式占着,另一个就没在生效。**那个前提就没了**:跟随封面搬进「文字」浮层、
-/// 变成「文字颜色」那一行的一个取值,跟主题解耦:「跟随封面和主题不挂钩了,
-/// 也就是可以被列为自定义,并且可以被正常保存」。
-///
-/// 占位符留着有两个实际坏处:① 这一组现在只剩"选一套配色"这件事,而那一格「—」的原因在
-/// **另一个浮层**里,站在这里看不出来;② 跟随封面开着时点「存为新主题…」,主题确实存下来了、
-/// 这一格却仍是「—」,看起来像没存进去 —— 表现就是这个。
-///
-/// 悬浮窗右键的「配色主题」子菜单(`OverlayQuickSettingsMenu.colorThemeMenu`)跟这里同一张清单、
-/// 同一条判据:没有跟随封面这一项,当前配色等于哪套就是哪套。
-///
+/// 自存主题的改名 / 用当前配色覆盖 / 删除挂在卡片的右键菜单上。命名、改名与删除确认都摆在
+/// 「我的配色主题」那行标题的右侧,不另起一行:编辑台里这组视图是从舞台上沿往上弹的浮层,高度封顶在
+/// 舞台上方的剩余空间里,多长一行就得滚动才看得见。也不用 `.alert`:宿主之一是 transient 的
+/// `NSPopover`,alert 以 sheet 挂在窗口上,点进去时承载状态的视图树可能已随浮层销毁。空名禁用「保存」
+/// 而不是静默丢弃;删除必须二次确认(`customColorThemes` 的 didSet 立刻落盘、没有撤销)。
 @MainActor
 struct OverlayThemeSettingsRows: View {
     @ObservedObject private var settings = AppSettings.shared
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // 「跟随封面」(文字颜色/未唱颜色各一颗)从这里挪进了「文字」浮层、
-            // 内联在各自的颜色行里——独立开关切模式要跨两个浮层,体验割裂。这张
-            // 卡现在只剩"选一套配色主题预设"这一件事,见 OverlayTextSettingsRows 里那两行的
-            // 头注——「配色主题」选中某个预设时仍然会调 ColorTheme.apply(to:) 把 followsCoverArt
-            // 关掉(互斥逻辑没变,只是操作它的开关搬了地方)。
-            //
-            // 只打包"配色"相关的四个字段(文字/背景/描边颜色 + 描边开关),不含字体/字号 ——
-            // 那是排版,跟配色是两回事,不该被同一个"主题"捆在一起改(见 ColorTheme.swift)。
-            SettingsRow(icon: "swatchpalette", title: L10n.t("配色主题")) {
-                Menu(Self.currentThemeLabel) {
-                    ForEach(ColorTheme.builtInPresets) { theme in
-                        themeItem(theme)
-                    }
-                    if !settings.customColorThemes.isEmpty {
-                        Divider()
-                        ForEach(settings.customColorThemes) { theme in
-                            themeItem(theme)
-                        }
-                    }
-                }
-                .fixedSize()
-            }
-            CardDivider()
-            OverlayCustomThemeRows()
-        }
+    private enum Editing: Equatable {
+        case none
+        case naming
+        case renaming(ColorTheme.ID)
+        case confirmingDeletion(ColorTheme.ID)
     }
 
-    /// 下拉里的一项。**只有名字,没有色条也没有勾**。
-    ///
-    /// **别再往这个 `Menu` 的条目里塞 `Toggle` 或 `Image`**——会让菜单面板正常弹出、
-    /// 尺寸正常,但**一个条目都画不出来**(连文字都没有,不是只丢图标),例如:
-    ///
-    /// ```swift
-    /// Toggle(isOn: Binding(get: …, set: …)) {
-    ///     Label { Text(theme.name) } icon: { Image(nsImage: theme.swatchImage()) }
-    /// }
-    /// ```
-    ///
-    /// 本仓所有正常工作的 SwiftUI `Menu` 条目都是纯 `Button(标题)`;SwiftUI 的 `Menu` 也不产生
-    /// 可离屏检查的 `NSPopUpButton`(`NSMenu` 要点开那一刻才建),改错了只能真人点开才发现。
-    /// 真要显示色条 + 勾,走 AppKit:`OverlayQuickSettingsMenu.colorThemeMenu` 已经证明
-    /// `NSMenu` + `NSMenuItem.image` + `.state` 这条路在本仓是通的。
-    ///
-    /// 色条本身(`ThemeSwatch` / `ColorTheme.swatchImage()`)**保留**:它在「我的配色主题」那些
-    /// **子行**里是普通 SwiftUI 视图、渲染正常,不受这条限制影响。
-    private func themeItem(_ theme: ColorTheme) -> some View {
-        Button(theme.name) { theme.apply(to: settings) }
-    }
-
-    /// 当前四个配色字段打包成一个匿名主题,给 hasSameColors 当比较对象(下拉的勾与 currentThemeLabel 共用)。
-    static func currentColors(_ settings: AppSettings) -> ColorTheme {
-        ColorTheme(
-            name: "",
-            foregroundColorHex: settings.foregroundColorHex,
-            backgroundColorHex: settings.backgroundColorHex,
-            textStrokeEnabled: settings.textStrokeEnabled,
-            textStrokeColorHex: settings.textStrokeColorHex
-        )
-    }
-
-    /// 当前四个配色字段正好等于哪个内置预设/自定义主题就显示它的名字,谁都不等于
-    /// (比如套用之后又手动微调过某个颜色)就显示"自定义"——这是「配色主题」那个
-    /// Menu 唯一的选中反馈来源。
-    ///
-    /// **跟随封面开着时也照常算**。这一档来回改过三次,理由都记下来:
-    ///  - **去掉**过"followsCoverArt 开着就直接显示「跟随封面」"这个短路,理由是
-    ///    "否则开着跟随封面时,用户完全看不出自己的备用色到底是哪个主题"。
-    ///  - **换一种形式加回来**:不是显示「跟随封面」(那是模式名、不是主题),而是
-    ///    显示占位符 —— 当时跟随封面就在这一组里,那一刻确实没有主题在生效。
-    ///  - **连占位符一起去掉**,回到 08-14 那一档。跟随封面变成
-    ///    「文字颜色」那一行的取值之后,它跟"哪套配色在生效"不再是同一个问题(理由见本类型头注)。
-    ///    这四个字段任何时候都真实存在,"它们等于哪套主题"这句话永远成立;答不上来的时候
-    ///    有「自定义」兜着,不需要第三种状态。
-    ///
-    /// static 而不是实例计算属性:工具栏的「主题」按钮要拿同一个字符串当摘要
-    /// (见 OverlayStyleSummary.theme),而那个位置构造不出这个 View。
-    static var currentThemeLabel: String {
-        let settings = AppSettings.shared
-        let current = currentColors(settings)
-        let all = ColorTheme.builtInPresets + settings.customColorThemes
-        return all.first { $0.hasSameColors(as: current) }?.name ?? L10n.t("自定义")
-    }
-}
-
-// MARK: - 我的配色主题
-
-/// 「我的配色主题」那一组:存为新主题 + 已存主题的套用/删除。
-///
-/// 设计稿把它放进配色浮层的底部(而不是像现状那样单独一张卡):它和配色强绑定,套用后
-/// 预览立刻变色,跟「跟随封面 / 配色主题」待在同一个浮层里更连贯。抽屉那一份
-/// 仍然在(全量兜底通路),两边是同一个这个组件。
-///
-/// 「我的配色主题」那两行**内联确认**(命名 / 删除确认)专用的行容器。
-///
-/// 这两行刻意**不用** `SettingsSubRow`,这是修一个真 bug 换来的结论。
-/// `SettingsSubRow` 是"左边一句说明、右边一组控件"的单行结构,说明和控件在同一个 HStack 里
-/// 分同一份宽度;而这两行的控件特别宽(命名行是 130pt 输入框 + 两颗按钮),配色浮层又只有
-/// 380pt —— SwiftUI 把不够的宽度按弹性摊给双方,输入框那 130pt 是写死的,整份亏空于是全压在
-/// 两颗按钮上,它们被挤成两个**没有文字的空圆角矩形**("右边这两个按钮是坏了吗")。
-/// 离屏渲染逐个变量排除过:跟行容器统一套的 `.labelsHidden()` 无关(它只管 Toggle/Picker
-/// 那类自带 label 的控件,按钮标题照显),跟 `.buttonStyle(.glass)` 也无关,纯粹是横向挤压;
-/// 只给按钮加 `.fixedSize()` 同样不行 —— 亏空会原样转嫁给说明文字,那句话被压成一列单字。
-/// 所以说明单独占一行、控件另起一行,谁都不用跟谁抢宽度,浮层再窄也不会把按钮挤没。
-///
-/// 视觉沿用 `SettingsSubRow`:同样的左右内边距,标题落在主行标题那一列。
-/// (两边都不再画那条 2pt 淡竖线,理由见 `SettingsSubRow` 的头注 —— 改的时候
-///  **两处要一起改**,否则配色浮层里的命名/删除确认行会是全 App 唯一还带着竖线的行。)
-private struct OverlayInlineConfirmRow<Content: View>: View {
-    var title: String?
-    var message: String?
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let title, !title.isEmpty {
-                    Text(title).font(.system(size: 13))
-                }
-                if let message, !message.isEmpty {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                // 控件自己那一行:左对齐、跟说明同一条左边界,右边留白由外层 Spacer 吃掉。
-                // 这里**不**套 .labelsHidden() —— 这一行里没有 Toggle/Picker,只有按钮和
-                // 一个输入框,而输入框的占位符本来就该显示出来。
-                HStack(spacing: 8) { content() }
-                    .settingsGlassButtons()
-            }
-            Spacer(minLength: 0)
-        }
-        // 跟 `SettingsSubRow` 同一个值,理由见那边:那 12 是竖线 + 间距的补偿,线删了就还回来。
-        .padding(.leading, SettingsRowMetrics.textLeadingInset)
-        .padding(.trailing, SettingsRowMetrics.horizontalPadding)
-        .padding(.vertical, SettingsRowMetrics.verticalPadding)
-    }
-}
-
-/// 命名和删除确认都是**内联**的,不再用 `.alert`。理由:这个组件现在
-/// 有两个宿主,其中一个是 `.popover`。SwiftUI 在 macOS 上把 `.alert` 呈现成挂在窗口上的
-/// sheet,而 NSPopover 是 transient 语义(点到浮层外面就关) —— 用户去点 sheet 里的输入框
-/// 时,承载 alert 状态的那棵视图树很可能已经随浮层一起销毁了。内联做法两个宿主一模一样,
-/// 不依赖任何"浮层还活着"的假设,也就不用为两个宿主各写一套呈现方式(那正是这次抽取要
-/// 消灭的东西)。
-/// 两条原有的安全约束一条没松:
-///   - 空名不静默丢弃,而是把「保存」禁用掉(能看见的拒绝,见那次改动);
-///   - 删除必须二次确认(customColorThemes 的 didSet 立刻落盘、没有撤销,而"套用"和
-///     "删除"两颗按钮挨着,点错一次用户自己调了半天的配色就没了)。
-@MainActor
-struct OverlayCustomThemeRows: View {
-    @ObservedObject private var settings = AppSettings.shared
-
-    @State private var isNaming = false
-    @State private var newThemeName = ""
-    /// 待确认删除的主题 id。存 id 而不是整个 ColorTheme:它只用来做相等比较和喂
-    /// `.animation(value:)`,存值对象等于把一份可能已经被删掉的快照留在状态里。
-    @State private var pendingDeletion: ColorTheme.ID?
+    @State private var editing: Editing = .none
+    @State private var draftName = ""
+    @FocusState private var nameFieldFocused: Bool
 
     private var trimmedName: String {
-        newThemeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        draftName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SettingsRow(icon: "square.stack", title: L10n.t("我的配色主题")) {
-                Button(L10n.t("存为新配色主题…")) {
-                    newThemeName = ""
-                    // 两个内联态互斥:正在确认删除时又点"存为新主题",两行同时展开会让人
-                    // 分不清哪个按钮属于哪件事。
-                    pendingDeletion = nil
-                    isNaming = true
-                }
-            }
-            if isNaming {
-                CardDivider()
-                OverlayInlineConfirmRow(
-                    message: L10n.t("会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题")
-                ) {
-                    TextField(L10n.t("主题名称"), text: $newThemeName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 130)
-                        // 敲回车等于点「保存」—— 输完名字还要去够鼠标是多余的一步。
-                        .onSubmit { saveTheme() }
-                    Button(L10n.t("保存")) { saveTheme() }
-                        .disabled(trimmedName.isEmpty)
-                    Button(L10n.t("取消")) { isNaming = false }
-                }
-            }
-            ForEach(settings.customColorThemes) { theme in
-                CardDivider()
-                if pendingDeletion == theme.id {
-                    // 跟命名行同一个容器,同一个理由:主题名是用户数据、长度不设上限,留在
-                    // SettingsSubRow 的尾部插槽里迟早会把「删除」「取消」挤成两个空按钮。
-                    OverlayInlineConfirmRow(
-                        title: theme.name,
-                        message: String(format: L10n.t("「%@」删除后无法恢复"), theme.name)
-                    ) {
-                        // 红色是显式染的:`role: .destructive` 在 macOS 上只对菜单项和
-                        // 弹窗按钮生效,普通按钮里它只是语义标记、外观跟普通按钮一样
-                        // (同 SettingsDesignSystem.DestructiveButton 的注释)。
-                        Button(L10n.t("删除"), role: .destructive) {
-                            settings.customColorThemes.removeAll { $0.id == theme.id }
-                            pendingDeletion = nil
-                        }
-                        .foregroundStyle(.red)
-                        .tint(.red)
-                        Button(L10n.t("取消")) { pendingDeletion = nil }
-                    }
-                } else {
-                    SettingsSubRow(title: theme.name) {
-                        HStack(spacing: 10) {
-                            // 自定义主题只有名字可认,色条是唯一的视觉线索。放在「套用」
-                            // 左边而不是行首:SettingsSubRow 刻意不占图标列(见它的注释)。
-                            Image(nsImage: theme.swatchImage())
-                            Button(L10n.t("套用")) { theme.apply(to: settings) }
-                            Button {
-                                isNaming = false
-                                pendingDeletion = theme.id
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                        }
+        let current = ColorTheme.current(settings)
+        VStack(alignment: .leading, spacing: 0) {
+            LazyVGrid(columns: ThemeGalleryMetrics.columns, spacing: ThemeGalleryMetrics.rowSpacing) {
+                ForEach(ColorTheme.builtInPresets) { theme in
+                    ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current)) {
+                        theme.apply(to: settings)
                     }
                 }
             }
+            .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
+            .padding(.vertical, 12)
+            CardDivider()
+            customSection(current: current)
         }
-        .animation(.default, value: isNaming)
-        .animation(.default, value: pendingDeletion)
+        .animation(.default, value: editing)
+        .animation(.default, value: settings.customColorThemes)
     }
 
-    private func saveTheme() {
+    @ViewBuilder
+    private func customSection(current: ColorTheme) -> some View {
+        // 当前配色跟哪套都对不上 = 用户调过、还没存:排第一张「自定义」卡,用当前配色画、描选中框、
+        // 右上角一个存储标记,点一下长出命名行。对得上时它不出现 —— 那时存下来只是某套主题的复本。
+        let isUnsaved = !(ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: current) }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(L10n.t("我的配色主题"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Spacer(minLength: 12)
+                editorControls
+            }
+            .frame(minHeight: 22)
+            if isUnsaved || !settings.customColorThemes.isEmpty {
+                LazyVGrid(columns: ThemeGalleryMetrics.columns, spacing: ThemeGalleryMetrics.rowSpacing) {
+                    if isUnsaved {
+                        ThemePreviewCard(
+                            theme: ColorTheme.current(settings, name: L10n.t("自定义")), isCurrent: true,
+                            badge: "square.and.arrow.down", help: L10n.t("当前配色还没存过，点一下存成主题")
+                        ) {
+                            draftName = ""
+                            editing = .naming
+                        }
+                    }
+                    ForEach(settings.customColorThemes) { theme in
+                        ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current)) {
+                            theme.apply(to: settings)
+                        }
+                        .contextMenu { customThemeMenu(theme) }
+                    }
+                }
+            } else {
+                Text(L10n.t("调过颜色后，这里会出现「自定义」，点它就能存成主题"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            if !settings.customColorThemes.isEmpty {
+                Text(L10n.t("右键点主题可以改名、用当前配色覆盖或删除"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, SettingsRowMetrics.horizontalPadding)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private func customThemeMenu(_ theme: ColorTheme) -> some View {
+        Button(L10n.t("改名…")) {
+            draftName = theme.name
+            editing = .renaming(theme.id)
+        }
+        Button(L10n.t("用当前配色覆盖")) { overwrite(theme.id) }
+        Divider()
+        Button(L10n.t("删除"), role: .destructive) { editing = .confirmingDeletion(theme.id) }
+    }
+
+    /// 标题行右侧的编辑控件:命名 / 改名是输入框 + 保存 + 取消,删除确认是一句提示 + 删除 + 取消。
+    @ViewBuilder
+    private var editorControls: some View {
+        switch editing {
+        case .none:
+            EmptyView()
+        case .naming:
+            HStack(spacing: 8) {
+                nameField(placeholder: L10n.t("给当前配色起个名字")) { saveNewTheme() }
+                Button(L10n.t("保存")) { saveNewTheme() }
+                    .disabled(trimmedName.isEmpty)
+                    .fixedSize()
+                Button(L10n.t("取消")) { editing = .none }
+                    .fixedSize()
+            }
+            .settingsGlassButtons()
+        case .renaming(let id):
+            HStack(spacing: 8) {
+                nameField(placeholder: L10n.t("主题名称")) { rename(id) }
+                Button(L10n.t("保存")) { rename(id) }
+                    .disabled(trimmedName.isEmpty)
+                    .fixedSize()
+                Button(L10n.t("取消")) { editing = .none }
+                    .fixedSize()
+            }
+            .settingsGlassButtons()
+        case .confirmingDeletion(let id):
+            if let theme = settings.customColorThemes.first(where: { $0.id == id }) {
+                HStack(spacing: 8) {
+                    Text(String(format: L10n.t("删除「%@」？删除后无法恢复"), theme.name))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button(L10n.t("删除"), role: .destructive) {
+                        settings.customColorThemes.removeAll { $0.id == id }
+                        editing = .none
+                    }
+                    .foregroundStyle(.red)
+                    .tint(.red)
+                    .fixedSize()
+                    Button(L10n.t("取消")) { editing = .none }
+                        .fixedSize()
+                }
+                .settingsGlassButtons()
+            }
+        }
+    }
+
+    private func nameField(placeholder: String, onSubmit: @escaping () -> Void) -> some View {
+        TextField(placeholder, text: $draftName)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 170)
+            .focused($nameFieldFocused)
+            .onSubmit(onSubmit)
+            .onAppear { nameFieldFocused = true }
+    }
+
+    private func saveNewTheme() {
         let name = trimmedName
         guard !name.isEmpty else { return }
-        settings.customColorThemes.append(ColorTheme(
-            name: name,
-            foregroundColorHex: settings.foregroundColorHex,
-            backgroundColorHex: settings.backgroundColorHex,
-            textStrokeEnabled: settings.textStrokeEnabled,
-            textStrokeColorHex: settings.textStrokeColorHex
-        ))
-        newThemeName = ""
-        isNaming = false
+        settings.customColorThemes.append(ColorTheme.current(settings, name: name))
+        editing = .none
+    }
+
+    private func rename(_ id: ColorTheme.ID) {
+        let name = trimmedName
+        guard !name.isEmpty, let index = settings.customColorThemes.firstIndex(where: { $0.id == id }) else { return }
+        settings.customColorThemes[index].name = name
+        editing = .none
+    }
+
+    private func overwrite(_ id: ColorTheme.ID) {
+        guard let index = settings.customColorThemes.firstIndex(where: { $0.id == id }) else { return }
+        let existing = settings.customColorThemes[index]
+        var updated = ColorTheme.current(settings, name: existing.name)
+        updated.id = existing.id
+        settings.customColorThemes[index] = updated
+    }
+
+    /// 工具栏「主题」按钮的摘要:配色等于哪套就报哪套的名字,都不等报「自定义」。
+    static var currentThemeLabel: String {
+        let settings = AppSettings.shared
+        let current = ColorTheme.current(settings)
+        let all = ColorTheme.builtInPresets + settings.customColorThemes
+        return all.first { $0.hasSameColors(as: current) }?.name ?? L10n.t("自定义")
     }
 }
 
@@ -786,14 +685,10 @@ enum OverlayStyleDefaults {
         settings.overlayGlassIntensity = .default
         settings.textStrokeEnabled = ColorTheme.defaultTheme.textStrokeEnabled
         settings.textStrokeColorHex = ColorTheme.defaultTheme.textStrokeColorHex
-        // 「已唱/未唱」是文字组多出来的一对独立颜色(跟 foregroundColorHex/
-        // followsCoverArt 同一个形状),同一条头注警告过的坑——新加字段不进这个函数,点
-        // "恢复默认"时它会被漏掉。它不在 ColorTheme 里(见该属性头注),没有 defaultTheme
-        // 可读:颜色沿用 AppSettings.init() 里没存过时同一条派生(默认主题文字色调暗),
-        // 「跟随封面」**刻意**恢复成 false 而不是跟 followsCoverArt 一样的 true——两个都
-        // 跟随的话已唱/未唱会是完全同一个色,卡拉OK的进度效果直接失去可读性。
-        settings.karaokeUnsungFollowsCoverArt = false
-        settings.karaokeUnsungColorHex = AppSettings.dimmedForegroundHex(ColorTheme.defaultTheme.foregroundColorHex)
+        // 「已唱/未唱」是文字组多出来的一对独立颜色,新加字段不进这个函数,点"恢复默认"时它会被漏掉。
+        // 取值跟「默认」主题一致。
+        settings.karaokeUnsungFollowsCoverArt = ColorTheme.defaultTheme.karaokeUnsungFollowsCoverArt
+        settings.karaokeUnsungColorHex = ColorTheme.defaultTheme.karaokeUnsungColorHex
     }
 }
 
@@ -879,84 +774,3 @@ enum OverlayStyleSummary {
 //  就是一段没人调的代码。其余几截仍在用:编辑台工具栏那几颗按钮上的摘要就是它们
 //  —— 是 `theme` / `text` / `background` / `layout` 四截,`color` 那一截随
 //  「配色」浮层一起拆成了前面的 `theme` 和 `background`。)
-
-// MARK: - 浮层外壳
-
-/// 「Aa 文字…」浮层。内容就是抽屉「文字」那一组,没有第二份实现。
-///
-/// 内容从三行(字体/粗细/字号)长到最多七行:原「配色」组里属于文字层的四行
-/// (跟随封面 / 文字颜色 / 文字描边 / 描边颜色)并了过来;加「卡拉OK效果」;
-/// 「跟随封面」搬去「主题」,现在是字体 / 粗细 / 字号 / 卡拉OK效果 / 文字颜色 /
-/// 文字描边(描边颜色)最多七行。
-/// 宽度仍吃外壳默认的 380 —— 这几行标题都很短,尾部是 Toggle / ColorPicker,横向瓶颈仍然是
-/// 原来那三行(`FontFamilyPicker` 的字体名下拉、粗细下拉、字号滑杆+读数),没有变。高度最多
-/// 七行 ≈ 340pt,在外壳 460 的上限内,不会退化成"多一条滚动条"。
-@MainActor
-struct OverlayTextPopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("文字")) {
-            OverlayTextSettingsRows()
-        }
-    }
-}
-
-/// 「主题」浮层(原「◐ 配色…」浮层拆出来的三个之一)。
-///
-/// 宽度吃外壳默认的 380:里面的 `OverlayCustomThemeRows` 有两行内联确认(130pt 输入框 +
-/// 两颗按钮),380 是它验证过的下限——那次"按钮被挤成空圆角矩形"就是在 380 的
-/// 配色浮层里踩的,修法是把那两行改成"说明一行、控件另起一行",不是把浮层拉宽。别为了跟
-/// 「背景」浮层的 420 取齐而动它,那两个数各有各的来路。
-@MainActor
-struct OverlayThemePopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("主题")) {
-            OverlayThemeSettingsRows()
-        }
-    }
-}
-
-/// 「背景」浮层(同上)。
-///
-/// **宽度 420 现在没有依据了,是个待重量的遗留值**。
-///
-/// 它当初是量出来的:内容自然宽中文 298pt / **英文 386pt**(离屏 `NSHostingView.fittingSize`,
-/// 1pt 步进的换行探测给出的英文硬下限就是 386),420 按同族浮层的既有余量取
-/// (`NotchStylePopover` +28 / `NotchEarPopover` +24 / `OverlayLayoutPopover` +32)。
-/// **但那 386 的瓶颈是「毛玻璃背景」那一行的副标题**——英文
-/// "When on, the background color tints the glass" 比中文长出 88pt,380 差 6pt、英文下当场
-/// 折成两行。同一天把那句副标题删掉,瓶颈随之消失,这个数就悬空了。
-///
-/// 现在这个浮层只剩两行短内容(背景颜色 + 色板 / 毛玻璃背景 + 开关),420 几乎肯定过宽 ——
-/// 而"浮层比内容宽出一大截"正是现象是过的那类问题(左右耳浮层从 380 收到 160 那次,原话
-/// 是「明明需要的空间很小就够了,还是占了这么多空间」)。
-///
-/// **没有顺手改成 380 或别的数**:380 是「文字」「主题」两个浮层量出来的值,不是通用基线
-/// (见 `SettingsPopoverShell.width` 的注释),照搬同样是凭感觉。要收窄就得按同一套方法论
-/// 重新离屏量一遍(中英各一次),仓库里没有现成的测量脚本,那是一次单独的改动。
-@MainActor
-struct OverlayBackgroundPopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("背景"), width: 420) {
-            OverlayBackgroundSettingsRows()
-        }
-    }
-}
-
-/// 「≣ 排版…」浮层。内容就是抽屉里那一组,没有第二份实现。
-///
-/// 宽度 460、不是另外两个浮层的 380,这是**量出来的**,别顺手拉平:
-///   - 「对齐方式」那一行的理想宽度(离屏测 `fittingSize`)中文 377pt、英文 428pt ——
-///     四选一控件本身中文 234pt / 英文 275pt,加上图标列、标题、`Spacer(minLength: 12)`
-///     和左右内边距;
-///   - 380pt 下中文标题「对齐方式」当场折成两行(离屏渲染确认过,不是估算);英文更差,
-///     420pt 时「Alignment」折三行、440pt 折两行;
-///   - 460pt 是两种语言都一行放得下、且四个选项完整可读的第一档,中文还余 83pt。
-/// 上限 460 不与外壳的 `maxHeight: 460` 相干,只是碰巧同一个数。
-@MainActor
-struct OverlayLayoutPopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("排版"), width: 460) {
-            OverlayLayoutSettingsRows()
-        }
-    }
-}

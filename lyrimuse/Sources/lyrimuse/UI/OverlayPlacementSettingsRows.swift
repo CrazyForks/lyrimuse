@@ -4,7 +4,7 @@ import SwiftUI
 // 「歌词显示 → 悬浮歌词」的「位置」一项:自由 / 顶部居中 / 底部居中 三选一。
 //
 // 跟「排版」「行为」同一个模子:一份行组件(`OverlayPlacementSettingsRows`)给两个宿主 ——
-//   ① 编辑台工具栏第二行那颗「位置 ▾」点开的浮层(`OverlayPlacementPopover`);
+//   ① 编辑台工具栏第二行那颗「位置」按钮点开的浮层(`OverlayEditorStage.stagePopoverAnchors`);
 //   ② 「全部设置」抽屉里的「位置」组(`OverlayAllSettingsDrawer.placementGroup`)。
 //
 // 生效路径跟「行为」那三个开关不同:控制器**订阅** `AppSettings.overlayPlacementMode` 自己落位
@@ -77,17 +77,5 @@ struct OverlayPlacementSegmentedControl: View {
                 .fill(Color.primary.opacity(0.06))
         )
         .fixedSize()
-    }
-}
-
-/// 编辑台工具栏第二行那颗「位置 ▾」点开的浮层。宽度跟「行为」同 420:一行「位置」+ ⓘ + 三档分段
-/// (英文 Free / Top Center / Bottom Center 三档合计约 230pt)绰绰有余,取同宽只是让第二行三颗浮层
-/// 看起来是一套。
-@MainActor
-struct OverlayPlacementPopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("位置"), width: 420) {
-            OverlayPlacementSettingsRows()
-        }
     }
 }

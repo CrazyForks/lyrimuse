@@ -128,18 +128,15 @@ final class OverlayQuickSettingsMenu: NSObject, NSMenuDelegate {
         return m
     }
 
-    /// 「配色主题」子菜单:6 个内置主题 → 用户自存主题。跟设置页「主题」浮层那份下拉同一张清单、
-    /// 同一条打勾判据:四个配色字段等于哪套就勾哪套,跟「跟随封面」开没开无关。
+    /// 「配色主题」子菜单:内置主题 → 用户自存主题,每项左边一张四段色条。跟设置页「主题」预览卡
+    /// 同一张清单、同一条选中判据(`ColorTheme.hasSameColors`,含两处「跟随封面」开关)。
     ///
-    /// 这里不放「跟随封面」:它是「文字颜色」「未唱颜色」各自的取值(设置页「文字」浮层),一个菜单项
-    /// 表达不了两处各自的开关。选主题时 `ColorTheme.apply(to:)` 会顺手关掉文字颜色的跟随封面。
+    /// 这里不单独放「跟随封面」:它是「文字颜色」「未唱颜色」各自的取值(设置页「文字」浮层),一个菜单项
+    /// 表达不了两处各自的开关;想回到跟随封面就选「默认」这类带跟随封面的主题。
     private func colorThemeMenu(_ settings: AppSettings) -> NSMenu {
         let m = NSMenu()
         m.autoenablesItems = false
-        let current = ColorTheme(
-            name: "", foregroundColorHex: settings.foregroundColorHex,
-            backgroundColorHex: settings.backgroundColorHex,
-            textStrokeEnabled: settings.textStrokeEnabled, textStrokeColorHex: settings.textStrokeColorHex)
+        let current = ColorTheme.current(settings)
         for theme in ColorTheme.builtInPresets {
             m.addItem(colorThemeItem(theme, checked: theme.hasSameColors(as: current)))
         }
@@ -158,6 +155,7 @@ final class OverlayQuickSettingsMenu: NSObject, NSMenuDelegate {
     private func colorThemeItem(_ theme: ColorTheme, checked: Bool) -> NSMenuItem {
         let item = makeItem(theme.name, symbol: "", selector: #selector(applyColorTheme(_:)))
         item.representedObject = theme
+        item.image = theme.swatchImage()
         // 两态就够,不用第三态(`.mixed` 那个短横是明确不要的)。
         item.state = checked ? .on : .off
         return item

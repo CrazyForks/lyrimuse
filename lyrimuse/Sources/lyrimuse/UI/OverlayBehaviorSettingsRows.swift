@@ -7,14 +7,12 @@ import SwiftUI
 //  已随之改口 —— `allCases` 的项数不是不变量,"自动隐藏那两行不进这个枚举"才是。)
 //
 // 为什么抽:跟 OverlayStyleSettingsRows 同一个理由 —— 这三项现在有**两个**宿主:
-//   ① 编辑台工具栏第二行「行为 ▾」点开的浮层(OverlayBehaviorPopover);
+//   ① 编辑台工具栏第二行「行为」按钮点开的浮层(OverlayEditorStage.stagePopoverAnchors);
 //   ② 「全部设置」抽屉里「行为」那一组(OverlayAllSettingsDrawer;前叫「窗口」、还带着
 //      「宽度」滑杆,同日按"抽屉分组跟工具栏一一对应"拆开),键盘/VoiceOver/"我就想找个开关"的
 //      全量兜底通路。
 // 两个宿主调的都是下面同一个 `OverlayBehaviorSettingsRows`(三个行为项 + 两行自动隐藏
 // 一起),不再各自拼一次 —— 灵动岛那边同日同一条改法(`NotchBehaviorSettingsRows`)。
-// (之前① 是编辑台正下方一张常驻卡 `OverlayBehaviorBar`,三列小格、视觉上低一级;
-//  改成跟灵动岛一致的"点开才配置",那张卡整个删掉,理由写在 OverlayBehaviorPopover 上。)
 // 两个宿主的**排版**曾经不一样(一个是三列格子、一个是标准设置行),但文案、图标和那个
 // "改了要连带让真窗口生效"的 Binding 只有下面 OverlayBehaviorItem 这一份 —— 宿主只决定
 // 怎么摆。这个仓库刚为"同一个属性两条路径"付过代价(「对齐方式」在预览条上失效),而设置项
@@ -169,7 +167,7 @@ enum OverlayBehaviorItem: String, CaseIterable, Identifiable {
 // MARK: - 「行为」组的行(浮层与抽屉同一份)
 
 /// 「行为」那一组:锁定位置 / 长按拖动 / 悬浮淡化 + 截屏/录屏时隐藏 / 暂停/无播放时隐藏。
-/// 工具栏「行为」浮层(`OverlayBehaviorPopover`)和抽屉「行为」组(`OverlayAllSettingsDrawer`)调的
+/// 编辑台「行为」浮层(`OverlayEditorStage.stagePopoverAnchors`)和抽屉「行为」组(`OverlayAllSettingsDrawer`)调的
 /// 是这同一份 —— 之前两处各自拼「三项 + 分隔线 + 自动隐藏两行」,靠注释警告别漏。
 ///
 /// 行与行之间的 `CardDivider()` 由这个组件自己插 —— 宿主只知道"这里放一组行为设置",
@@ -197,40 +195,6 @@ struct OverlayBehaviorSettingsRows: View {
             }
             CardDivider()
             AutoHideSettingsRows(surface: .desktopOverlay)
-        }
-    }
-}
-
-// MARK: - 编辑台工具栏「行为」浮层
-
-/// 编辑台工具栏第二行那颗「行为 ▾」点开的浮层。
-///
-/// **前身是编辑台正下方一张常驻卡 `OverlayBehaviorBar`**(三列小格 + 下面两行标准设置行),
-/// 改成跟灵动岛设置页一样的形态:放到上面的小按钮里,点了出现下拉框
-/// —— 灵动岛那边同一批东西(`NotchBehaviorPopover`)早就是工具栏浮层,同一类设置在两个形态
-/// 里长成两副样子,是用户读到的不一致。那张卡连同它的三列格子版式整个删掉。
-///
-/// 顺带解决了那张卡自己的一个结构性别扭:格子版式**只画"标题 + mini 开关"**,不画副标题
-/// 也不画 ⓘ 气泡,而并进来的「截屏/录屏时隐藏」两样都有 —— 那时只能把它们摆在
-/// 三列格子**外面**、走另一套版式,一张卡里两种行长相。浮层里全是标准 `SettingsRow`,五项
-/// 长相一致。
-///
-/// **宽度 420 是实测值,别拍脑袋改**:瓶颈是英文标题 "Hide During Screenshots/Recording"
-/// (216pt) + ⓘ(19pt),自动隐藏那两行的内容自然宽 271pt(中文)/ 385pt(英文),1pt 步进探出的
-/// 英文不折行硬下限是 **386**;`SettingsRow` 的标题没有 `lineLimit`,超宽的表现是**折行**不是
-/// 截断,而 ⓘ 跟标题同处一个 HStack 会垂直居中、尾部开关是 `.top` 对齐,三者当场错位。420 的
-/// 余量 +34 跟 `NotchStylePopover` +28 / `NotchEarPopover` +24 / `OverlayLayoutPopover` +32
-/// 同一档。上面那三项(锁定位置/长按拖动/悬浮淡化)都比它短,瓶颈不变。
-/// 跟 `NotchBehaviorPopover` 同宽也让两个形态的「行为」浮层看起来是一件东西。
-///
-/// 内容就是 `OverlayBehaviorSettingsRows`(跟抽屉「行为」组同一份视图);工具栏按钮的摘要
-/// `OverlayEditorStage.behaviorSummary` 要跟它算同一批五项 —— 抽屉那一组是这五项**不用点开浮层**
-/// 就能摸到的兜底入口(键盘 / VoiceOver),别顺手把它也收进浮层。
-@MainActor
-struct OverlayBehaviorPopover: View {
-    var body: some View {
-        SettingsPopoverShell(title: L10n.t("行为"), width: 420) {
-            OverlayBehaviorSettingsRows()
         }
     }
 }

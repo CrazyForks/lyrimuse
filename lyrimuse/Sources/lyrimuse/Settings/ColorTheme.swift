@@ -2,35 +2,62 @@ import AppKit
 import AppKit
 import Foundation
 
-// 经典悬浮窗"配色主题"——内置预设一键套用 + 自定义主题另存复用,这是这一类歌词/
-// 播放器 App 的常规配置(调研过五个同类实现,都有)。只打包这四个
-// "配色"相关字段(不含字体/字号——那是排版,不是配色,两者概念上不是一回事,不该被同一个
-// "主题"捆在一起改动)。textStrokeEnabled/textStrokeColorHex 对应的渲染效果是实心描边
-// (非模糊阴影,见 LyricsOverlayView.swift 的 OptionalTextStroke)。
+// 经典悬浮窗"配色主题"——内置预设一键套用 + 自定义主题另存复用。只打包配色字段:文字色
+// (= 逐字的已唱色)与它的「跟随封面」、未唱色与它的「跟随封面」、背景色、毛玻璃开关与浓淡、
+// 描边开关与描边色;不含字体/字号(那是排版,不该被同一个"主题"捆在一起改动)。
+// 毛玻璃浓淡只在主题开着毛玻璃时才套用、才参与判等:不开毛玻璃的主题不该改掉用户自己选的浓淡。
+// 「跟随封面」进主题,是为了让全新安装的那套配置(文字色跟随封面 + 白描边)本身就是一套可以
+// 套回去的主题(「默认」,排第一)。
+// textStrokeEnabled/textStrokeColorHex 对应的渲染效果是实心描边(非模糊阴影,见
+// LyricsOverlayView.swift 的 OptionalTextStroke)。
+//
+// 未唱色必须跟文字色同一套:两者是逐字歌词里同一行的两半,只换一半就会出现"浅色卡片配淡白未唱色"
+// 这种在白底上看不见的组合(见 04 章决策 33)。
 public struct ColorTheme: Codable, Identifiable, Hashable {
     public var id: String
     public var name: String
     public var foregroundColorHex: String
+    public var karaokeUnsungColorHex: String
     public var backgroundColorHex: String
+    /// 背景底下垫毛玻璃(`AppSettings.overlayBackgroundGlass`),背景色当玻璃上的着色。
+    public var backgroundGlass: Bool
+    /// 毛玻璃浓淡(`AppSettings.overlayGlassIntensity`),只在 `backgroundGlass` 开着时有意义。
+    var glassIntensity: OverlayGlassIntensity
     public var textStrokeEnabled: Bool
     public var textStrokeColorHex: String
+    /// 文字色(已唱)跟随封面主色(`AppSettings.followsCoverArt`);开着时 `foregroundColorHex` 只是备用色。
+    public var followsCoverArt: Bool
+    /// 未唱色跟随封面(`AppSettings.karaokeUnsungFollowsCoverArt`);开着时 `karaokeUnsungColorHex` 只是备用色。
+    public var karaokeUnsungFollowsCoverArt: Bool
 
-    public init(
+    /// `karaokeUnsungColorHex` 不给就取文字色淡化后的样子(`AppSettings.dimmedForegroundHex`),
+    /// 内置预设都走这条,未唱色永远跟自己的文字色成对。
+    init(
         id: String = UUID().uuidString, name: String,
-        foregroundColorHex: String, backgroundColorHex: String,
-        textStrokeEnabled: Bool, textStrokeColorHex: String
+        foregroundColorHex: String, karaokeUnsungColorHex: String? = nil, backgroundColorHex: String,
+        backgroundGlass: Bool = false, glassIntensity: OverlayGlassIntensity = .default,
+        textStrokeEnabled: Bool, textStrokeColorHex: String,
+        followsCoverArt: Bool = false, karaokeUnsungFollowsCoverArt: Bool = false
     ) {
         self.id = id
         self.name = name
         self.foregroundColorHex = foregroundColorHex
+        self.karaokeUnsungColorHex = karaokeUnsungColorHex ?? AppSettings.dimmedForegroundHex(foregroundColorHex)
         self.backgroundColorHex = backgroundColorHex
+        self.backgroundGlass = backgroundGlass
+        self.glassIntensity = glassIntensity
         self.textStrokeEnabled = textStrokeEnabled
         self.textStrokeColorHex = textStrokeColorHex
+        self.followsCoverArt = followsCoverArt
+        self.karaokeUnsungFollowsCoverArt = karaokeUnsungFollowsCoverArt
     }
 
-    // 手写解码,只为兼容改名之前存下的主题。
+    // 手写解码,兼容两类老 JSON:
     //
-    // 这两个字段早先叫 textShadowEnabled / textShadowColorHex(那会儿渲染的确是模糊阴影,
+    // 一、没有 karaokeUnsungColorHex 的主题:按文字色淡化补上,跟内置预设同一条派生规则;
+    //     没有 backgroundGlass 和两个「跟随封面」的都按关着算,没有浓淡的按默认档。
+    //
+    // 二、描边两个字段早先叫 textShadowEnabled / textShadowColorHex(那会儿渲染的确是模糊阴影,
     // 后来换成实心描边才一起改的名),改名时没做迁移 —— 于是任何在那之前存过自定义主题的
     // 用户,合成的 Codable 解到旧 JSON 会抛 keyNotFound,而 AppSettings 那边是
     // `try? JSONDecoder().decode([ColorTheme].self, …)`,**整个数组**被吞成空:界面上一个
@@ -50,13 +77,19 @@ public struct ColorTheme: Codable, Identifiable, Hashable {
         id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         name = try c.decode(String.self, forKey: .name)
         foregroundColorHex = try c.decode(String.self, forKey: .foregroundColorHex)
+        karaokeUnsungColorHex = try c.decodeIfPresent(String.self, forKey: .karaokeUnsungColorHex)
+            ?? AppSettings.dimmedForegroundHex(foregroundColorHex)
         backgroundColorHex = try c.decode(String.self, forKey: .backgroundColorHex)
+        backgroundGlass = try c.decodeIfPresent(Bool.self, forKey: .backgroundGlass) ?? false
+        glassIntensity = (try? c.decodeIfPresent(OverlayGlassIntensity.self, forKey: .glassIntensity)) ?? .default
         textStrokeEnabled = try c.decodeIfPresent(Bool.self, forKey: .textStrokeEnabled)
             ?? c.decodeIfPresent(Bool.self, forKey: .legacyTextShadowEnabled)
             ?? false
         textStrokeColorHex = try c.decodeIfPresent(String.self, forKey: .textStrokeColorHex)
             ?? c.decodeIfPresent(String.self, forKey: .legacyTextShadowColorHex)
             ?? "#000000A6"
+        followsCoverArt = try c.decodeIfPresent(Bool.self, forKey: .followsCoverArt) ?? false
+        karaokeUnsungFollowsCoverArt = try c.decodeIfPresent(Bool.self, forKey: .karaokeUnsungFollowsCoverArt) ?? false
     }
 
     // 必须手写:CodingKeys 里多了两个没有对应属性的 legacy case,合成的 encode 编不出来。
@@ -66,161 +99,196 @@ public struct ColorTheme: Codable, Identifiable, Hashable {
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
         try c.encode(foregroundColorHex, forKey: .foregroundColorHex)
+        try c.encode(karaokeUnsungColorHex, forKey: .karaokeUnsungColorHex)
         try c.encode(backgroundColorHex, forKey: .backgroundColorHex)
+        try c.encode(backgroundGlass, forKey: .backgroundGlass)
+        try c.encode(glassIntensity, forKey: .glassIntensity)
         try c.encode(textStrokeEnabled, forKey: .textStrokeEnabled)
         try c.encode(textStrokeColorHex, forKey: .textStrokeColorHex)
+        try c.encode(followsCoverArt, forKey: .followsCoverArt)
+        try c.encode(karaokeUnsungFollowsCoverArt, forKey: .karaokeUnsungFollowsCoverArt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, foregroundColorHex, backgroundColorHex
-        case textStrokeEnabled, textStrokeColorHex
+        case id, name, foregroundColorHex, karaokeUnsungColorHex, backgroundColorHex, backgroundGlass, glassIntensity
+        case textStrokeEnabled, textStrokeColorHex, followsCoverArt, karaokeUnsungFollowsCoverArt
         case legacyTextShadowEnabled = "textShadowEnabled"
         case legacyTextShadowColorHex = "textShadowColorHex"
     }
 }
 
 extension ColorTheme {
-    // id 用固定字符串(不是随手 UUID())——内置预设每次启动都是同一份字面量构造出来的
-    // 新实例,固定 id 才能让"当前配色是不是正好等于某个内置预设"这类比较(如果以后需要)
-    // 有意义;用户自己存的自定义主题才用随机 UUID(见 SettingsView 里"存为新主题"那处)。
-    // "经典黑字"跟"经典白字"对称;"白字描边"/"黑字描边"是它们各自打开描边开关的变体
-    //。defaultTheme 现在指向 `classicBlackStroke`(见下方)。
-    /// 白字 + 七成不透明黑底。被定为 `defaultTheme`(见下方)—— 全新安装长这个样子。
-    ///
-    /// 跟 classicBlack 一样单独命名而不是只躺在 builtInPresets 里:defaultTheme 要引用它,
-    /// 而"默认配色"和"预设列表里第 N 项"是两件事,不该靠数组下标耦合。
-    public static var darkCard: ColorTheme {
-        ColorTheme(
-            id: "builtin-card", name: L10n.t("深色卡片"),
-            foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#000000B3",
-            textStrokeEnabled: false, textStrokeColorHex: "#000000A6"
-        )
-    }
-
-    public static var classicBlack: ColorTheme {
-        ColorTheme(
-            id: "builtin-classic-black", name: L10n.t("经典黑字"),
-            foregroundColorHex: "#000000FF", backgroundColorHex: "#00000000",
-            // 描边色从 65% 黑改成**不透明白**——这一款的文字本来
-            // 就是黑的,黑字配黑边等于没有描边,配白边才真的能在深色壁纸上把字托出来。
-            // 描边开关依旧关着,这个颜色只是用户手动打开它时的起点。
-            textStrokeEnabled: false, textStrokeColorHex: "#FFFFFFFF"
-        )
-    }
-
-    /// "经典黑字"打开描边开关的变体——跟 `builtInPresets` 里的"黑字描边"是同一份配色,
-    /// 单独命名出来是因为 `defaultTheme`(见下方)要引用它,理由跟 `classicBlack`/
-    /// `darkCard` 单独命名的理由一样:"默认配色"和"预设列表里第 N 项"是两件事,不该靠
-    /// 数组下标耦合。
-    ///
-    /// 定为 `defaultTheme`(把自己手动调好的这套——跟随封面 + 描边——
-    /// 定为新的默认初始化配色):前景/背景直接复用 `classicBlack` 的字段,只把描边打开,
-    /// 两者的前景/背景色天然保持同步。
-    public static var classicBlackStroke: ColorTheme {
-        ColorTheme(
-            id: "builtin-classic-black-stroke", name: L10n.t("黑字描边"),
-            foregroundColorHex: classicBlack.foregroundColorHex, backgroundColorHex: classicBlack.backgroundColorHex,
-            textStrokeEnabled: true, textStrokeColorHex: classicBlack.textStrokeColorHex
-        )
-    }
-
-    // 必须是**计算属性**(`{ ... }`,每次读都重新求值)。
+    // 内置预设。第一套「默认」就是全新安装的那套配置(defaultTheme);后面六套每套一种风格,把主题能配的
+    // 几样(已唱 / 未唱 / 背景含毛玻璃 / 描边)各用出一个方向:
+    //   墨字白边  黑字 + 白描边,透明底 —— 靠描边在任何壁纸上托字;跟「默认」只差文字色不跟随封面
+    //   卡拉OK    黄色已唱 + 白色未唱 + 深色描边 —— 逐字进度一眼看得出唱到哪
+    //   夜幕卡片  白字压在近黑的实心卡片上 —— 最稳的可读性
+    //   磨砂玻璃  深灰字 + 超薄白色毛玻璃,底下透出模糊的壁纸
+    //   纸白卡片  深灰字压在暖白卡片上 —— 浅色风格
+    //   霓虹      白字 + 深洋红描边
     //
-    // 预设名走 L10n.t,而整个设置树靠 .id(L10n.current) 支持不重启切换语言;一旦这里被
-    // 求值一次就定死,名字会冻结在**进程内第一次访问**时的语言上——先用中文打开过一次
-    // 「配色主题」菜单,再切成 English,整页别的字都变了,只有这几个预设名还是中文,只能
-    // 重启 App 才恢复。L10n.swift 顶部对 current/bundle 定的是同一条规则:"每次读都重新
-    // 解析,不用 static let 一次性缓存"。
+    // 可读性底线(改色值前先复算):已唱对紧贴的底色(有描边看描边,有卡片看卡片叠在壁纸上的合成色)
+    // 最坏对比度 ≥ 6,未唱 ≥ 3.3。"最坏"取白 / 黑 / 中灰三种壁纸,毛玻璃再乘浅 / 深两种系统外观。
+    // 各套的实测值与算法见 04 章决策 34。未唱比已唱淡是逐字进度的本意,但淡到 2.4 就看不清了。
+    // id 用固定字符串:内置预设每次都是新构造的实例,固定 id 才能稳定地当 ForEach 的身份。
     //
-    // 别把它从 `static let` 改成带初始值的 `static var builtInPresets
-    // = [...]` 并注释成"每次读都重新求值" —— 那是错的:Swift 里带初始值的 `static var` 是
-    // **惰性初始化的存储属性**,只在第一次访问时求值一次(swift_once),跟 `static let`
-    // 一样会冻结,改动等于没生效,还白搭了一个可变全局状态。只有计算属性才真的重新求值。
-    //
-    // 数组体保持原缩进,所以写成 `{ [ ... ] }` 而不是另起一层——两处访问点(SettingsView
-    // 的预设列表和 currentColorThemeLabel)都在设置页渲染路径上,不在 20Hz/60fps 热路径,
-    // 每次读重建 6 个 struct + 6 次字典查表的开销可以忽略。
+    // 必须是**计算属性**(`{ ... }`,每次读都重新求值):预设名走 L10n.t,设置树靠 .id(L10n.current)
+    // 支持不重启切换语言,`static let` 或带初始值的 `static var`(惰性存储属性,只求值一次)都会把名字
+    // 冻结在进程内第一次访问时的语言上。访问点都在设置页 / 菜单渲染路径上,不在热路径,每次重建
+    // 7 个 struct 的开销可以忽略。
     public static var builtInPresets: [ColorTheme] { [
+        initialDefault,
+        inkOutline,
         ColorTheme(
-            id: "builtin-classic", name: L10n.t("经典白字"),
-            foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#00000000",
+            id: "builtin-karaoke", name: L10n.t("卡拉OK"),
+            foregroundColorHex: "#FFD60AFF", karaokeUnsungColorHex: "#FFFFFFFF", backgroundColorHex: "#00000000",
+            textStrokeEnabled: true, textStrokeColorHex: "#000000E6"
+        ),
+        ColorTheme(
+            id: "builtin-night-card", name: L10n.t("夜幕卡片"),
+            foregroundColorHex: "#FFFFFFFF", karaokeUnsungColorHex: "#FFFFFF99", backgroundColorHex: "#121214D9",
             textStrokeEnabled: false, textStrokeColorHex: "#000000A6"
         ),
-        // "经典白字"加描边(去掉"暖黄"/"赛博青"换成这两款)——
-        // 前景/背景跟"经典白字"完全一样,只是把描边开关打开;描边色沿用"经典白字"
-        // 本来就带的那个"手动打开描边时的默认色"(#000000A6),两款不是巧合重复,
-        // 是同一份配色的"描边关/描边开"两个变体。
+        // 超薄毛玻璃 + 六成白色着色 + 深灰字。毛玻璃跟系统深浅色走,着色要厚到深色外观下也压得成浅底,
+        // 字才能用深色;白字在浅色外观下几乎看不见(对比度约 1)。
         ColorTheme(
-            id: "builtin-classic-white-stroke", name: L10n.t("白字描边"),
-            foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#00000000",
-            textStrokeEnabled: true, textStrokeColorHex: "#000000A6"
-        ),
-        classicBlack,
-        classicBlackStroke,
-        darkCard,
-        // 跟"深色卡片"对称的浅色版本——同样的卡片不透明度(0xB3),前景/背景黑白对调。
-        ColorTheme(
-            id: "builtin-light-card", name: L10n.t("浅色卡片"),
-            foregroundColorHex: "#000000FF", backgroundColorHex: "#FFFFFFB3",
+            id: "builtin-frosted-glass", name: L10n.t("磨砂玻璃"),
+            foregroundColorHex: "#1C1C1EFF", karaokeUnsungColorHex: "#1C1C1EB3", backgroundColorHex: "#FFFFFF99",
+            backgroundGlass: true, glassIntensity: .ultraThin,
             textStrokeEnabled: false, textStrokeColorHex: "#FFFFFFA6"
+        ),
+        ColorTheme(
+            id: "builtin-paper-card", name: L10n.t("纸白卡片"),
+            foregroundColorHex: "#1C1C1EFF", karaokeUnsungColorHex: "#1C1C1E99", backgroundColorHex: "#F7F4EDEB",
+            textStrokeEnabled: false, textStrokeColorHex: "#FFFFFFA6"
+        ),
+        ColorTheme(
+            id: "builtin-neon", name: L10n.t("霓虹"),
+            foregroundColorHex: "#FFFFFFFF", karaokeUnsungColorHex: "#FFFFFFBF", backgroundColorHex: "#00000000",
+            textStrokeEnabled: true, textStrokeColorHex: "#B8127FFF"
         ),
     ] }
 
-    // 全新安装/"恢复默认文字与配色"/"清除所有配置"之后应该长成的样子——AppSettings.init()
-    // 和 SettingsView 的"恢复默认文字与配色"按钮都读这一个值,不再各自硬编码一遍。
-    // 也写成计算属性:眼下几个调用点只读它的十六进制色值(name 从不读),所以冻结与否
-    // 不影响现在的行为;但它是 classicBlackStroke 的别名,让两者求值语义一致,免得以后
-    // 有人读 defaultTheme.name 又踩一次上面那个语言冻结。
-    //
-    // 从 classicBlack 换成 card,从 darkCard 换回 classicBlack,
-    // 从 classicBlack 换成 classicBlackStroke(把自己实际在用的那套——
-    // 跟随封面 + 打开文字描边——定为新的默认初始化配色;`followsCoverArt` 不是 `ColorTheme`
-    // 的字段,默认值改在 `AppSettings.defaultFollowsCoverArt`,两处各自改各自的字段,理由
-    // 见那边注释)。
-    /// 首次安装、以及任何没有显式配过色的用户看到的配色。
-    ///
-    /// 历史上这几个候选的可读性策略完全不同,换的时候要知道自己在换什么:
-    ///   darkCard            白字 + 70% 黑底 —— 自带底衬,任何壁纸上都读得清
-    ///   classicBlack         纯黑字 + **全透明**背景、不描边 —— 完全依赖桌面本身够浅,
-    ///                       深色壁纸上会看不见
-    ///   classicBlackStroke  跟 classicBlack 同一份前景/背景,但打开了白色描边 —— 深色
-    ///                       壁纸上靠描边托字,比 classicBlack 更能兜底,但仍不如 darkCard
-    ///                       那种自带底衬的卡片可靠
-    /// 配色随时能在「外观」里改,描边也能单独打开,所以这是个偏好问题而非缺陷;
-    /// 但如果以后有新现象是"装上看不见歌词",先想到这里。
-    public static var defaultTheme: ColorTheme { classicBlackStroke }
+    /// 墨字白边:黑字 + 透明底 + 不透明白描边,未唱是 55% 黑。单独命名是因为 `defaultTheme` 要引用它,
+    /// "默认配色"和"预设列表里第 N 项"是两件事,不靠数组下标耦合。
+    public static var inkOutline: ColorTheme {
+        ColorTheme(
+            id: "builtin-ink-outline", name: L10n.t("墨字白边"),
+            foregroundColorHex: "#000000FF", karaokeUnsungColorHex: "#0000008C", backgroundColorHex: "#00000000",
+            textStrokeEnabled: true, textStrokeColorHex: "#FFFFFFFF"
+        )
+    }
 
-    // 跟"是不是同一个主题"(id/name)无关,只比较四个真正影响观感的字段——用来判断
-    // "当前配色是不是正好等于某个预设/自定义主题",给菜单标签当"当前生效哪个"的
-    // 展示依据(见 SettingsView 的 currentColorThemeLabel)。描边关闭时描边颜色不参与
-    // 比较:两个主题都关着描边,颜色值哪怕不同也该算"看起来一样"。
+    /// 上一轮的六套内置主题(按当时的四个字段:文字色 / 背景色 / 描边开关 / 描边色)。只给升级迁移用
+    /// (`AppSettings.migrateLegacyBuiltInTheme`):当前配色正好是其中一套时,用原名存进「我的配色主题」。
+    /// 色值必须保持当时的原样,不能跟着新预设调。
+    static var legacyBuiltInPresets: [ColorTheme] { [
+        ColorTheme(id: "legacy-classic-white", name: L10n.t("经典白字"),
+                   foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#00000000",
+                   textStrokeEnabled: false, textStrokeColorHex: "#000000A6"),
+        ColorTheme(id: "legacy-white-stroke", name: L10n.t("白字描边"),
+                   foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#00000000",
+                   textStrokeEnabled: true, textStrokeColorHex: "#000000A6"),
+        ColorTheme(id: "legacy-classic-black", name: L10n.t("经典黑字"),
+                   foregroundColorHex: "#000000FF", backgroundColorHex: "#00000000",
+                   textStrokeEnabled: false, textStrokeColorHex: "#FFFFFFFF"),
+        ColorTheme(id: "legacy-black-stroke", name: L10n.t("黑字描边"),
+                   foregroundColorHex: "#000000FF", backgroundColorHex: "#00000000",
+                   textStrokeEnabled: true, textStrokeColorHex: "#FFFFFFFF"),
+        ColorTheme(id: "legacy-dark-card", name: L10n.t("深色卡片"),
+                   foregroundColorHex: "#FFFFFFFF", backgroundColorHex: "#000000B3",
+                   textStrokeEnabled: false, textStrokeColorHex: "#000000A6"),
+        ColorTheme(id: "legacy-light-card", name: L10n.t("浅色卡片"),
+                   foregroundColorHex: "#000000FF", backgroundColorHex: "#FFFFFFB3",
+                   textStrokeEnabled: false, textStrokeColorHex: "#FFFFFFA6"),
+    ] }
+
+    /// 上一轮判"当前是哪套"的口径:只比四个字段,描边关着时不比描边色。迁移沿用它,才能认出用户当时
+    /// 在界面上看到的那个主题名。
+    func matchesLegacyFields(foregroundHex: String, backgroundHex: String, strokeEnabled: Bool, strokeHex: String) -> Bool {
+        foregroundColorHex == foregroundHex
+            && backgroundColorHex == backgroundHex
+            && textStrokeEnabled == strokeEnabled
+            && (!strokeEnabled || textStrokeColorHex == strokeHex)
+    }
+
+    /// 「默认」:全新安装的那套配置 —— 墨字白边的颜色 + 已唱、未唱都跟随封面
+    /// (`AppSettings.defaultFollowsCoverArt` / `defaultKaraokeUnsungFollowsCoverArt`)。
+    public static var initialDefault: ColorTheme {
+        let ink = inkOutline
+        return ColorTheme(
+            id: "builtin-default", name: L10n.t("默认"),
+            foregroundColorHex: ink.foregroundColorHex, karaokeUnsungColorHex: ink.karaokeUnsungColorHex,
+            backgroundColorHex: ink.backgroundColorHex,
+            textStrokeEnabled: ink.textStrokeEnabled, textStrokeColorHex: ink.textStrokeColorHex,
+            followsCoverArt: AppSettings.defaultFollowsCoverArt,
+            karaokeUnsungFollowsCoverArt: AppSettings.defaultKaraokeUnsungFollowsCoverArt
+        )
+    }
+
+    /// 首次安装、「恢复默认文字与配色」、「清除所有配置」之后的配色(AppSettings.init() 和
+    /// `OverlayStyleDefaults.restoreTextAndColors` 都读它)。备用的黑字透明底完全靠白描边托字:深色壁纸上
+    /// 不如自带底衬的卡片可靠,如果以后有"装上看不见歌词"的反馈,先想到这里。
+    public static var defaultTheme: ColorTheme { initialDefault }
+
+    // 跟"是不是同一个主题"(id/name)无关,只比较真正影响观感的配色字段——用来判断
+    // "当前配色是不是正好等于某个预设/自定义主题",给「主题」预览卡的选中框、工具栏摘要和
+    // 快捷菜单的勾当依据(`OverlayThemeSettingsRows.currentThemeLabel`)。看不见的值不参与比较:
+    // 描边关着时的描边色、跟随封面开着时的那个备用色。
     public func hasSameColors(as other: ColorTheme) -> Bool {
-        foregroundColorHex == other.foregroundColorHex
+        followsCoverArt == other.followsCoverArt
+            && (followsCoverArt || foregroundColorHex == other.foregroundColorHex)
+            && karaokeUnsungFollowsCoverArt == other.karaokeUnsungFollowsCoverArt
+            && (karaokeUnsungFollowsCoverArt || karaokeUnsungColorHex == other.karaokeUnsungColorHex)
             && backgroundColorHex == other.backgroundColorHex
+            && backgroundGlass == other.backgroundGlass
+            && (!backgroundGlass || glassIntensity == other.glassIntensity)
             && textStrokeEnabled == other.textStrokeEnabled
             && (!textStrokeEnabled || textStrokeColorHex == other.textStrokeColorHex)
     }
 
-    /// 套用这个主题——`SettingsView.AppearanceSettingsTab` 和悬浮窗快捷设置菜单
-    /// (`OverlayQuickSettingsMenu`)套用同一批内置/自定义主题,唯一实现,两处调用点都调这个方法。
+    /// 当前设置里的配色打包成一个无名主题:存为新主题、用当前配色覆盖、判断"当前是哪套"都读它。
+    @MainActor
+    static func current(_ settings: AppSettings, name: String = "") -> ColorTheme {
+        ColorTheme(
+            name: name,
+            foregroundColorHex: settings.foregroundColorHex,
+            karaokeUnsungColorHex: settings.karaokeUnsungColorHex,
+            backgroundColorHex: settings.backgroundColorHex,
+            backgroundGlass: settings.overlayBackgroundGlass,
+            glassIntensity: settings.overlayGlassIntensity,
+            textStrokeEnabled: settings.textStrokeEnabled,
+            textStrokeColorHex: settings.textStrokeColorHex,
+            followsCoverArt: settings.followsCoverArt,
+            karaokeUnsungFollowsCoverArt: settings.karaokeUnsungFollowsCoverArt
+        )
+    }
+
+    /// 套用这个主题——设置页「主题」预览卡和悬浮窗快捷设置菜单(`OverlayQuickSettingsMenu`)
+    /// 套用同一批内置/自定义主题,两处都调这个方法。
     @MainActor
     func apply(to settings: AppSettings) {
-        // 套用一个具体命名主题就是在明确表态"我要固定色,不要动态色"——顺手关掉
-        // "跟随封面"(如果开着),不然套用之后前景色看起来毫无反应,像是套用失灵了
-        // (实际上是被"跟随封面"接管了,只是用户不知道)。
-        settings.followsCoverArt = false
+        // 两处「跟随封面」按主题自己的值写:固定色主题会把它们关掉,不然套用之后颜色看起来毫无反应
+        // (被跟随封面接管了);「默认」这类跟随封面的主题则把它打开。
+        settings.followsCoverArt = followsCoverArt
+        settings.karaokeUnsungFollowsCoverArt = karaokeUnsungFollowsCoverArt
         settings.foregroundColorHex = foregroundColorHex
+        settings.karaokeUnsungColorHex = karaokeUnsungColorHex
         settings.backgroundColorHex = backgroundColorHex
+        settings.overlayBackgroundGlass = backgroundGlass
+        if backgroundGlass { settings.overlayGlassIntensity = glassIntensity }
         settings.textStrokeEnabled = textStrokeEnabled
         settings.textStrokeColorHex = textStrokeColorHex
     }
 }
 
 extension ColorTheme {
-    /// 下拉项 / 「我的配色主题」子行里的三段色条(文字 / 背景 / 描边),画法只有 ThemeSwatch 一份。
+    /// 悬浮窗快捷菜单「配色主题」子菜单条目左边的四段色条(已唱 / 未唱 / 背景 / 描边)。
     func swatchImage() -> NSImage {
         ThemeSwatch.image(
-            foregroundHex: foregroundColorHex, backgroundHex: backgroundColorHex,
+            foregroundHex: foregroundColorHex, foregroundFollowsCover: followsCoverArt,
+            unsungHex: karaokeUnsungColorHex, unsungFollowsCover: karaokeUnsungFollowsCoverArt,
+            backgroundHex: backgroundColorHex,
             strokeEnabled: textStrokeEnabled, strokeHex: textStrokeColorHex
         )
     }

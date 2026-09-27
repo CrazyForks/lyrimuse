@@ -337,6 +337,8 @@ final class AppSettings: ObservableObject {
         // 看懂),自定义配色主题数组是个例外,但用 JSON 编码成字符串(不是 Data blob)
         // 存,`defaults read` 好歹还能读出一段可辨认的 JSON 文本,不是不可读的乱码。
         static let customColorThemesJSON = "np:customColorThemesJSON"
+        // 上一轮内置主题的升级迁移跑过没有(见 migrateLegacyBuiltInTheme)。
+        static let legacyBuiltInThemesMigrated = "np:legacyBuiltInThemesMigrated"
         // 平台 id → 已配对浏览器 bundle id 集合。同样存 JSON 字符串(不是 Data),理由见
         // customColorThemesJSON 上面那条注释;Set 编码出来是 JSON 数组,`defaults read`
         // 照样能看懂。
@@ -372,12 +374,13 @@ final class AppSettings: ObservableObject {
     /// 的不变量**照旧钉着**(它锚的是阶梯和档位差没被重排),只是它锚的那一档不再是默认档。
     static let defaultOverlayFontWeight: OverlayFontWeight = .semibold
 
-    // 「跟随封面」不是 ColorTheme 的字段(那份只打包配色四项,见该类型注释),默认值
-    // 单独放这里——跟配色四项同一个理由:init() 和"恢复默认文字与配色"按钮都读它,
-    // 不再各自硬编码一遍(之前两处各自硬编码的是 false,现在都改成读这个值)。
-    // 从 false 改成 true(把自己实际在用的配置——跟随封面 + 打开
-    // 文字描边——定为新的默认初始化配色,见 ColorTheme.defaultTheme 的注释)。
-    static let defaultFollowsCoverArt = true
+    // 文字色「跟随封面」的默认值:init()、「恢复默认文字与配色」和内置主题「默认」
+    // (`ColorTheme.initialDefault`)都读它,不各自硬编码。nonisolated:`ColorTheme` 的内置预设
+    // 在非隔离上下文里构造。
+    nonisolated static let defaultFollowsCoverArt = true
+    // 未唱色「跟随封面」的默认值,同上三处都读它。两处都跟随时不会变成同一个颜色:未唱那一半取封面色
+    // 再乘 `WordKaraokeGradient.dimOpacity`(见 OverlayPlayback 的 displayKaraokeUnsungColor)。
+    nonisolated static let defaultKaraokeUnsungFollowsCoverArt = true
 
     // 灵动岛「重置」按钮(编辑台工具栏第一行)要恢复的那一批默认值——
     // 风格 + 左右耳 + 屏幕 + 全部内容开关,不含 `notchOverlayEnabled`(总开关)和
@@ -802,8 +805,7 @@ final class AppSettings: ObservableObject {
     // 已唱/未唱是两个独立的、平级的颜色,各自都能选"跟随封面"或"具体颜色"。**不要**再加一个
     // "要不要自定义未唱色"的开关卡在未唱色前面。
     //
-    // 故意**不做成 ColorTheme 的字段**——跟 `followsCoverArt` 同一个判断(见那个属性上方
-    // 注释):内置预设/自存主题不必因为多了这一项而跟着长一个新字段、多一轮迁移。
+    // 固定色值和「跟随封面」开关都是 ColorTheme 的字段(套用主题时跟文字色一起换,理由见 ColorTheme 头注)。
     @Published var karaokeUnsungFollowsCoverArt: Bool {
         didSet { defaults.set(karaokeUnsungFollowsCoverArt, forKey: Keys.karaokeUnsungFollowsCoverArt) }
     }
@@ -1438,10 +1440,8 @@ final class AppSettings: ObservableObject {
     @Published var notchExpandedContentWidth: Double {
         didSet { defaults.set(notchExpandedContentWidth, forKey: Keys.notchExpandedContentWidth) }
     }
-    // #RRGGBBAA。默认值统一取 ColorTheme.defaultTheme(现在是"深色卡片":不透明白字 +
-    // 七成不透明黑底),不在这里硬编码 —— 这一行以前写的是"默认不透明白色,跟悬浮窗原来
-    // 硬编码的 .white 视觉完全一致",而实际默认早就被换成过纯黑字、注释没跟上,导致
-    // 审计默认值时一度以为黑字是有意的设计。
+    // #RRGGBBAA。默认值统一取 ColorTheme.defaultTheme,不在这里硬编码(也别在这里复述它是哪一套,
+    // 以 ColorTheme.defaultTheme 的注释为准)。
     @Published var foregroundColorHex: String {
         didSet {
             defaults.set(foregroundColorHex, forKey: Keys.foregroundColorHex)
@@ -1504,7 +1504,8 @@ final class AppSettings: ObservableObject {
     /// karaokeUnsungColorHex 首次没有存过时的默认值:把 `foregroundHex` 的 alpha 乘上
     /// `WordKaraokeGradient.dimOpacity`,RGB 不变——数值上正好复现"加这个独立字段之前,
     /// 未唱色 = 文字颜色在 dimOpacity 下的样子"这条老行为,不管用户的文字颜色实际是什么。
-    static func dimmedForegroundHex(_ foregroundHex: String) -> String {
+    /// 纯颜色换算、不碰任何状态,所以 nonisolated:`ColorTheme` 的解码和内置预设都在非隔离上下文里调它。
+    nonisolated static func dimmedForegroundHex(_ foregroundHex: String) -> String {
         guard let rgb = NSColor(hexStringWithAlpha: foregroundHex)?.usingColorSpace(.sRGB) else {
             return "#FFFFFF59"
         }
@@ -1962,7 +1963,10 @@ final class AppSettings: ObservableObject {
         foregroundColorHex = defaults.string(forKey: Keys.foregroundColorHex) ?? ColorTheme.defaultTheme.foregroundColorHex
         backgroundColorHex = defaults.string(forKey: Keys.backgroundColorHex) ?? ColorTheme.defaultTheme.backgroundColorHex
         followsCoverArt = (defaults.object(forKey: Keys.followsCoverArt) as? Bool) ?? Self.defaultFollowsCoverArt
-        karaokeUnsungFollowsCoverArt = (defaults.object(forKey: Keys.karaokeUnsungFollowsCoverArt) as? Bool) ?? false
+        // 没存过时:全新安装取默认值;升级上来的老用户(存过未唱色 = 启动过)沿用当时的缺省 false,
+        // 否则他们的未唱色会在升级后突然改成封面色。
+        karaokeUnsungFollowsCoverArt = (defaults.object(forKey: Keys.karaokeUnsungFollowsCoverArt) as? Bool)
+            ?? (defaults.string(forKey: Keys.karaokeUnsungColorHex) == nil ? Self.defaultKaraokeUnsungFollowsCoverArt : false)
         // 这里还不能读 foregroundColorHex 算真正的默认值——Swift 的类初始化规则是"所有
         // 存储属性都赋过值之前不能读 self 的任何属性",哪怕那个属性在**这同一个 init() 里**
         // 已经在上面赋过值了。真正的派生挪到 init() 末尾(那时所有属性都已就绪,`recomputeFonts()`
@@ -2023,14 +2027,45 @@ final class AppSettings: ObservableObject {
         // 那条注释解释了为什么不能在加载阶段就读)。这一次赋值是 init() 里的第二次赋值,
         // didSet 会正常触发,顺带把下面这行要设的 karaokeUnsungColor 设好——但为了这里的
         // 意图一目了然,仍然显式再设一遍,不依赖 didSet 的副作用。
+        // 文字色还是默认那一套时,未唱色取「默认」主题里的值,全新安装的样子才等于那一套主题;
+        // 老用户改过文字色的,仍按他的文字色淡化。
         if storedKaraokeUnsungColorHex == nil {
-            karaokeUnsungColorHex = AppSettings.dimmedForegroundHex(foregroundColorHex)
+            let defaultTheme = ColorTheme.defaultTheme
+            karaokeUnsungColorHex = foregroundColorHex == defaultTheme.foregroundColorHex
+                ? defaultTheme.karaokeUnsungColorHex
+                : AppSettings.dimmedForegroundHex(foregroundColorHex)
         }
         karaokeUnsungColor = Color(hexWithAlpha: karaokeUnsungColorHex, fallback: .white.opacity(0.35))
         // 顺手把功能改名/删除之后遗留下来的死键清掉(名单和理由见
         // ConfigPortability.obsoleteDefaultsKeys)。放在最后:上面那些读取全部完成之后再动
         // UserDefaults,不会影响本次启动读到的任何值。
         ConfigPortability.pruneObsoleteDefaults()
+        // 老版本启动过必然存过未唱色(那时 init 末尾那次赋值会落盘),拿它区分"升级"和"全新安装"。
+        migrateLegacyBuiltInTheme(hadPriorLaunch: storedKaraokeUnsungColorHex != nil)
+    }
+
+    /// 内置主题换过一轮(04 章决策 34),旧的六套不再出现在列表里。升级后第一次启动时,如果当前配色
+    /// 正好是旧的某一套,就用原名存进「我的配色主题」,用户换走之后还能换回来。只跑一次;全新安装不跑
+    /// (新装的默认配色跟旧「黑字描边」四个字段相同,跑了会平白多出一套);当前配色已经是某套新预设或
+    /// 某个自存主题、或已有同名自存主题时不存。存的是用户此刻看到的完整配色(含未唱色与跟随封面),
+    /// 不是旧预设的四个字段。
+    private func migrateLegacyBuiltInTheme(hadPriorLaunch: Bool) {
+        guard !defaults.bool(forKey: Keys.legacyBuiltInThemesMigrated) else { return }
+        defaults.set(true, forKey: Keys.legacyBuiltInThemesMigrated)
+        guard hadPriorLaunch else { return }
+        let legacy = ColorTheme.legacyBuiltInPresets.first {
+            $0.matchesLegacyFields(
+                foregroundHex: foregroundColorHex, backgroundHex: backgroundColorHex,
+                strokeEnabled: textStrokeEnabled, strokeHex: textStrokeColorHex)
+        }
+        guard let legacy else { return }
+        let current = ColorTheme.current(self)
+        let known = ColorTheme.builtInPresets + customColorThemes
+        guard !known.contains(where: { $0.hasSameColors(as: current) || $0.name == legacy.name }) else { return }
+        customColorThemes.append(ColorTheme.current(self, name: legacy.name))
+        // 显式落盘:这个方法从 init 里调,别依赖 didSet 在这里一定会触发。
+        let json = (try? JSONEncoder().encode(customColorThemes)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        defaults.set(json, forKey: Keys.customColorThemesJSON)
     }
 
     // 把 lyricsOffsetStepMs(毫秒)格式成"0.2"/"0.05"/"1.0"这种干净的秒数文案——

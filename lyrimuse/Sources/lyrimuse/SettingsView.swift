@@ -2374,7 +2374,7 @@ private struct AppearanceSettingsTab: View {
             // `OverlayAllSettingsDrawer` 的头注,项数那个计数在同一个文件的 `disclosureHeader` 上。
             //
             // 别在这里长出常驻的「行为」卡或「自动隐藏」卡:锁定位置 / 长按拖动 / 悬浮淡化 + 两行
-            // 自动隐藏这五项的宿主是编辑台工具栏第二行的 `OverlayBehaviorPopover` 和抽屉的「窗口」组,
+            // 自动隐藏这五项的宿主是编辑台工具栏第二行的「行为」浮层和抽屉的「行为」组,
             // 跟灵动岛那边取齐;真源 `UI/AutoHideSettingsRows.swift`。
             OverlayAllSettingsDrawer()
         case .notch:
@@ -2948,7 +2948,7 @@ private struct AppearanceSettingsTab: View {
     // 「桌面悬浮歌词」那一整套配置卡(配色 / 我的配色主题 / 文字 / 窗口 / 恢复)不在这个文件里:
     //   - 五张卡的内容在 OverlayAllSettingsDrawer —— 默认折叠的「全部设置」抽屉。高频项已经被
     //     编辑台和工具栏浮层接管,剩下的职责只有"全量兜底通路",没有理由常年占着两屏;
-    //   - 「窗口」卡里那三个行为项在编辑台工具栏第二行的 `OverlayBehaviorPopover`。
+    //   - 「窗口」卡里那三个行为项在编辑台工具栏第二行的「行为」浮层。
     // 行本体分别在 OverlayStyleSettingsRows.swift 和 OverlayBehaviorSettingsRows.swift,那也是
     // 编辑台几个浮层用的同一份。别在这里重新长出一张同名的卡:这一段有工具栏浮层和抽屉两个
     // 宿主,多一份实现就多两处会漂的地方(理由见那两个文件顶部)。

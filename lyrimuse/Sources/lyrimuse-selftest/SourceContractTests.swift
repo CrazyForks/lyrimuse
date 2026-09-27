@@ -3617,11 +3617,11 @@ func runSourceContractTests() {
         expectEqual(csm.contains("\"EnvironmentVariables\": LyrimusePaths.collectorEnvironment"), true, "身份收口: collector 的 launchd plist 带 EnvironmentVariables")
     }
 
-    // ---- 「配色主题」下拉的色条与勾----
+    // ---- 「主题」预览卡与主题里的未唱色----
     //
-    // 下拉项 = 三段色条(文字 / 背景 / 描边)+ 名字 + 当前项打勾,勾的判据与悬浮窗快捷菜单同一条(精确匹配四字段、
-    // 跟随封面开着一个都不打)。钉住:色条只有 ThemeSwatch 一份画法、用 drawingHandler;菜单项走 Toggle(原生勾)而
-    // 不是回退成只有名字的 Button;自定义子行也带色条;快捷菜单那半边的规则还在。
+    // 主题打包文字色(已唱)/ 未唱色 / 背景色与毛玻璃 / 描边开关 / 描边色,套用时两处跟随封面一起关(04 章决策 33、34);
+    // 设置页是预览卡网格,不再是 SwiftUI `Menu` 下拉;快捷菜单每项带四段色条(AppKit `NSMenuItem.image`);
+    // 编辑台的浮层从舞台上沿往上弹、高度封顶在上方空间里,不盖住预览。
     do {
         let appDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -3629,49 +3629,89 @@ func runSourceContractTests() {
         func code(_ rel: String) -> String {
             (try? String(contentsOfFile: appDir.appendingPathComponent(rel).path, encoding: .utf8)) ?? ""
         }
-        let swatch = code("Settings/ColorThemeSwatch.swift")
-        expectEqual(swatch.isEmpty, false, "主题色条: 读得到 ColorThemeSwatch.swift")
-        expectEqual(swatch.contains("NSImage(size: size, flipped: false)"), true, "主题色条: 用 drawingHandler 画,动态色按绘制时外观解析")
-        expectEqual(swatch.contains("NSColor.separatorColor"), true, "主题色条: 外框与段间用 separatorColor,深浅菜单都看得见")
-        expectEqual(swatch.contains("if strokeEnabled {"), true, "主题色条: 描边开关决定第三段是颜色还是斜线(经典白字 vs 白字描边靠它区分)")
-        expectEqual(code("Settings/ColorTheme.swift").contains("func swatchImage() -> NSImage"), true, "主题色条: ColorTheme.swatchImage() 转发到 ThemeSwatch")
-        let rows = code("UI/OverlayStyleSettingsRows.swift")
-        // 改口径:色条**只在「我的配色主题」子行**出现,下拉项里不能有。
-        // 原断言要求"下拉项与子行都带色条",而为了给下拉项加色条把条目写成
-        // `Toggle { Label { Text } icon: { Image(nsImage:) } }` 之后,整份菜单**一个条目都画不出来**
-        // (实测,连主题名都没有 —— 失败在条目这一层,不是图标那一层)。理由、实测现象与
-        // 「真要加就走 AppKit」的替代方案,全在 OverlayStyleSettingsRows.themeItem 的注释里。
-        // 扫源码的守卫必须**先剥掉注释行**:`themeItem` 的文档注释里**故意**贴着那段写坏了的
-        // 代码(`Toggle { Label { Text } icon: { Image(nsImage:) } }`)当反面教材,不剥的话下面
-        // 每一条"不许出现 X"的断言都会被这段反面教材自己打红(实测踩到:数
-        // `theme.swatchImage()` 的出现次数,被注释里的示例多算了一次)。
+        // 扫源码的守卫先剥注释行,免得注释里提到的写法把"不许出现 X"打红。
         func stripComments(_ src: String) -> String {
             src.split(separator: "\n", omittingEmptySubsequences: false)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
                 .joined(separator: "\n")
         }
-        let rowsCode = stripComments(rows)
-        expectEqual(rowsCode.components(separatedBy: "theme.swatchImage()").count - 1, 1,
-                    "主题色条: 只在「我的配色主题」子行出现一次(下拉项不能带,会让菜单整片空白)")
-        expectEqual(rowsCode.contains("Button(theme.name) { theme.apply(to: settings) }"), true,
-                    "主题色条: 下拉项必须是纯 Button(标题)")
-        expectEqual(rowsCode.contains("Toggle(isOn: Binding("), false,
-                    "主题色条: 下拉项里不许再出现 Toggle 条目 —— 实测会让整份菜单一个条目都画不出来")
-        // 下拉里已经没有勾了(见上),原来钉"勾的判据"那条随之删除。选中反馈只剩 Menu 自己的
-        // 标题(currentThemeLabel)。**它不再被「跟随封面」短路成占位符「—」**——
-        // 跟随封面变成「文字颜色」那一行的一个取值,跟"哪套配色在生效"解耦了,
-        // 理由见 OverlayThemeSettingsRows 头注。判据扫的是剥掉注释的源码:那段头注本身反复
-        // 提到被删掉的那个短路,整份 contains 会被自己的注释骗过去。
-        expectEqual(rowsCode.contains("guard !settings.followsCoverArt"), false,
-                    "配色主题: 这一格不许再被「跟随封面」短路 —— 存了新主题却仍显示「—」就是这么来的")
-        expectEqual(rowsCode.contains("noThemeInEffectPlaceholder"), false,
-                    "配色主题: 占位符「—」删干净了,没有剩下的调用点")
+        let theme = stripComments(code("Settings/ColorTheme.swift"))
+        expectEqual(theme.contains("public var karaokeUnsungColorHex: String"), true, "主题: 未唱色是主题的字段")
+        expectEqual(theme.contains("decodeIfPresent(String.self, forKey: .karaokeUnsungColorHex)\n            ?? AppSettings.dimmedForegroundHex(foregroundColorHex)"), true,
+                    "主题: 老 JSON 没有未唱色时按文字色淡化补上,不让整个数组解码失败")
+        expectEqual(theme.contains("settings.karaokeUnsungColorHex = karaokeUnsungColorHex"), true, "主题: 套用时一并写未唱色")
+        expectEqual(theme.contains("settings.followsCoverArt = followsCoverArt"), true, "主题: 套用时按主题写文字色的跟随封面")
+        expectEqual(theme.contains("settings.karaokeUnsungFollowsCoverArt = karaokeUnsungFollowsCoverArt"), true,
+                    "主题: 套用时按主题写未唱色的跟随封面")
+        expectEqual(theme.contains("&& (followsCoverArt || foregroundColorHex == other.foregroundColorHex)"), true,
+                    "主题: 跟随封面时不比较那个看不见的备用色")
+        expectEqual(theme.contains("&& (karaokeUnsungFollowsCoverArt || karaokeUnsungColorHex == other.karaokeUnsungColorHex)"), true, "主题: 判断当前是哪套时比较未唱色")
+        expectEqual(theme.contains("settings.overlayBackgroundGlass = backgroundGlass"), true, "主题: 套用时一并写毛玻璃开关")
+        expectEqual(theme.contains("&& backgroundGlass == other.backgroundGlass"), true, "主题: 判断当前是哪套时比较毛玻璃")
+        expectEqual(theme.contains("backgroundGlass = try c.decodeIfPresent(Bool.self, forKey: .backgroundGlass) ?? false"), true,
+                    "主题: 老 JSON 没有毛玻璃字段时按关着算")
+        expectEqual(theme.contains("public static var defaultTheme: ColorTheme { initialDefault }"), true,
+                    "主题: 默认配色是内置预设里的一套,全新安装时预览卡里有一张是选中的")
+        expectEqual(theme.contains("public static var builtInPresets: [ColorTheme] { [\n        initialDefault,"), true,
+                    "主题: 「默认」排第一")
+        expectEqual(theme.contains("static var legacyBuiltInPresets: [ColorTheme]"), true,
+                    "主题: 上一轮六套内置主题的原始色值留着给升级迁移用")
+        let appSettings = stripComments(code("Settings/AppSettings.swift"))
+        expectEqual(appSettings.contains("migrateLegacyBuiltInTheme(hadPriorLaunch: storedKaraokeUnsungColorHex != nil)"), true,
+                    "主题: 升级时把正在用的旧内置主题存进「我的配色主题」,全新安装不跑")
+        expectEqual(theme.contains("karaokeUnsungFollowsCoverArt: AppSettings.defaultKaraokeUnsungFollowsCoverArt"), true,
+                    "主题: 「默认」的未唱跟随封面跟全新安装的默认值是同一个常量")
+        expectEqual(appSettings.contains("?? (defaults.string(forKey: Keys.karaokeUnsungColorHex) == nil ? Self.defaultKaraokeUnsungFollowsCoverArt : false)"), true,
+                    "主题: 未唱跟随封面的新默认只给全新安装,升级用户没存过这个键时沿用旧缺省")
+        expectEqual(theme.contains("followsCoverArt: AppSettings.defaultFollowsCoverArt"), true,
+                    "主题: 「默认」的跟随封面跟全新安装的默认值是同一个常量")
+
+        let swatch = code("Settings/ColorThemeSwatch.swift")
+        expectEqual(swatch.contains("NSImage(size: size, flipped: false)"), true, "主题色条: 用 drawingHandler 画,动态色按绘制时外观解析")
+        expectEqual(swatch.contains("NSColor.separatorColor"), true, "主题色条: 外框与段间用 separatorColor,深浅菜单都看得见")
+        expectEqual(swatch.contains("if strokeEnabled {"), true, "主题色条: 描边开关决定最后一段是颜色还是斜线(经典白字 vs 白字描边靠它区分)")
+        expectEqual(swatch.contains("private static let bandCount = 4"), true, "主题色条: 四段(已唱 / 未唱 / 背景 / 描边)")
+
+        let rows = stripComments(code("UI/OverlayStyleSettingsRows.swift"))
+        expectEqual(rows.contains("ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current))"), true,
+                    "主题: 内置与自存主题都画成预览卡,选中判据是配色全等")
+        expectEqual(rows.contains("Menu(Self.currentThemeLabel)"), false, "主题: 不再是下拉")
+        expectEqual(rows.contains("let isUnsaved = !(ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: current) }"), true,
+                    "主题: 当前配色跟哪套都对不上时才出「自定义」卡")
+        expectEqual(rows.contains("theme: ColorTheme.current(settings, name: L10n.t(\"自定义\")), isCurrent: true,"), true,
+                    "主题: 「自定义」卡用当前配色画、描选中框")
+        expectEqual(rows.contains("Toggle(isOn: Binding("), false,
+                    "主题: SwiftUI Menu 里的 Toggle 条目实测会让整份菜单画不出来(决策 21)")
+        expectEqual(rows.contains("guard !settings.followsCoverArt"), false,
+                    "配色主题: 当前是哪套不许被「跟随封面」短路")
+        expectEqual(rows.contains(".alert("), false, "主题: 命名 / 改名 / 删除确认都是内联,宿主之一是 transient 的 NSPopover")
+        expectEqual(rows.contains("Spacer(minLength: 12)\n                editorControls"), true,
+                    "主题: 命名 / 改名 / 删除确认摆在「我的配色主题」标题行右侧,不另起一行(浮层高度封顶,多一行就得滚动)")
+        let gallery = stripComments(code("UI/OverlayThemeGallery.swift"))
+        expectEqual(gallery.contains(".lyricsTextStroke("), true, "主题预览卡: 描边跟悬浮窗同一个实现")
+        expectEqual(gallery.contains("theme.karaokeUnsungColorHex"), true, "主题预览卡: 示例歌词后半截用未唱色")
+        expectEqual(gallery.contains("if theme.backgroundGlass { shape.fill(theme.glassIntensity.material) }"), true,
+                    "主题预览卡: 毛玻璃主题按主题的浓淡画出材质")
+        expectEqual(theme.contains("if backgroundGlass { settings.overlayGlassIntensity = glassIntensity }"), true,
+                    "主题: 浓淡只在主题开着毛玻璃时套用,不开毛玻璃的主题不改用户自己选的浓淡")
+        expectEqual(theme.contains("&& (!backgroundGlass || glassIntensity == other.glassIntensity)"), true,
+                    "主题: 浓淡只在毛玻璃开着时参与判等")
+        let stage = stripComments(code("UI/OverlayEditorStage.swift"))
+        expectEqual(stage.components(separatedBy: ".popover(").count - 1, 1,
+                    "编辑台浮层: 只有舞台上沿那一处锚点挂 popover,工具栏按钮上不挂(从按钮往下弹会盖住预览)")
+        expectEqual(stage.contains(".popover(isPresented: popoverBinding(target), arrowEdge: .top)"), true, "编辑台浮层: 往上弹")
+        expectEqual(stage.contains(".overlay(alignment: .top) { stagePopoverAnchors }"), true, "编辑台浮层: 锚点在舞台上沿")
+        expectEqual(stage.contains("maxHeight: popoverMaxHeight"), true,
+                    "编辑台浮层: 高度封顶在舞台上方的剩余空间里,放不下时不让系统翻下来盖住预览")
+
         let quick = code("UI/OverlayQuickSettingsMenu.swift")
-        // 快捷菜单「配色主题」子菜单跟设置页同一张清单:不放「跟随封面」,打勾只看四个配色字段。
+        // 快捷菜单「配色主题」子菜单跟设置页同一张清单:不放「跟随封面」,打勾只看配色字段。
         expectEqual(quick.contains("followsCoverArt"), false,
                     "配色主题: 快捷菜单子菜单里不再有「跟随封面」,打勾也不再被它短路")
         expectEqual(quick.contains("L10n.t(\"配色主题\"), symbol: \"paintpalette\""), true,
                     "配色主题: 快捷菜单子菜单标题跟设置页同名")
+        expectEqual(quick.contains("item.image = theme.swatchImage()"), true, "配色主题: 快捷菜单每项带四段色条")
+        expectEqual(quick.contains("let current = ColorTheme.current(settings)"), true, "配色主题: 快捷菜单与设置页共用同一份当前配色打包")
     }
 
     // ---- 诊断导出的崩溃报告段----

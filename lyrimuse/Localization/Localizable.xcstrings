@@ -3533,25 +3533,71 @@
         }
       }
     },
-    "「%@」删除后无法恢复" : {
+    "给当前配色起个名字" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ can't be recovered once deleted"
+            "value" : "Name these colors"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「%@」删除后无法恢复"
+            "value" : "给当前配色起个名字"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「%@」刪除後無法復原"
+            "value" : "給目前配色取個名字"
+          }
+        }
+      }
+    },
+    "删除「%@」？删除后无法恢复" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete “%@”? This can’t be undone."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除「%@」？删除后无法恢复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除「%@」？刪除後無法復原"
+          }
+        }
+      }
+    },
+    "调过颜色后，这里会出现「自定义」，点它就能存成主题" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After you change any colors, a Custom card appears here. Click it to save them as a theme."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调过颜色后，这里会出现「自定义」，点它就能存成主题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "調過顏色後，這裡會出現「自訂」，點它就能存成主題"
           }
         }
       }
@@ -5079,29 +5125,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "企業微信"
-          }
-        }
-      }
-    },
-    "会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saves the current text, background, and stroke colors as a theme you can reapply anytime"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会把当前的文字颜色、背景颜色、描边颜色存成一个可以随时再套用的主题"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "會把目前的文字顏色、背景顏色、描邊顏色存成一個可以隨時再套用的主題"
           }
         }
       }
@@ -8682,29 +8705,6 @@
         }
       }
     },
-    "套用" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apply"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "套用"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "套用"
-          }
-        }
-      }
-    },
     "好" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8866,28 +8866,120 @@
         }
       }
     },
-    "存为新配色主题…" : {
+    "当前配色还没存过，点一下存成主题" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Save as New Theme…"
+            "value" : "These colors aren't saved yet. Click to save them as a theme"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "存为新主题…"
+            "value" : "当前配色还没存过，点一下存成主题"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "存為新配色主題…"
+            "value" : "目前配色還沒存過，點一下存成主題"
           }
         }
       }
+    },
+    "歌词预览" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lyrics"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歌詞預覽"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "歌词预览"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "右键点主题可以改名、用当前配色覆盖或删除" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right-click a theme to rename it, overwrite it with the current colors, or delete it"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按右鍵點主題可以改名、用目前配色覆蓋或刪除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右键点主题可以改名、用当前配色覆盖或删除"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "改名…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rename…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改名…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改名…"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "用当前配色覆盖" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Overwrite with Current Colors"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用目前配色覆蓋"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用当前配色覆盖"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "存为新配色主题" : {
       "extractionState" : "manual",
@@ -17488,6 +17580,144 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "淺色卡片"
+          }
+        }
+      }
+    },
+    "墨字白边" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ink Outline"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "墨字白边"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "墨字白邊"
+          }
+        }
+      }
+    },
+    "默认" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設"
+          }
+        }
+      }
+    },
+    "夜幕卡片" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Night Card"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "夜幕卡片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "夜幕卡片"
+          }
+        }
+      }
+    },
+    "磨砂玻璃" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frosted Glass"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磨砂玻璃"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磨砂玻璃"
+          }
+        }
+      }
+    },
+    "纸白卡片" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paper Card"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "纸白卡片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "紙白卡片"
+          }
+        }
+      }
+    },
+    "霓虹" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neon"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "霓虹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "霓虹"
           }
         }
       }
