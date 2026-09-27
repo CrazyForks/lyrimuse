@@ -1019,25 +1019,10 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                 // `Color` 视图落成一个只有 backgroundColor 的 CALayer,尺寸变化零重画;底部圆角由
                 // 外层 ZStack 那道统一的 clipShape 负责,这里不必再裁。颜色取渐变的中间一档。
                 Color(hexWithAlpha: "#14212AFF", fallback: .black)
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size.width, height: size.height)
-                    // 数值跟 PlaybackCoordinator 算 accentForCoverArtBackground 时估算
-                    // 背景亮度用的是同一个常量(LocalPlaybackSource.
-                    // notchCoverArtOverlayOpacity)——两处对不上,文字对比度的估算就会
-                    // 跟实际渲染出来的背景脱节。
-                    .overlay(Color.black.opacity(LocalPlaybackSource.notchCoverArtOverlayOpacity))
-                    // 这里原来还有一道 `.clipShape(NotchHangingShape)`(决策 5 那三版排查的产物)。
-                    // 拿掉:body 末尾已对整个 ZStack 统一裁同一个形状、同一个 rect(后加
-                    // 的,见那里的注释),这道是重复的 —— 而每道 clipShape 都是一层 mask,尺寸动画
-                    // 期间每帧要重设路径(`updateClipShapes`/`MaskLayer.setClips` 占 SwiftUI 渲染
-                    // 时间的约四分之一)。上面那次 `.frame(width:height:)` 钉尺寸仍然必要:
-                    // scaledToFill 协商出的偏大 frame 不钉回来,外层裁剪同样会裁在错的边界上。
-                    // 换歌/高清替代到货都会产出一张**新的**烘焙图实例(NSImage 指针比较),
-                    // 一条过渡覆盖原来 artworkData 字节比较 + highRes 指针比较两条 ——
-                    // 顺带省掉原来每次 body 对几十~几百 KB Data 的逐字节 memcmp。
-                    .animation(.easeInOut(duration: 0.5), value: playback.blurredArtworkImage)
+                // 两层交叉淡入(`NotchCrossfadeBackdrop`):换图时旧图留在下面、新图从透明淡到不透明。
+                // 别换回 `.animation(value:)` 直接换 Image 内容 —— 那样旧图当场消失、新图从透明淡入,
+                // 中间露出上面那块打底色,同一首歌换上高清封面(两张模糊图几乎一样)时表现为整卡暗一下再亮回来。
+                NotchCrossfadeBackdrop(image: image, size: size)
             }
         } else {
             NotchHangingShape.card
@@ -3502,5 +3487,48 @@ private struct NotchEditorialLine: View {
         } else {
             label
         }
+    }
+}
+
+
+/// 灵动岛「跟随封面」背景那张模糊图,换图时两层交叉淡入:旧图不透明地留在下面,新图在上面 0.5s 从 0 淡到 1,
+/// 淡完撤掉旧图。换歌、高清替代到货都会产出一张新的烘焙图实例(`PlaybackCoordinator.blurredArtworkImage`,
+/// 按实例比较),每次都走这一条。
+///
+/// 每一层自带那道黑色压暗(`notchCoverArtOverlayOpacity`,跟 PlaybackCoordinator 估算背景亮度用的同一个常量)
+/// —— 两层都不透明,上层按透明度叠在下层上,压暗不会叠两遍。尺寸必须按 `size` 钉住:`scaledToFill` 协商出的
+/// 偏大 frame 不钉回来,外层裁剪会裁在错的边界上。
+private struct NotchCrossfadeBackdrop: View {
+    let image: NSImage
+    let size: CGSize
+
+    @State private var front: NSImage?
+    @State private var back: NSImage?
+    @State private var frontOpacity: Double = 1
+
+    var body: some View {
+        ZStack {
+            if let back { layer(back) }
+            if let front { layer(front).opacity(frontOpacity) }
+        }
+        .onAppear { front = image }
+        .onChange(of: ObjectIdentifier(image)) { _, _ in
+            back = front
+            front = image
+            frontOpacity = 0
+            withAnimation(.easeInOut(duration: 0.5)) {
+                frontOpacity = 1
+            } completion: {
+                back = nil
+            }
+        }
+    }
+
+    private func layer(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .scaledToFill()
+            .frame(width: size.width, height: size.height)
+            .overlay(Color.black.opacity(LocalPlaybackSource.notchCoverArtOverlayOpacity))
     }
 }

@@ -499,6 +499,19 @@ func runNotchTests() {
         expectEqual(S.gateRetryDelay(after: .never, round: S.fastStartRounds), YouTubeMusicAdProbe.adRefreshInterval,
                     "门槛节奏: 出了快探窗口,「不给跳」才当真、退回心跳")
 
+        // 跟随封面背景:换图两层交叉淡入,旧图不透明地留在下面 —— 直接换 Image 内容会让旧图当场消失、
+        // 露出打底色,同一首歌换上高清封面时整卡暗一下再亮回来(真机逐帧:均值 −7.6 再 +7.7)。
+        do {
+            let v = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("lyrimuse/UI/NotchLyricsView.swift"), encoding: .utf8)) ?? ""
+            expectEqual(v.contains("NotchCrossfadeBackdrop(image: image, size: size)"), true, "封面背景契约: 模糊图走两层交叉淡入")
+            expectEqual(v.contains(".animation(.easeInOut(duration: 0.5), value: playback.blurredArtworkImage)"), false,
+                        "封面背景契约: 不再直接换 Image 内容做过渡(会露出打底色)")
+            expectEqual(v.contains("if let back { layer(back) }\n            if let front { layer(front).opacity(frontOpacity) }"), true,
+                        "封面背景契约: 旧图在下、不透明;只有新图做透明度动画")
+            expectEqual(v.contains("} completion: {\n                back = nil"), true, "封面背景契约: 淡完才撤旧图")
+        }
+
         // 卡片外轮廓:照机器刘海 —— 跟刘海一样高时底部圆角 = 高 × 0.25,展开封顶 20;顶边两侧 4pt 内凹肩膀。
         typealias O = NotchOutline
         expectEqual(O.bottomRadius(height: 32, bodyWidth: 300), 8, "外轮廓: 32pt 高(14 寸刘海)底部圆角 8pt")
