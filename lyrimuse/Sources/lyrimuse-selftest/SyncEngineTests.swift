@@ -240,6 +240,49 @@ func runSyncEngineTests() {
         let group = SyncedLyricWordGroup(id: 0, words: [w1, w2], romanization: "aabb")
         expectEqual(KaraokeFill.lineFillSettledMs(words: [w1, w2], groups: [group]), 2080,
                     "lineFillSettledMs: 整组伪词(跨度 1000)的阈值 2080 盖过词级最大值 2040")
+        // 长音强调在词唱完时归零,不延后定格:(1000, 2000) 仍按填色定格在 3160。
+        let held = SyncedLyricWord(text: "lone", startMs: 1000, durationMs: 2000)
+        expectEqual(KaraokeFill.lineFillSettledMs(words: [held], groups: nil), 3160,
+                    "lineFillSettledMs: 长音强调不延后定格")
+    }
+
+    // ---- LyricsWordEmphasis: 歌词窗口的长音强调(Apple Music 实测参数,只对拉丁字母的词) ----
+    do {
+        let why = SyncedLyricWord(text: "Why, ", startMs: 0, durationMs: 800)
+        let lone = SyncedLyricWord(text: "lone", startMs: 800, durationMs: 4110)
+        let spans = LyricsWordEmphasis.spans(for: [why, lone])
+        expectEqual(spans[0], nil, "emphasis: 800ms 的词不强调")
+        expectEqual(spans[1], LyricsWordEmphasis.Span(startMs: 800, endMs: 4910), "emphasis: 4.1 秒的词强调")
+
+        // 音节拆开、中间没有空格的 token 合成一个词,整词共用同一个强调区间。
+        let a = SyncedLyricWord(text: "a", startMs: 0, durationMs: 300)
+        let rest = SyncedLyricWord(text: "lone ", startMs: 300, durationMs: 1800)
+        let merged = LyricsWordEmphasis.spans(for: [a, rest])
+        expectEqual(merged[0], LyricsWordEmphasis.Span(startMs: 0, endMs: 2100), "emphasis: 音节合成一个词")
+        expectEqual(merged[1], merged[0], "emphasis: 同一个词的 token 共用区间")
+
+        let kai = SyncedLyricWord(text: "開", startMs: 0, durationMs: 3280)
+        let te = SyncedLyricWord(text: "て", startMs: 0, durationMs: 2950)
+        expectEqual(LyricsWordEmphasis.spans(for: [kai]), [nil], "emphasis: 中文长音不强调")
+        expectEqual(LyricsWordEmphasis.spans(for: [te]), [nil], "emphasis: 日文长音不强调")
+        expectEqual(LyricsWordEmphasis.spans(for: [SyncedLyricWord(text: "I ", startMs: 0, durationMs: 3000)]), [nil],
+                    "emphasis: 单个字母的词不强调")
+        expectEqual(LyricsWordEmphasis.spans(for: [SyncedLyricWord(text: "beautifully", startMs: 0, durationMs: 3000)]), [nil],
+                    "emphasis: 超过 7 个字母的词不强调")
+
+        let span = LyricsWordEmphasis.Span(startMs: 1000, endMs: 5110)
+        expectEqual(LyricsWordEmphasis.frame(for: span, atMs: 1000), .none, "emphasis: 开唱之前没有效果")
+        let scalePeak = LyricsWordEmphasis.frame(for: span, atMs: 1000 + Int(4110 * 0.6))
+        expectEqual(abs(scalePeak.scale - (1 + min(0.07, 0.02 + 0.011 * 4.11))) < 1e-9, true,
+                    "emphasis: 55%–70% 放大在峰值")
+        let glowPeak = LyricsWordEmphasis.frame(for: span, atMs: 1000 + Int(4110 * 0.82))
+        expectEqual(abs(glowPeak.glow - 0.55) < 1e-9, true, "emphasis: 80%–85% 辉光最亮")
+        let mid = LyricsWordEmphasis.frame(for: span, atMs: 1000 + 4110 / 2)
+        expectEqual(abs(mid.extraLift - 1) < 1e-3, true, "emphasis: 额外上浮在词的一半处最高")
+        let tail = LyricsWordEmphasis.frame(for: span, atMs: 5100)
+        expectEqual(tail.scale < 1.001 && tail.glow < 0.01 && tail.extraLift < 0.01, true,
+                    "emphasis: 唱完前三样都已收回")
+        expectEqual(LyricsWordEmphasis.frame(for: span, atMs: 5110), .none, "emphasis: 唱完之后没有效果")
     }
 
     // ---- LyricDuet: 对唱歌词的左右分栏 ----

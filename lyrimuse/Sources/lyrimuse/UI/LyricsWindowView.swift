@@ -4841,12 +4841,20 @@ private struct KaraokeLineText: View {
 
     /// 这个字此刻要不要保留满速时钟。窗口两头各放宽一档粗时钟 + 一点余量:不放宽会在
     /// 字的开头漏掉最初几帧("啪"地跳出一截填色);末尾把上浮窗口也算进去 —— 填色满了
-    /// 之后字还在往上浮。
-    private func isLive(_ w: SyncedLyricWord, atMs ms: Int) -> Bool {
+    /// 之后字还在往上浮。长音强调的词拆成几个 token 时,每个 token 都要活到整个词唱完。
+    private func isLive(_ w: SyncedLyricWord, atMs ms: Int, emphasis: LyricsWordEmphasis.Span? = nil) -> Bool {
         guard isActive, !fillSettled else { return false }
         let margin = Int(Self.coarseInterval * 1000) + 80
-        let end = w.startMs + max(1, w.durationMs) + (rises ? Int(KaraokeWordText.riseWindowMs(for: w)) : 0)
-        return ms >= w.startMs - margin && ms <= end + margin
+        var end = w.startMs + max(1, w.durationMs) + (rises ? Int(KaraokeWordText.riseWindowMs(for: w)) : 0)
+        if let emphasis { end = max(end, emphasis.endMs) }
+        let start = min(w.startMs, emphasis?.startMs ?? w.startMs)
+        return ms >= start - margin && ms <= end + margin
+    }
+
+    /// 每个 token 所属的长音强调词。只有会上浮的完整布局才做(迷你版不上浮,也不强调),见 07 章决策 61。
+    private var emphasisSpans: [LyricsWordEmphasis.Span?] {
+        guard rises, !reduceMotion else { return Array(repeating: nil, count: words.count) }
+        return LyricsWordEmphasis.spans(for: words)
     }
 
     @ViewBuilder
@@ -4901,9 +4909,10 @@ private struct KaraokeLineText: View {
                     }
                 }
             } else {
+                let spans = emphasisSpans
                 ForEach(words.indices, id: \.self) { i in
                     KaraokeWordText(word: words[i], base: base, isPlaying: isPlaying,
-                                    isLive: isLive(words[i], atMs: coarseMs), staticDate: coarseDate,
+                                    isLive: isLive(words[i], atMs: coarseMs, emphasis: spans[i]), staticDate: coarseDate,
                                     fontSize: fontSize, fontFamily: fontFamily,
                                     reduceMotion: reduceMotion,
                                     displayScale: displayScale,
@@ -4911,7 +4920,8 @@ private struct KaraokeLineText: View {
                                     // 非活跃行定格全填色:视觉上就是全色 Text,
                                     // 外层 lineOpacity 负责压暗。
                                     forceFilled: !isActive,
-                                    lineSettled: fillSettled)
+                                    lineSettled: fillSettled,
+                                    emphasis: spans[i])
                 }
             }
         }
@@ -4956,6 +4966,12 @@ private struct KaraokeWordText: View {
     /// 1.08×词长的定格点),所以 settled 时直接渲染终态,不再依赖任何时间基准。
     /// 与 forceFilled 的区别:行还是当前行,浮起要**保持**不落回。
     var lineSettled: Bool = false
+    /// 这个 token 所属的长音强调词(LyricsWordEmphasis),nil = 不强调。强调在词唱完时归零,
+    /// 早于整行定格,所以定格和非当前行都直接不画强调。
+    var emphasis: LyricsWordEmphasis.Span? = nil
+
+    /// 强调辉光的模糊半径,按字号取比例。
+    private static let emphasisGlowRadiusEm: CGFloat = 0.12
 
     /// 定格全填色的 fraction:必须取 1+band 让软边**整个**越过右缘走进纯色快路径 ——
     /// 取 1.0 的话 left=1−band<1,右缘 band 段会被淡到半强度(排程式那轮修掉的隐藏 bug)。
@@ -5031,14 +5047,23 @@ private struct KaraokeWordText: View {
             let lift: CGFloat = forceFilled ? 0
                 : (lineSettled ? ((rises && !reduceMotion) ? -riseAmplitude : 0)
                                : rise(atMs: currentMs))
+            let emp: LyricsWordEmphasis.Frame = (forceFilled || lineSettled || !rises || reduceMotion)
+                ? .none
+                : (emphasis.map { LyricsWordEmphasis.frame(for: $0, atMs: currentMs) } ?? .none)
+            // 额外上浮跟普通上浮同一个幅度,同样收到整数个设备像素(慢速移动时不收会让字形发颤)。
+            let pixel = max(1, displayScale)
+            let extraLift = (CGFloat(emp.extraLift) * riseAmplitude * pixel).rounded() / pixel
             Text(word.text)
                 .font(.overlayFont(familyName: fontFamily, size: fontSize, weight: weight))
                 // Palette:纯色两端(没唱到/唱过了)复用跨帧同一实例,只有真在过渡带里的
                 // 词才现算渐变 —— 否则静态词每个粗 tick 都被迫重走样式失效。
                 .foregroundStyle(WordKaraokeGradient.palette(fg: base)
                     .style(left: fraction - band, right: fraction + band))
+                // 长音强调的放大与辉光都是渲染期效果,不参与布局。
+                .scaleEffect(emp.scale)
+                .shadow(color: base.opacity(emp.glow), radius: emp.glow > 0 ? fontSize * Self.emphasisGlowRadiusEm : 0)
                 // .offset 是渲染期位移,不参与布局 —— 字抬起来不会把整行的排版推歪。
-                .offset(y: lift)
+                .offset(y: lift - extraLift)
                 // 禁掉一切外来动画事务:填色/上浮由本时钟逐帧给真值,任何插值都是错的。
                 // 行激活瞬间 forceFilled→按时间 的取值跳变会落在行级
                 // .animation(value: distance) 的作用域里,渐变 stop 被从 1 插值回 0,
