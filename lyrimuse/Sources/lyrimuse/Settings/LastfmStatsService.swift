@@ -4247,6 +4247,7 @@ final class LastfmStatsService: ObservableObject {
             do {
                 let (data, resp) = try await URLSession.shared.data(for: req)
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                await LastfmRateLimiter.shared.reportResponse()
                 NetworkAuditLog.record(service: "lastfm", operation: method, host: url.host ?? "ws.audioscrobbler.com",
                                        statusCode: status, durationMs: Date().timeIntervalSince(requestStart) * 1000, error: nil)
                 if status == 429 {
@@ -4280,6 +4281,9 @@ final class LastfmStatsService: ObservableObject {
                 NetworkAuditLog.record(service: "lastfm", operation: method, host: url.host ?? "ws.audioscrobbler.com",
                                        statusCode: nil, durationMs: Date().timeIntervalSince(requestStart) * 1000, error: error)
                 logger.notice("\(method, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                if LastfmRequestGate.isTransportFailure(error), let seconds = await LastfmRateLimiter.shared.reportTransportFailure() {
+                    logger.notice("last.fm unreachable (repeated \(error.localizedDescription, privacy: .public)), pausing requests for \(Int(seconds), privacy: .public)s")
+                }
                 return (nil, false)
             }
         }

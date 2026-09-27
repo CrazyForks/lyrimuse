@@ -44,12 +44,12 @@ enum DirectFirstImageLoad {
         do {
             let (data, resp) = try await directSession.data(from: url)
             let status = (resp as? HTTPURLResponse)?.statusCode
-            NetworkAuditLog.record(service: "image", operation: "image-direct", host: url.host ?? "unknown",
+            NetworkAuditLog.recordSummarized(service: "image", operation: "image-direct", host: url.host ?? "unknown",
                                    statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
             guard status == 200 else { return nil }
             return NSImage(data: data)
         } catch {
-            NetworkAuditLog.record(service: "image", operation: "image-direct", host: url.host ?? "unknown",
+            NetworkAuditLog.recordSummarized(service: "image", operation: "image-direct", host: url.host ?? "unknown",
                                    statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
             return nil
         }

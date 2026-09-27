@@ -60,6 +60,17 @@ actor LastfmRateLimiter {
         gate.extendCooldown(until: Date().addingTimeInterval(cooldown))
     }
 
+    /// request() 碰到传输层失败(超时 / 连不上)时调用;连续几次后整条队列退避,见 LastfmRequestGate.noteTransportFailure。
+    /// 返回这次开始冷却的秒数(没开始冷却为 nil),给调用方记日志。
+    func reportTransportFailure() -> TimeInterval? {
+        gate.noteTransportFailure(now: Date())
+    }
+
+    /// request() 拿到任何 HTTP 响应时调用,清零传输失败的退避。
+    func reportResponse() {
+        gate.noteResponse()
+    }
+
     /// 连续重试仍被限流时整体冷却的时长,同 collector 出站闸 429 窗口的默认值。
     static let exhaustedCooldown: TimeInterval = 60
 

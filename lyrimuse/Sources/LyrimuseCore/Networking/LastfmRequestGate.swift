@@ -17,6 +17,13 @@ public struct LastfmRequestGate {
     /// 限流命中后的冷却期限:下一次放行前先等到这个时刻,整条队列一起退避。
     public private(set) var cooldownUntil: Date = .distantPast
     private var lastInteractiveAcquire: Date = .distantPast
+    private var consecutiveTransportFailures = 0
+    private var transportBackoffStep = 0
+
+    /// 连续几次传输层失败(超时 / 连不上)才开始退避。
+    public static let transportFailureThreshold = 3
+    /// 退避时长逐级加长;期间再失败只保证冷却还在,不跳级 —— 同一批在途请求一起超时只算一级。
+    public static let transportBackoff: [TimeInterval] = [15, 30, 60, 120, 300]
 
     public init() {}
 
@@ -47,6 +54,36 @@ public struct LastfmRequestGate {
     /// 并入跟 collector 共享的限流窗口(OutboundCooldownStore);nil = 共享窗口里没有有效期限。
     public mutating func adoptSharedCooldown(_ until: Date?) {
         if let until { extendCooldown(until: until) }
+    }
+
+    /// 记一次传输层失败。连续失败达到门槛、且不在冷却期内时整条队列冷却下一级时长,返回这次冷却多少秒;否则返回 nil。
+    /// 链路不通时接着发只会一个个等到超时,冷却期过了放一个出去试,还不通就再退一级。
+    public mutating func noteTransportFailure(now: Date) -> TimeInterval? {
+        consecutiveTransportFailures += 1
+        guard consecutiveTransportFailures >= Self.transportFailureThreshold, now >= cooldownUntil else { return nil }
+        let seconds = Self.transportBackoff[min(transportBackoffStep, Self.transportBackoff.count - 1)]
+        transportBackoffStep += 1
+        extendCooldown(until: now.addingTimeInterval(seconds))
+        return seconds
+    }
+
+    /// 链路层面的失败(超时、连不上、断网、DNS / TLS 失败):这类失败说明现在发了也白发,计入退避。
+    /// 取消(换页、离开页面)不算。
+    public static func isTransportFailure(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .cannotConnectToHost, .cannotFindHost, .networkConnectionLost,
+             .notConnectedToInternet, .dnsLookupFailed, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 拿到了响应(不论状态码):链路是通的,传输失败的计数和退避级数清零。
+    public mutating func noteResponse() {
+        consecutiveTransportFailures = 0
+        transportBackoffStep = 0
     }
 
     /// 此刻放行前还要等多少秒(不在冷却期为 0)。

@@ -43,4 +43,58 @@ public enum NetworkAuditLog {
             logger.notice("\(service, privacy: .public) \(operation, privacy: .public) host=\(host, privacy: .public) -> \(statusCode ?? -1, privacy: .public) (\(durationMs, privacy: .public)ms)")
         }
     }
+
+    /// 高频来源(图片)用:**成功**的请求按「来源 + 操作 + 域名」每分钟汇总成一行 `summary`,失败照旧逐条记。
+    /// 图片大多从 URLCache 出、几毫秒就返回,逐条记一个页面就是几百行,把别的审计行淹掉。
+    /// 一个窗口在下一次同键调用时结算(过了 60 秒才结算),所以最后一个窗口要等下一次调用才出现。
+    public static func recordSummarized(service: String, operation: String, host: String,
+                                        statusCode: Int?, durationMs: Double, error: Error?) {
+        if error != nil || statusCode.map({ !(200..<400).contains($0) }) == true {
+            record(service: service, operation: operation, host: host,
+                   statusCode: statusCode, durationMs: durationMs, error: error)
+            return
+        }
+        let key = "\(service) \(operation) host=\(host)"
+        summaryLock.lock()
+        var window = summaryWindows[key] ?? AuditSummaryWindow(start: Date())
+        let flushed = window.add(durationMs: durationMs, now: Date())
+        summaryWindows[key] = window
+        summaryLock.unlock()
+        if let flushed {
+            logger.notice("\(key, privacy: .public) summary \(flushed, privacy: .public)")
+        }
+    }
+
+    private static let summaryLock = NSLock()
+    nonisolated(unsafe) private static var summaryWindows: [String: AuditSummaryWindow] = [:]
+}
+
+/// `recordSummarized` 的一个汇总窗口。纯值类型,selftest 直接覆盖。
+public struct AuditSummaryWindow: Equatable {
+    public static let length: TimeInterval = 60
+    public private(set) var start: Date
+    public private(set) var durations: [Double] = []
+
+    public init(start: Date) { self.start = start }
+
+    /// 记一次成功请求。窗口开了满 `length` 时,先结算旧窗口(返回汇总文字),这一次记进新窗口;否则返回 nil。
+    public mutating func add(durationMs: Double, now: Date) -> String? {
+        var flushed: String?
+        if now.timeIntervalSince(start) >= Self.length, !durations.isEmpty {
+            flushed = Self.summary(durations, span: now.timeIntervalSince(start))
+            durations = []
+            start = now
+        } else if durations.isEmpty {
+            start = now
+        }
+        durations.append(durationMs)
+        return flushed
+    }
+
+    /// 「count=N p50_ms=… max_ms=… span_s=…」,口径跟 collector 的 api call summary 一致。
+    public static func summary(_ durations: [Double], span: TimeInterval) -> String {
+        let sorted = durations.sorted()
+        let p50 = sorted[sorted.count / 2]
+        return "count=\(sorted.count) p50_ms=\(Int(p50.rounded())) max_ms=\(Int((sorted.last ?? 0).rounded())) span_s=\(Int(span.rounded()))"
+    }
 }

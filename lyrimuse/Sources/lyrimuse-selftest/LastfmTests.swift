@@ -392,6 +392,37 @@ func runLastfmTests() {
         idle.enqueue(2, .interactive, now: t0)
         expectEqual(idle.interactiveIdle(for: 30, now: t0.addingTimeInterval(29)), false, "限速队列: 前台 30 秒内排过队")
         expectEqual(idle.interactiveIdle(for: 30, now: t0.addingTimeInterval(30)), true, "限速队列: 满 30 秒才算安静")
+
+        // 传输失败退避:连续 3 次才开始冷却;冷却期内再失败不跳级;过了冷却再失败升一级;拿到响应清零。
+        var net = G()
+        expectEqual(net.noteTransportFailure(now: t0), nil, "传输退避: 第 1 次失败不冷却")
+        expectEqual(net.noteTransportFailure(now: t0), nil, "传输退避: 第 2 次失败不冷却")
+        expectEqual(net.noteTransportFailure(now: t0), 15, "传输退避: 连续第 3 次失败冷却 15 秒")
+        expectEqual(net.waitBeforeRelease(now: t0), 15, "传输退避: 整条队列一起等")
+        expectEqual(net.noteTransportFailure(now: t0.addingTimeInterval(5)), nil,
+                    "传输退避: 同一批在途请求在冷却期内接着失败,不跳级")
+        expectEqual(net.noteTransportFailure(now: t0.addingTimeInterval(16)), 30, "传输退避: 冷却过后试探还是失败,升到 30 秒")
+        for step in 0..<10 { _ = net.noteTransportFailure(now: t0.addingTimeInterval(1_000 + Double(step) * 1_000)) }
+        expectEqual(net.noteTransportFailure(now: t0.addingTimeInterval(20_000)), 300, "传输退避: 封顶 5 分钟")
+        net.noteResponse()
+        expectEqual(net.noteTransportFailure(now: t0.addingTimeInterval(30_000)), nil, "传输退避: 拿到响应后计数清零,重新数 3 次")
+        expectEqual(G.isTransportFailure(URLError(.timedOut)), true, "传输退避: 超时算链路失败")
+        expectEqual(G.isTransportFailure(URLError(.cancelled)), false, "传输退避: 取消不算")
+    }
+
+    // ---- AuditSummaryWindow:高频请求的审计按分钟汇总 ----
+    do {
+        let t0 = Date(timeIntervalSince1970: 2_000_000)
+        var w = AuditSummaryWindow(start: t0)
+        expectEqual(w.add(durationMs: 3, now: t0), nil, "审计汇总: 窗口内不出行")
+        expectEqual(w.add(durationMs: 9, now: t0.addingTimeInterval(20)), nil, "审计汇总: 不满 60 秒不出行")
+        expectEqual(w.add(durationMs: 120, now: t0.addingTimeInterval(59)), nil, "审计汇总: 59 秒仍在窗口里")
+        expectEqual(w.add(durationMs: 5, now: t0.addingTimeInterval(61)), "count=3 p50_ms=9 max_ms=120 span_s=61",
+                    "审计汇总: 满 60 秒的下一次调用结算旧窗口")
+        expectEqual(w.durations, [5], "审计汇总: 这一次记进新窗口")
+        var idleWindow = AuditSummaryWindow(start: t0)
+        expectEqual(idleWindow.add(durationMs: 4, now: t0.addingTimeInterval(500)), nil,
+                    "审计汇总: 空窗口隔了很久才来第一次,从这一次开新窗口,不出空汇总")
     }
 
     // ---- ChartComparison / ChartMovement:「听得最多」榜单跟上一期比的名次升降 ----
