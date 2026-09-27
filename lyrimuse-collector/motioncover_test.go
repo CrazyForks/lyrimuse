@@ -33,8 +33,8 @@ func motionCoverPage(adamID string) string {
 }
 
 func TestParseMotionCover(t *testing.T) {
-	mc, ok := parseMotionCover([]byte(motionCoverPage("6773830957")), "6773830957")
-	if !ok {
+	mc, res := parseMotionCover([]byte(motionCoverPage("6773830957")), "6773830957")
+	if res != motionParseFound {
 		t.Fatal("期望解析成功")
 	}
 	if want := "https://mvod.itunes.apple.com/itunes-assets/HLSVideo211/v4/x/P1_default.m3u8"; mc.Master != want {
@@ -60,30 +60,40 @@ func TestParseMotionCover(t *testing.T) {
 // 这是 motioncover.go 文件头 2 那道防线:页面里的 videoArtwork 必须属于我们要的那张专辑。
 // 拿错专辑的动态封面比没有动态封面糟得多——那会给这首歌配上另一张专辑的画面。
 func TestParseMotionCoverRejectsForeignAlbum(t *testing.T) {
-	if mc, ok := parseMotionCover([]byte(motionCoverPage("1111111111")), "6773830957"); ok || mc.Master != "" {
-		t.Errorf("专辑 ID 对不上时不该认: ok=%v master=%q", ok, mc.Master)
+	if mc, res := parseMotionCover([]byte(motionCoverPage("1111111111")), "6773830957"); res != motionParseUnrecognized || mc.Master != "" {
+		t.Errorf("专辑 ID 对不上时不该认: res=%v master=%q", res, mc.Master)
 	}
 }
 
 func TestParseMotionCoverMissingPieces(t *testing.T) {
+	const script = `<script type="application/json" id="serialized-server-data">`
 	cases := []struct {
 		name string
 		page string
+		want motionParse
 	}{
-		{"没有 script 标签", `<html><body>nothing</body></html>`},
-		{"script 里不是合法 JSON", `<script type="application/json" id="serialized-server-data">{oops</script>`},
-		{"有 script 但没有 videoArtwork", `<script type="application/json" id="serialized-server-data">` +
-			`{"data":[{"items":[{"containerContentDescriptor":{"identifiers":{"storeAdamID":"6773830957"}}}]}]}</script>`},
-		{"videoArtwork 是空对象", `<script type="application/json" id="serialized-server-data">` +
-			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},"videoArtwork":{}}]}</script>`},
-		{"有 videoArtwork 但没有 video 字段", `<script type="application/json" id="serialized-server-data">` +
+		{"没有 script 标签", `<html><body>nothing</body></html>`, motionParseUnrecognized},
+		{"script 里不是合法 JSON", script + `{oops</script>`, motionParseUnrecognized},
+		{"条目上没有 videoArtwork 这个键", script +
+			`{"data":[{"items":[{"containerContentDescriptor":{"identifiers":{"storeAdamID":"6773830957"}}}]}]}</script>`, motionParseUnrecognized},
+		{"videoArtwork 是 null", script +
+			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},"videoArtwork":null}]}</script>`, motionParseAbsent},
+		{"videoArtwork 是空对象", script +
+			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},"videoArtwork":{}}]}</script>`, motionParseAbsent},
+		{"videoArtwork 不是对象", script +
+			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},"videoArtwork":"x"}]}</script>`, motionParseUnrecognized},
+		{"有 videoArtwork 但没有 video 字段", script +
 			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},` +
-			`"videoArtwork":{"dictionary":{"motionDetailSquare":{"previewFrame":{"url":"u"}}}}}]}</script>`},
+			`"videoArtwork":{"dictionary":{"motionDetailSquare":{"previewFrame":{"url":"u"}}}}}]}</script>`, motionParseUnrecognized},
+		{"dictionary 里换了键名", script +
+			`{"data":[{"identifiers":{"storeAdamID":"6773830957"},` +
+			`"videoArtwork":{"dictionary":{"motionSquare":{"video":"v"}}}}]}</script>`, motionParseUnrecognized},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if mc, ok := parseMotionCover([]byte(c.page), "6773830957"); ok || mc.Master != "" {
-				t.Errorf("应当解析失败: ok=%v master=%q", ok, mc.Master)
+			mc, res := parseMotionCover([]byte(c.page), "6773830957")
+			if res != c.want || mc.Master != "" {
+				t.Errorf("res=%v master=%q, want res=%v", res, mc.Master, c.want)
 			}
 		})
 	}
@@ -569,5 +579,77 @@ func TestMotionCoverUnfetchablePageIsCached(t *testing.T) {
 	}
 	if _, done := motionCoverFor(3); done {
 		t.Error("album 3: 5xx 是暂时失败,不该有定论")
+	}
+}
+
+// 页面认不出时不写缓存、这张专辑一段时间内不再抓,并记进认不出计数;认得出、确实没有时照旧记下来。
+func TestMotionCoverUnrecognizedPageIsNotCached(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch r.URL.Path {
+		case "/7":
+			fmt.Fprint(w, `<html><body>redesigned page</body></html>`)
+		case "/8":
+			fmt.Fprint(w, `<script type="application/json" id="serialized-server-data">`+
+				`{"data":[{"identifiers":{"storeAdamID":"8"},"videoArtwork":null}]}</script>`)
+		}
+	}))
+	defer srv.Close()
+	oldURL, oldPath := motionCoverPageURL, motionCoverPath
+	motionCoverPageURL = func(id int64) string { return fmt.Sprintf("%s/%d", srv.URL, id) }
+	motionCoverMu.Lock()
+	motionCoverPath = ""
+	delete(motionCoverCache, "7")
+	delete(motionCoverCache, "8")
+	delete(motionCoverUnrecognizedUntil, 7)
+	motionCoverMu.Unlock()
+	parserDriftMu.Lock()
+	delete(parserDrift, motionCoverParserName)
+	parserDriftMu.Unlock()
+	t.Cleanup(func() {
+		motionCoverPageURL = oldURL
+		motionCoverMu.Lock()
+		motionCoverPath = oldPath
+		delete(motionCoverCache, "7")
+		delete(motionCoverCache, "8")
+		delete(motionCoverUnrecognizedUntil, 7)
+		motionCoverMu.Unlock()
+		parserDriftMu.Lock()
+		delete(parserDrift, motionCoverParserName)
+		parserDriftMu.Unlock()
+	})
+
+	if _, done := motionCoverFor(7); done {
+		t.Fatal("认不出的页面不该有定论")
+	}
+	motionCoverMu.Lock()
+	_, cached := motionCoverCache["7"]
+	motionCoverMu.Unlock()
+	if cached {
+		t.Error("认不出的页面不该写进缓存")
+	}
+	parserDriftMu.Lock()
+	streak := 0
+	if e := parserDrift[motionCoverParserName]; e != nil {
+		streak = e.Streak
+	}
+	parserDriftMu.Unlock()
+	if streak != 1 {
+		t.Errorf("认不出计数 = %d, want 1", streak)
+	}
+	if _, done := motionCoverFor(7); done || hits != 1 {
+		t.Errorf("退避期内不该再抓: done=%v hits=%d", done, hits)
+	}
+
+	mc, done := motionCoverFor(8)
+	if !done || !mc.Checked || mc.Master != "" {
+		t.Errorf("album 8: done=%v mc=%+v, want 有定论且没有动态封面", done, mc)
+	}
+	parserDriftMu.Lock()
+	_, still := parserDrift[motionCoverParserName]
+	parserDriftMu.Unlock()
+	if still {
+		t.Error("认出一次之后计数应清零")
 	}
 }

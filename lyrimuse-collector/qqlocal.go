@@ -181,8 +181,12 @@ func refreshQQLocalIndexLocked(ctx context.Context) {
 	if err != nil {
 		// 库被锁 / sqlite3 不在 / 表结构变了。保留上一次的索引:它可能仍然有用,而且
 		// 重建失败是常态化的偶发(客户端切歌时正好在写),不该每次都把命中率清零。
+		if sqliteSchemaMismatch(err) {
+			noteParserUnrecognized("qq-local-library", sqliteErrorDetail(err))
+		}
 		return
 	}
+	noteParserRecognized("qq-local-library")
 	idx := map[string][]qqLocalEntry{}
 	for _, r := range rows {
 		key := qqLocalKey(r.Singer, r.Name)

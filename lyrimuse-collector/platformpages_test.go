@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -333,5 +336,33 @@ func TestWarmPlatformPagesTrackEmbedFailureNotRecorded(t *testing.T) {
 	warmPlatformPages(context.Background(), time.Unix(1_800_000_000, 0), 60, src)
 	if _, ok := platformPagesCache.Tracks[platformAlbumKey("Prince", "Sexy Dancer")]; ok {
 		t.Fatal("嵌入页没取成时不记结论,下轮再查")
+	}
+}
+
+// 嵌入页拿到了但认不出曲目表:报错(这一首不记成「查过、没有」)并记进认不出计数。
+func TestSpotifyEmbedAlbumTracksUnrecognizedPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>redesigned</body></html>`)
+	}))
+	defer srv.Close()
+	oldBase, oldClient := spotifyEmbedBaseURL, spotifyEmbedClient
+	spotifyEmbedBaseURL, spotifyEmbedClient = srv.URL+"/", srv.Client()
+	parserDriftMu.Lock()
+	delete(parserDrift, spotifyEmbedParserName)
+	parserDriftMu.Unlock()
+	t.Cleanup(func() {
+		spotifyEmbedBaseURL, spotifyEmbedClient = oldBase, oldClient
+		parserDriftMu.Lock()
+		delete(parserDrift, spotifyEmbedParserName)
+		parserDriftMu.Unlock()
+	})
+	if _, err := spotifyEmbedAlbumTracks(context.Background(), "0qGQrHicD7qXuz5VMlDuCe"); !errors.Is(err, errPageUnrecognized) {
+		t.Fatalf("err = %v, want errPageUnrecognized", err)
+	}
+	parserDriftMu.Lock()
+	e := parserDrift[spotifyEmbedParserName]
+	parserDriftMu.Unlock()
+	if e == nil || e.Streak != 1 {
+		t.Fatalf("认不出计数 = %+v, want 1", e)
 	}
 }

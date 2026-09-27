@@ -51,6 +51,11 @@ import (
 //     不是"有值才存"——跟 `appleCatalogMisses` 那条"刻意不落盘"相反,理由也不同:那边查空可能
 //     只是网络抖动,而"这张专辑没做动态封面"是个稳定事实。Apple 后来补做了怎么办?删掉缓存
 //     文件重来即可(它跟 apple-catalog 那份一样是纯派生数据)。
+//     「没有」只在**认得出这一页**时才记:这张专辑的条目上有 `videoArtwork` 这个键、值是 null 或空
+//     (实测没做动态封面的专辑就是 `"videoArtwork": null`)。缺内嵌 JSON、解不开、条目上压根没有这个键、
+//     或者 dictionary 里有东西却不是 motionDetailSquare.video,都是页面改版了,不写缓存、这张专辑
+//     motionCoverUnrecognizedBackoff 内不再抓,并记进 parserdrift.go 的计数。页面一改就把每张专辑都
+//     钉成「没有」的话,解析器修好之后也回不来。
 const (
 	// motionCoverStorefront:查哪个商店。跟 appleCatalogLookup 的 `country=cn` 保持一致 ——
 	// 同一台机器上这两条路描述的是同一个用户的同一个 Apple 商店,分开配只会漂。
@@ -60,6 +65,10 @@ const (
 	// motionCoverMaxPageBytes:页面读取上限。正常 ~330 KB,留一个数量级余量;超了就当解析失败,
 	// 免得某天 Apple 返回一个巨大的东西把内存吃掉。
 	motionCoverMaxPageBytes = 8 << 20
+	// motionCoverUnrecognizedBackoff:专辑页认不出时,这张专辑隔多久再抓一次(只记内存)。
+	motionCoverUnrecognizedBackoff = 6 * time.Hour
+	// motionCoverParserName:parserdrift.go 里这条路径的名字。
+	motionCoverParserName = "apple-album-page"
 )
 
 // motionCover:一张专辑的动态封面资源。空 Master + Checked=true 表示"查过了,这张没有"。
@@ -98,6 +107,8 @@ var (
 	motionCoverPath     string                     // 空 = 只用内存(单测/一次性子命令)
 	motionCoverDirty    bool
 	motionCoverInflight = map[int64]bool{}
+	// motionCoverUnrecognizedUntil:专辑页认不出的专辑,到这个时刻之前不再抓。受 motionCoverMu 保护。
+	motionCoverUnrecognizedUntil = map[int64]time.Time{}
 )
 
 // loadMotionCoverCache / saveMotionCoverCache:整份 map 序列化 + 临时文件原子改名,跟
@@ -157,7 +168,7 @@ func motionCoverFor(collectionID int64) (motionCover, bool) {
 		motionCoverMu.Unlock()
 		return c, true
 	}
-	if motionCoverInflight[collectionID] {
+	if motionCoverInflight[collectionID] || time.Now().Before(motionCoverUnrecognizedUntil[collectionID]) {
 		motionCoverMu.Unlock()
 		return motionCover{}, false
 	}
@@ -181,7 +192,18 @@ func motionCoverFor(collectionID int64) (motionCover, bool) {
 		log.Printf("motion-cover: album %d fetch failed: %v", collectionID, err)
 		return motionCover{}, false
 	default:
-		mc, _ = parseMotionCover(page, key)
+		var res motionParse
+		mc, res = parseMotionCover(page, key)
+		if res == motionParseUnrecognized {
+			// 页面不是认得的形状:不写缓存,见文件头 3。
+			noteParserUnrecognized(motionCoverParserName, "serialized-server-data / videoArtwork not in expected shape")
+			log.Printf("motion-cover: album %d page not recognized; retry after %s", collectionID, motionCoverUnrecognizedBackoff)
+			motionCoverMu.Lock()
+			motionCoverUnrecognizedUntil[collectionID] = time.Now().Add(motionCoverUnrecognizedBackoff)
+			motionCoverMu.Unlock()
+			return motionCover{}, false
+		}
+		noteParserRecognized(motionCoverParserName)
 	}
 	mc.Checked = true
 
@@ -707,26 +729,47 @@ func fetchAlbumPage(collectionID int64) ([]byte, error) {
 var serializedServerDataRE = regexp.MustCompile(
 	`(?s)<script type="application/json" id="serialized-server-data">(.*?)</script>`)
 
+// motionParse:专辑页解析的三种结论。
+type motionParse int
+
+const (
+	// motionParseUnrecognized:页面不是认得的形状,不能下「没有」的结论(见文件头 3)。
+	motionParseUnrecognized motionParse = iota
+	// motionParseAbsent:认得出这张专辑的条目,videoArtwork 是 null 或空。
+	motionParseAbsent
+	motionParseFound
+)
+
 // parseMotionCover 从专辑页里解出方形动态封面。wantID 是目标专辑的十进制 ID,用来确认拿到的
-// 节点确实属于它(见文件头 2)。解析不出来返回零值 + false —— 调用方据此记"这张没有"。
-func parseMotionCover(page []byte, wantID string) (motionCover, bool) {
+// 节点确实属于它(见文件头 2)。只有 motionParseFound 时第一个返回值才有内容。
+func parseMotionCover(page []byte, wantID string) (motionCover, motionParse) {
 	m := serializedServerDataRE.FindSubmatch(page)
 	if m == nil {
-		return motionCover{}, false
+		return motionCover{}, motionParseUnrecognized
 	}
 	var root any
 	if err := json.Unmarshal(m[1], &root); err != nil {
-		return motionCover{}, false
+		return motionCover{}, motionParseUnrecognized
 	}
-	node := findVideoArtwork(root, wantID)
-	if node == nil {
-		return motionCover{}, false
+	raw, present := findVideoArtwork(root, wantID)
+	if !present {
+		return motionCover{}, motionParseUnrecognized
+	}
+	node, _ := raw.(map[string]any)
+	if len(node) == 0 {
+		if raw != nil && node == nil {
+			return motionCover{}, motionParseUnrecognized
+		}
+		return motionCover{}, motionParseAbsent
 	}
 	dict, _ := node["dictionary"].(map[string]any)
+	if len(dict) == 0 {
+		return motionCover{}, motionParseAbsent
+	}
 	sq, _ := dict["motionDetailSquare"].(map[string]any)
 	video, _ := sq["video"].(string)
 	if video == "" {
-		return motionCover{}, false
+		return motionCover{}, motionParseUnrecognized
 	}
 	out := motionCover{Master: video}
 	if pf, ok := sq["previewFrame"].(map[string]any); ok {
@@ -735,28 +778,30 @@ func parseMotionCover(page []byte, wantID string) (motionCover, bool) {
 		out.TextColor, _ = pf["textColor1"].(string)
 	}
 	// 这一页 videoArtwork 旁边还挂着一个 `artwork`,**别拿它当专辑封面**,见 AlbumArtwork 字段注释。
-	return out, true
+	return out, motionParseFound
 }
 
-// findVideoArtwork:在整棵 JSON 里找 `videoArtwork`,并要求它**属于** wantID 那张专辑 ——
-// 判据是"从根到它的路径上,某个祖先的子树里出现了 storeAdamID == wantID"。
+// findVideoArtwork:在整棵 JSON 里找 `videoArtwork` 这个键,并要求它**属于** wantID 那张专辑 ——
+// 判据是"它所在的那个对象的子树里出现了 storeAdamID == wantID"。第二个返回值是找没找到这个键;
+// 值可能是 null(这张没有动态封面),由调用方区分。
 //
 // 实现成"先找到候选的父节点、再在父节点子树里搜 ID",而不是照着
 // `data/0/data/sections/0/items/0/videoArtwork` 这条实测路径硬走:那条路径是这一版页面的样子,
 // 写死等于把解析绑在 Apple 的前端结构上。
-func findVideoArtwork(root any, wantID string) map[string]any {
-	var found map[string]any
+func findVideoArtwork(root any, wantID string) (any, bool) {
+	var found any
+	present := false
 	var walk func(v any)
 	walk = func(v any) {
-		if found != nil {
+		if present {
 			return
 		}
 		switch t := v.(type) {
 		case map[string]any:
-			if va, ok := t["videoArtwork"].(map[string]any); ok && len(va) > 0 {
+			if va, ok := t["videoArtwork"]; ok {
 				// t 是 videoArtwork 的父节点(那个 item)。它的子树里该带着自己的专辑 ID。
 				if subtreeHasAdamID(t, wantID) {
-					found = va
+					found, present = va, true
 					return
 				}
 			}
@@ -770,7 +815,7 @@ func findVideoArtwork(root any, wantID string) map[string]any {
 		}
 	}
 	walk(root)
-	return found
+	return found, present
 }
 
 // subtreeHasAdamID:子树里有没有 `storeAdamID == want`(Apple 的 JSON 里它是字符串)。

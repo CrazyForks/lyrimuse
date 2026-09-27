@@ -187,8 +187,12 @@ func refreshNeteaseLocalIndexLocked(ctx context.Context) {
 	tracks, err := queryNeteaseLocalTracks(ctx, path)
 	if err != nil {
 		// 保留上一次的索引,理由同 qqlocal.go:重建失败是常态化的偶发。
+		if sqliteSchemaMismatch(err) {
+			noteParserUnrecognized("netease-local-library", sqliteErrorDetail(err))
+		}
 		return
 	}
+	noteParserRecognized("netease-local-library")
 	idx := map[string][]neteaseLocalTrack{}
 	for _, t := range tracks {
 		if t.ID == 0 || t.Name == "" || len(t.Artists) == 0 {

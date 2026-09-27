@@ -216,8 +216,10 @@ func spotifyReadCurrentState(userDir, artist, title string, shuffled bool) (upco
 	st, err := spotifyParseState(raw)
 	if err != nil {
 		log.Printf("spotify upcoming: state file not recognized (%v), falling back to album prefetch", err)
+		noteParserUnrecognized("spotify-state-file", err.Error())
 		return nil, false, false
 	}
+	noteParserRecognized("spotify-state-file")
 	seq := st.tracks
 	if shuffled {
 		if seq = spotifyApplyShuffle(st.tracks, st.shuffle); seq == nil {

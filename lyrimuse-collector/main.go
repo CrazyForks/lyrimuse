@@ -422,6 +422,7 @@ func main() {
 	// collector→App 的状态通道(眼下只报"网络不通",见 collectorstatus.go)。设置这个
 	// 路径的同时会清掉上次运行留下的文件 —— 那份状态跟这次进程无关。
 	setCollectorStatusPath(filepath.Join(filepath.Dir(*cfgPath), clientName+"-collector-status.json"))
+	setParserDriftPath(filepath.Join(filepath.Dir(*cfgPath), clientName+"-parser-drift.json"))
 	// 启动时先验一次 media-control 通道:系统更新弄坏它之后,开机第一拍就得知道该直问播放器。
 	maybeTestMediaControlChannel(true)
 	// App 侧"停止搜索"按钮的信号文件路径(见 enrichcancel.go)——跟 Swift 那边

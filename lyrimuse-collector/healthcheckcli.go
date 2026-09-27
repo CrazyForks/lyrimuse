@@ -109,6 +109,25 @@ func runHealthcheckCLI(args []string) {
 		}
 	}
 
+	// 靠解析网页 / 客户端本地文件取数的路径:常驻实例把连续认不出的记在这份文件里(parserdrift.go)。
+	// 这些路径坏了会安静地退回备用,只有这里看得出上游改了版。
+	if drift := loadParserDriftFile(filepath.Join(configDir, clientName+"-parser-drift.json")); len(drift) == 0 {
+		add("网页与本地文件解析", healthOK, "没有连续认不出的路径")
+	} else {
+		names := make([]string, 0, len(drift))
+		for name := range drift {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		parts := make([]string, 0, len(names))
+		for _, name := range names {
+			e := drift[name]
+			parts = append(parts, fmt.Sprintf("%s 连续 %d 次认不出(自 %s;%s)",
+				name, e.Streak, time.Unix(e.FirstAt, 0).Format("2006-01-02 15:04"), e.Detail))
+		}
+		add("网页与本地文件解析", healthWarn, "上游可能改版,已退回备用路径:%s", strings.Join(parts, ";"))
+	}
+
 	// 歌词导出目录:写不进去的话"歌词文件夹作为权威源"整条链路是坏的,而它不会有任何
 	// 显式报错 —— 只是每次导出都静默失败。
 	dir := features().LyricsDir

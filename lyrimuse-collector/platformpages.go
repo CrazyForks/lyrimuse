@@ -264,6 +264,8 @@ func warmPlatformPages(ctx context.Context, now time.Time, budget int, src platf
 	// 歌词缓存里还没有这首歌的专辑时不记结论(这首歌以后被解析了还能再查)。
 	embedBudget := platformPagesEmbedBudget
 	albumTrackLists := map[string][]spotifyAlbumTrack{}
+	// 这一轮取失败的嵌入页:同一张专辑的其余曲目不再重取,也不记结论。
+	albumTrackFailed := map[string]bool{}
 	seenTrack := map[string]bool{}
 	outOfBudget := false
 	for _, tr := range tracks {
@@ -316,6 +318,10 @@ func warmPlatformPages(ctx context.Context, now time.Time, budget int, src platf
 			if alb.Spotify == "" {
 				continue
 			}
+			if albumTrackFailed[alb.Spotify] {
+				settled = false
+				continue
+			}
 			list, have := albumTrackLists[alb.Spotify]
 			if !have {
 				if embedBudget <= 0 {
@@ -327,6 +333,7 @@ func warmPlatformPages(ctx context.Context, now time.Time, budget int, src platf
 				var err error
 				list, err = src.albumTracks(ctx, alb.Spotify)
 				if err != nil {
+					albumTrackFailed[alb.Spotify] = true
 					settled = false
 					continue
 				}
@@ -683,5 +690,15 @@ func spotifyEmbedAlbumTracks(ctx context.Context, albumID string) ([]spotifyAlbu
 	if err != nil {
 		return nil, err
 	}
-	return parseSpotifyEmbedAlbum(body), nil
+	tracks := parseSpotifyEmbedAlbum(body)
+	if len(tracks) == 0 {
+		// 专辑不会一首都没有:页面不是认得的形状。报错而不是回空表,这一首就不会被记成「查过、没有」。
+		noteParserUnrecognized(spotifyEmbedParserName, "__NEXT_DATA__ props.pageProps.state.data.entity.trackList missing")
+		return nil, fmt.Errorf("spotify embed album %s: %w", albumID, errPageUnrecognized)
+	}
+	noteParserRecognized(spotifyEmbedParserName)
+	return tracks, nil
 }
+
+// spotifyEmbedParserName:parserdrift.go 里这条路径的名字。
+const spotifyEmbedParserName = "spotify-embed-album"

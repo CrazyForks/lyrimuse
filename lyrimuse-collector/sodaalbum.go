@@ -58,14 +58,19 @@ func sodaAlbumTracks(artist, title, album string) ([]albumTrack, bool) {
 	}
 	tracks := sodaParseAlbumPage(page, albumID)
 	if len(tracks) == 0 {
+		noteParserUnrecognized(sodaAlbumParserName, "_ROUTER_DATA loaderData.album_page.trackList missing or album id differs")
 		return nil, false
 	}
+	noteParserRecognized(sodaAlbumParserName)
 	sodaAlbumMu.Lock()
 	sodaAlbumCache[albumID] = tracks
 	sodaAlbumMu.Unlock()
 	log.Printf("album prefetch: %q from soda album %s (%d tracks)", album, albumID, len(tracks))
 	return tracks, true
 }
+
+// sodaAlbumParserName:parserdrift.go 里这条路径的名字。
+const sodaAlbumParserName = "soda-album-share-page"
 
 // sodaCurrentAlbumID 找当前这首的专辑 id,专辑名要对得上本地标签(宽松包含,同 albumTracks 的口径)。
 func sodaCurrentAlbumID(artist, title, album string) string {
