@@ -109,6 +109,7 @@ func TestTranslationLanguageHotReloadClearsStaleMachineTranslations(t *testing.T
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	featuresReloadWork.Wait()
 	if e, _ := cacheEntry(t, machine); e.LyricsTr != "" || e.LyricsTrSource != "" {
 		t.Fatalf("旧语言的机翻该清掉: %+v", e)
 	}

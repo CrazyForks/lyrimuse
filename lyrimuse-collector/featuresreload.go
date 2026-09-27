@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -62,6 +63,9 @@ var (
 	featuresCheckedAt atomic.Int64 // 上次探盘的时刻(UnixNano)
 	featuresMTime     atomic.Int64
 	featuresSize      atomic.Int64
+	// featuresReloadWork 热重读起的清旧语言机翻任务。测试收尾前靠它等任务跑完,否则它还在读写缓存路径时
+	// 测试就把全局状态换回去了。
+	featuresReloadWork sync.WaitGroup
 )
 
 // features 取这一刻生效的配置快照。
@@ -141,6 +145,10 @@ func maybeReloadFeatures() {
 	// 译文语言换了:旧语言的机翻清掉(启动时那一遍管不到运行中的修改,见 invalidateStaleTranslations)。
 	// 放后台:这里可能正被持着 enrichMu 的调用方经 features() 调到,而清理自己要拿那把锁。
 	if prev != nil && prev.LyricsTranslationLanguage != next.LyricsTranslationLanguage {
-		go reapplyTranslationLanguage()
+		featuresReloadWork.Add(1)
+		go func() {
+			defer featuresReloadWork.Done()
+			reapplyTranslationLanguage()
+		}()
 	}
 }

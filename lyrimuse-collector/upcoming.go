@@ -197,19 +197,23 @@ func queueUpcomingEnrich(tracks []upcomingTrack) {
 		}
 		key := enrichKey(t.artist, t.title, t.album)
 		enrichMu.Lock()
+		cachedKey := key
 		_, exists := enrichCache[key]
 		if !exists {
 			// 宽松再找一次:队列里的曲目名来自**播放器自己的曲库**,跟解析时写进缓存的
 			// 拼法在繁简、中英文空格、多歌手分隔符上系统性不一致(同 albumprefetch.go
 			// 那两段注释讲的坑)。精确没命中不等于没解析过。
-			if _, found := canonicalEnrichKey(key); found {
-				exists = true
+			if alt, found := canonicalEnrichKey(key); found {
+				exists, cachedKey = true, alt
 			}
 		}
 		_, inflight := looseInflightKey(key)
 		eligible := !exists && !inflight
 		if eligible {
 			enrichInflight[key] = true
+		} else if exists {
+			// 解析过、但还没译文的(开机翻之前解析的,或上次没翻成):播到之前补上,见 translatestart.go。
+			translateUpcomingLocked(cachedKey)
 		}
 		enrichMu.Unlock()
 		if !eligible {
@@ -225,7 +229,8 @@ func queueUpcomingEnrich(tracks []upcomingTrack) {
 		// 不能拿来当这些曲目的封面(同 albumprefetch.go 的调用点)。
 		// 曲名先过 normEnrichTitle,跟 trackEnrichment 发起搜索用同一份查询词:key 里剥掉的尾括号
 		// (「（合作音乐人:X）」这类)原样发给歌词源会全部落空,落下的空条目正好占着播放时的 key。
-		go resolveEnrichAsync(withBackgroundOutbound(context.Background()), key, t.artist, normEnrichTitle(t.title), t.album, "", t.duration, false)
+		// 解析完接着排机翻,播到时译文已经在缓存里(见 translatestart.go)。
+		go resolveEnrichAsync(withBackgroundOutbound(withTranslateAfterResolve(context.Background())), key, t.artist, normEnrichTitle(t.title), t.album, "", t.duration, false)
 	}
 	// 正常路径也打一行 —— 同专辑那条路当初只在"超上限被跳过"时打日志,于是"预取到底跑没跑"
 	// 完全不可观测,排查时卡在过这一点上。

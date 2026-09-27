@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -316,8 +317,9 @@ func hasTranslatableLines(lyrics, target, artist, title string) bool {
 }
 
 // translatableMemo 记最近一次 hasTranslatableLines 的结论:needsTranslationBackfill 每轮轮询都会为正在放的
-// 那首问一次,筛选要把整首过一遍(实测一首约 0.3ms),而答案只在正文或目标语言变了才会变。只记一首就够,
-// 轮询问的一直是同一首。调用方持 enrichMu(测试里单 goroutine 直接调)。
+// 那首问一次,筛选要把整首过一遍(实测一首约 0.3ms),而答案只在正文或目标语言变了才会变。只记一首:
+// 轮询问的基本是同一首,待播预取问别的几首时挤掉它,代价是下一轮重算一次。调用方持 enrichMu(测试里
+// 单 goroutine 直接调)。
 var translatableMemo struct {
 	key, lyrics, target string
 	result              bool
@@ -407,11 +409,11 @@ func selectTranslationWork(lyrics, target, artist, title string) translationWork
 		// 不管它是不是抬头,后面的行都不该再走这条判定。
 		if text != "" && firstBodyLine {
 			firstBodyLine = false
-			if looksLikeLyricHeaderLine(text, title, artist) {
+			if looksLikeTranslationHeaderLine(text, title, artist) {
 				continue
 			}
 		}
-		if isRelaxedCreditLine(text, speakers) {
+		if isTranslationSkipLine(text, speakers) {
 			continue
 		}
 		if !lineNeedsTranslation(l.text, target) {
@@ -427,89 +429,6 @@ func selectTranslationWork(lyrics, target, artist, title string) translationWork
 		occurrences = append(occurrences, []int{i})
 	}
 	return translationWork{lines: lines, uniqueTexts: uniqueTexts, occurrences: occurrences, attempted: totalAttempted}
-}
-
-// looksLikeLyricHeaderLine 认 LRC 的抬头行 ——「曲名 - 歌手」/「歌手 - 曲名」。
-// 判据整体照搬 Swift 侧 LyricsSyncEngine.looksLikeHeaderLine(展示端靠它把抬头行藏掉),
-// 两边各维护一份的理由跟 sanitizeFilename 那对一样:纯确定性的字符串比对,没有会随时间
-// 演进的业务判断。 两条取舍必须跟着一起搬,少一条就会开始吞真歌词:
-//
-//  1. **只在第一条正文行认**。调用方负责只对第一行问。
-//  2. **曲名侧是"去括号后等值"而不是"出现在行内"**。Swift 那边的 selftest 抓到过反例:
-//     蛋堡《经典!》的真歌词「新的经典 蛋堡 x Jabberloop」里曲名和歌手都在,写成 contains
-//     就会被整行吞掉。歌手侧才用 contains,而且**不去括号** —— 抬头里歌手名常写在括号里
-//     (「First Love - 宇多田光 (宇多田ヒカル)」)。
-//
-// 抓不到的写法(曲名自带多个连字符、压根没有分隔符)是刻意放过的:宁可漏治,不可删空。
-func looksLikeLyricHeaderLine(text, title, artist string) bool {
-	if title == "" || artist == "" {
-		return false
-	}
-	lhs, rhs, ok := headerSplitLine(text)
-	if !ok {
-		return false
-	}
-	nl, nr := headerNorm(lhs), headerNorm(rhs)
-	if nl == "" || nr == "" {
-		return false
-	}
-	nt := headerNorm(stripHeaderBrackets(title))
-	na := headerNorm(artist)
-	if nt == "" || na == "" {
-		return false
-	}
-	if headerNorm(stripHeaderBrackets(lhs)) == nt && strings.Contains(nr, na) {
-		return true
-	}
-	return headerNorm(stripHeaderBrackets(rhs)) == nt && strings.Contains(nl, na)
-}
-
-// headerSplitLine 把一行切成抬头的两段:先认带空格的 " - "(抬头最常见的写法),只有它
-// **唯一**出现时才用 —— 这样「W-H-Y - 王力宏」这种曲名自带连字符的也能正确切开;没有
-// 带空格的写法时,退回"整行只有一个裸连字符"的情形(「陳柏宇-最後的擁抱」)。
-func headerSplitLine(text string) (lhs, rhs string, ok bool) {
-	if strings.Count(text, " - ") == 1 {
-		parts := strings.SplitN(text, " - ", 2)
-		return parts[0], parts[1], true
-	}
-	if strings.Count(text, " - ") == 0 && strings.Count(text, "-") == 1 {
-		parts := strings.SplitN(text, "-", 2)
-		return parts[0], parts[1], true
-	}
-	return "", "", false
-}
-
-// headerNorm 只留字母和数字再小写 —— 空格/标点/大小写在抬头和本地标签之间从来对不齐。
-func headerNorm(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
-
-// stripHeaderBrackets 去掉成对括号及其内容:抬头写的常是裸曲名,而本地标签带着
-// "(Remastered 2014)" 这类后缀,不去掉两边永远对不上。
-func stripHeaderBrackets(s string) string {
-	var b strings.Builder
-	depth := 0
-	for _, r := range s {
-		switch r {
-		case '(', '[', '（', '［':
-			depth++
-		case ')', ']', '）', '］':
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 {
-				b.WriteRune(r)
-			}
-		}
-	}
-	return b.String()
 }
 
 // machineTranslateLRCWithBase 是 machineTranslateLRC 的可注入版本,baseURL 为空时用 MyMemory 正式端点。
@@ -538,38 +457,36 @@ func machineTranslateLRCWithBase(ctx context.Context, hc *http.Client, baseURL, 
 		}
 		return full
 	}
-	// 优先端上翻译:不联网、无配额、歌词不出这台机器,而且没有 500 字符的分块限制,
-	// 整首歌一次翻完。失败(系统太老/语言包没装/helper 不在)、或者翻出来基本没动(逐行请求
-	// 互不知情,会把一部分行原样吐回来),都退到网络翻译 —— 跟下面 Google 那段同一个口径。
-	if out, err := onDeviceTranslator(ctx, appleLangCode(target), uniqueTexts); err == nil {
-		if res := assembleTranslationLRC(lines, scatter(out), totalAttempted); res.lrc != "" {
-			return res, nil
+	// out[k] 是 uniqueTexts[k] 的译文,空串 = 还没翻出来。三级按序补:
+	//  1. 端上翻译:不联网、无配额、歌词不出这台机器,没有 500 字符的分块限制。按文字系统分组各请求一次,
+	//     见 translateOnDeviceByScript。
+	//  2. 端上整组没翻成的行(系统太老 / 语言包没装 / 翻出来基本没动)交给 Google。
+	//  3. 前两级合起来还不够数(assembleTranslationLRC 那道 1/3 门槛),剩下没翻出来的行交给 MyMemory。
+	out := make([]string, len(uniqueTexts))
+	pending := translateOnDeviceByScript(ctx, target, uniqueTexts, out)
+	if len(pending) > 0 {
+		if got, err := googleTranslateLines(ctx, hc, pickTranslationTexts(uniqueTexts, pending), target); err == nil {
+			fillTranslations(out, pending, got)
+		} else if !errors.Is(err, errGoogleTranslateSkipped) {
+			log.Printf("translate: google failed, falling back to MyMemory: %v", err)
 		}
-		log.Printf("translate: on-device returned too few translated lines, falling back to network")
-	} else if !errors.Is(err, errOnDeviceUnavailable) {
-		log.Printf("translate: on-device failed, falling back to network: %v", err)
 	}
-
-	// Google 翻出了可用结果才返回;服务失败或这批内容没翻出来都继续走 MyMemory。
-	if out, err := googleTranslateLines(ctx, hc, uniqueTexts, target); err == nil {
-		if res := assembleTranslationLRC(lines, scatter(out), totalAttempted); res.lrc != "" {
-			return res, nil
-		}
-	} else if !errors.Is(err, errGoogleTranslateSkipped) {
-		log.Printf("translate: google failed, falling back to MyMemory: %v", err)
+	if res := assembleTranslationLRC(lines, scatter(out), totalAttempted); res.lrc != "" {
+		return res, nil
 	}
 
 	if myMemoryQuotaPaused(myMemoryEndpoint(baseURL), time.Now()) {
 		return translationResult{quotaReached: true}, nil
 	}
-	chunks := chunkForTranslation(uniqueTexts)
+	rest := untranslatedIndexes(uniqueTexts, out)
+	chunks := chunkForTranslation(pickTranslationTexts(uniqueTexts, rest))
 	if len(chunks) > translateMaxChunks {
 		return translationResult{}, fmt.Errorf("lyrics too long: %d chunks", len(chunks))
 	}
 
-	translated := make([]string, 0, len(uniqueTexts))
+	translated := make([]string, 0, len(rest))
 	for _, chunk := range chunks {
-		out, quota, err := translateChunk(ctx, hc, baseURL, chunk, target)
+		got, quota, err := translateChunk(ctx, hc, baseURL, chunk, target)
 		if quota {
 			return translationResult{quotaReached: true}, nil
 		}
@@ -578,13 +495,98 @@ func machineTranslateLRCWithBase(ctx context.Context, hc *http.Client, baseURL, 
 		}
 		// 行数对不上就整块作废,用原文占位 —— 错位的译文比没有译文更糟:第 3 行的中文
 		// 挂在第 5 行的歌词下面,用户没法察觉是错的,只会觉得翻译很离谱。
-		if len(out) != len(chunk) {
-			out = chunk
+		if len(got) != len(chunk) {
+			got = chunk
 		}
-		translated = append(translated, out...)
+		translated = append(translated, got...)
 	}
+	fillTranslations(out, rest, translated)
+	return assembleTranslationLRC(lines, scatter(out), totalAttempted), nil
+}
 
-	return assembleTranslationLRC(lines, scatter(translated), totalAttempted), nil
+// translateOnDeviceByScript 按文字系统(dominantScript)把 texts 分组,每组单独送端上翻译;翻成的写进 out,
+// 返回整组没翻成的下标(升序)。
+//
+// 分组是因为 helper 对整批只识别一个源语言:日文夹英文的歌整批认成日文,英文行原样退回;整份又能过
+// 1/3 的门槛,于是英文行永远没有译文。一组翻出来的不到三分之一就算这组没翻成,跟 assembleTranslationLRC
+// 同一个口径。
+func translateOnDeviceByScript(ctx context.Context, target string, texts []string, out []string) []int {
+	var pending []int
+	for _, group := range groupTextsByScript(texts) {
+		batch := pickTranslationTexts(texts, group)
+		got, err := onDeviceTranslator(ctx, appleLangCode(target), batch)
+		if err == nil && translatedEnough(batch, got) {
+			fillTranslations(out, group, got)
+			continue
+		}
+		if err == nil {
+			log.Printf("translate: on-device returned too few translated lines, falling back to network")
+		} else if !errors.Is(err, errOnDeviceUnavailable) {
+			log.Printf("translate: on-device failed, falling back to network: %v", err)
+		}
+		pending = append(pending, group...)
+	}
+	sort.Ints(pending)
+	return pending
+}
+
+// groupTextsByScript 按 dominantScript 分组,组按首次出现的次序排,组内保持原顺序。
+func groupTextsByScript(texts []string) [][]int {
+	var groups [][]int
+	at := map[lyricScript]int{}
+	for i, t := range texts {
+		s := dominantScript(t)
+		g, ok := at[s]
+		if !ok {
+			g = len(groups)
+			at[s] = g
+			groups = append(groups, nil)
+		}
+		groups[g] = append(groups[g], i)
+	}
+	return groups
+}
+
+// translatedEnough:翻出来(非空、跟原文不同)的行不少于三分之一。
+func translatedEnough(batch, got []string) bool {
+	if len(got) != len(batch) {
+		return false
+	}
+	written := 0
+	for i := range batch {
+		if t := strings.TrimSpace(got[i]); t != "" && t != batch[i] {
+			written++
+		}
+	}
+	return written > 0 && written*3 >= len(batch)
+}
+
+func pickTranslationTexts(texts []string, idx []int) []string {
+	out := make([]string, len(idx))
+	for j, k := range idx {
+		out[j] = texts[k]
+	}
+	return out
+}
+
+// fillTranslations 把按 idx 顺序排的译文写回 out;got 比 idx 短时多出来的下标不动。
+func fillTranslations(out []string, idx []int, got []string) {
+	for j, k := range idx {
+		if j < len(got) {
+			out[k] = got[j]
+		}
+	}
+}
+
+// untranslatedIndexes:out 里还没翻出来(空串或跟原文一样)的下标。
+func untranslatedIndexes(texts, out []string) []int {
+	var idx []int
+	for k := range texts {
+		if t := strings.TrimSpace(out[k]); t == "" || t == texts[k] {
+			idx = append(idx, k)
+		}
+	}
+	return idx
 }
 
 // assembleTranslationLRC 把逐行译文拼回一份跟主歌词同时间戳的 LRC。两条翻译路径(端上
@@ -754,7 +756,7 @@ const (
 // 播放时按新语言重翻。
 //
 // 为什么需要:needsTranslationBackfill 本来就能判出"记录的语言 != 当前目标"并触发重翻,
-// 但那道判断只在**播放到这首歌时**才跑(见 enrich.go 主循环里那串 else if)。于是用户把
+// 但那道判断只在**播放到这首歌、或它排在待播队列里时**才跑(见 translatestart.go)。于是用户把
 // 译文语言从英文改回中文之后,以前听过的歌仍然显示英文译文,直到碰巧再放一次 ——
 // 现象是的就是这个。当时实测本机缓存:12 条语言不匹配,其中 11 条"会在下次播放时重翻",
 // 也就是机制在、只是没有触发的机会。
@@ -876,11 +878,11 @@ func myMemoryLangCode(iso string) string {
 // backfillTranslation 后台给一条已有歌词、但没有译文的记录补一份机翻。
 //
 // 跟 backfillPeripheralFields / rescoreLyrics 同一个范式(inflight 去重 + 重新取锁 +
-// 条目可能已被删)。不管成没成都记一次尝试,否则真的翻不出来的歌会每次播放都重试。
+// 条目可能已被删),去重用的是自己的 translationInflight(见 translatestart.go)。不管成没成都记一次尝试,否则真的翻不出来的歌会每次播放都重试。
 func backfillTranslation(key string) {
 	defer func() {
 		enrichMu.Lock()
-		delete(enrichInflight, key)
+		delete(translationInflight, key)
 		enrichMu.Unlock()
 	}()
 	enrichMu.Lock()
@@ -961,6 +963,9 @@ func backfillTranslation(key string) {
 		e.LyricsTr = res.lrc
 		e.LyricsTrSource = lyricsTrSourceMachine
 		e.LyricsTrLang = target
+		// 节流与次数只管没翻成的歌。翻成了就清零:之后正文被重打分 / 升级换掉、译文跟着清空时,
+		// 下一次轮询就能按新正文重翻,不用等 6 小时。
+		e.TranslationTS, e.TranslationRetryCount = 0, 0
 		lyricsChanged = true
 		log.Printf("translate: %s got a machine translation (%d lines)", key, strings.Count(res.lrc, "\n")+1)
 	}

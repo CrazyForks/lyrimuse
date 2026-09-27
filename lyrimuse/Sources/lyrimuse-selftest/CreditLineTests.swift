@@ -187,6 +187,19 @@ func runCreditLineTests() {
         expectEqual(LyricsSyncEngine.looksLikeHeaderLine("陳柏宇-最後的擁抱",
                     trackTitle: "最后的拥抱", trackArtist: "陈柏宇"), true,
                     "抬头: 歌手在前、无空格、且繁体")
+        // ⑦ 短拉丁歌手名:整串标签不受拉丁段 ≥4 字的下限。
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("Jam - 带不走的风景",
+                    trackTitle: "带不走的风景", trackArtist: "Jam"), true, "抬头: 三个字母的歌手名")
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("Smoking on my Ex Pack (Explicit) - SZA",
+                    trackTitle: "Smoking on my Ex Pack", trackArtist: "SZA"), true, "抬头: 三个字母的歌手名在后")
+        // ⑧ 多词歌名带 Apple Music 的「 - 版本」尾巴,抬头只写前半。
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("Love Outrolude - 方大同",
+                    trackTitle: "Love Outrolude - Instrumental", trackArtist: "方大同"), true,
+                    "抬头: 歌名的「 - 版本」尾巴")
+        // ⑨ 抬头把歌名的一部分写进括号。
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("蔡健雅 - 达尔文 II (进化版)",
+                    trackTitle: "达尔文 II 进化版", trackArtist: "蔡健雅"), true,
+                    "抬头: 歌名的一部分在括号里")
     }
 
     do {
@@ -203,6 +216,14 @@ func runCreditLineTests() {
         expectEqual(LyricsSyncEngine.looksLikeHeaderLine("我 - 你 - 他都在等",
                     trackTitle: "我", trackArtist: "某人"), false,
                     "抬头(反向): 多个连字符不算两段形状")
+        // 拆出来的短段仍受下限:「Tyler, The Creator」拆出的「The」不能拿去配。
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("Hello - The night",
+                    trackTitle: "Hello", trackArtist: "Tyler, The Creator"), false,
+                    "抬头(反向): 歌手标签拆出的短词不算歌手名")
+        // 歌手名换了语种:显示端宁可不删。
+        expectEqual(LyricsSyncEngine.looksLikeHeaderLine("Throw It Off - 方大同",
+                    trackTitle: "Throw It Off", trackArtist: "Khalil Fong"), false,
+                    "抬头(反向): 歌手名对不上就不删")
     }
 
     do {

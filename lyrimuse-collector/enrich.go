@@ -676,10 +676,9 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		} else if needsLyricsRetry(e, wrongDuration, pinned, features().LyricsAutoUpgrade) && !enrichInflight[key] {
 			enrichInflight[key] = true
 			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
-		} else if needsTranslationBackfill(e, key) && !enrichInflight[key] {
-			enrichInflight[key] = true
-			go backfillTranslation(key)
 		}
+		// 机翻不排上面这条链,跟哪一路都能同时跑,理由见 translatestart.go。
+		startTranslationBackfillLocked(key, e)
 		enrichMu.Unlock()
 		if spotifyHintDirty {
 			requestEnrichSave()
@@ -1901,6 +1900,9 @@ func resolveEnrichAsync(ctx context.Context, key, artist, title, album, bundleID
 		if cancel, ok := enrichCancelFuncs[key]; ok {
 			cancel()
 			delete(enrichCancelFuncs, key)
+		}
+		if translateAfterResolve(ctx) {
+			translateUpcomingLocked(key)
 		}
 		enrichMu.Unlock()
 	}()

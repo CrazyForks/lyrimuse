@@ -561,7 +561,7 @@ func TestBackfillTranslationPersistsToDisk(t *testing.T) {
 	enrichCache = map[string]enrichEntry{
 		key: {Lyrics: "[00:01.00]The painful youth\n[00:02.00]I have had"},
 	}
-	enrichInflight = map[string]bool{key: true}
+	translationInflight = map[string]bool{key: true}
 
 	backfillTranslation(key)
 

@@ -738,9 +738,13 @@ public final class LyricsSyncEngine {
             guard !leftRaw.isEmpty, !rightRaw.isEmpty else { continue }
             let titles = Set(headerTitleForms(trackTitle).map(norm)).subtracting([""])
             let artists = headerMatchVariants(of: trackArtist).map(norm).filter { !$0.isEmpty }
+            // 歌名侧去括号、不去括号各比一次:反过来的情形也有 —— 抬头把歌名的一部分写进括号
+            // (「达尔文 II (进化版)」配本地「达尔文 II 进化版」)。
+            let leftIsTitle = titles.contains(leftTitle) || titles.contains(leftRaw)
+            let rightIsTitle = titles.contains(rightTitle) || titles.contains(rightRaw)
             // 两种摆法都有:「歌名 - 歌手」和「歌手 - 歌名」。
-            if titles.contains(leftTitle), artists.contains(where: { rightRaw.contains($0) }) { return true }
-            if titles.contains(rightTitle), artists.contains(where: { leftRaw.contains($0) }) { return true }
+            if leftIsTitle, artists.contains(where: { rightRaw.contains($0) }) { return true }
+            if rightIsTitle, artists.contains(where: { leftRaw.contains($0) }) { return true }
         }
         return false
     }
@@ -762,11 +766,15 @@ public final class LyricsSyncEngine {
         return [(String(text[text.startIndex..<idx]), String(text[text.index(after: idx)...]))]
     }
 
-    /// 歌名可以长成的样子:原样、去括号、按字形切出的段(双语拼接靠它),各自加简繁孪生。
-    /// **不设长度下限** —— 上面是等值判定,一两个字的歌名(「追」「GF」)不会因此误杀。
+    /// 歌名可以长成的样子:原样、去括号、去掉「 - 版本」尾巴(Apple Music 的
+    /// 「Love Outrolude - Instrumental」,抬头只写「Love Outrolude」)、按字形切出的段(双语拼接靠它),
+    /// 各自加简繁孪生。**不设长度下限** —— 上面是等值判定,一两个字的歌名(「追」「GF」)不会因此误杀。
     private static func headerTitleForms(_ s: String) -> [String] {
-        var out = [s, stripBracketsForHeaderMatch(s)]
-        out.append(contentsOf: scriptRuns(stripBracketsForHeaderMatch(s)))
+        let stripped = stripBracketsForHeaderMatch(s)
+        var out = [s, stripped]
+        let dashParts = stripped.components(separatedBy: " - ")
+        if dashParts.count == 2 { out.append(dashParts[0]) }
+        out.append(contentsOf: scriptRuns(stripped))
         var seen = Set<String>()
         var result: [String] = []
         for raw in out {
@@ -782,8 +790,17 @@ public final class LyricsSyncEngine {
     /// (汉字段 / 拉丁段)切出的每一段,以及每一段的简繁孪生写法。只给抬头判定用。
     ///
     /// 长度下限是刻意分开的:汉字段 ≥2 字,拉丁段 ≥4 字。拉丁段放宽到 2 会把 "The"/"You"
-    /// 这类冠词代词当成歌名段,而英文歌词里几乎必然出现,那就成了误杀机器。
+    /// 这类冠词代词当成歌名段,而英文歌词里几乎必然出现,那就成了误杀机器。下限只筛**拆出来的段**:
+    /// 整串标签本身(原样 / 去括号)有 2 个字母数字就算(「Jam」「SZA」「BY2」)。
     private static func headerMatchVariants(of s: String) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for whole in [s, stripBracketsForHeaderMatch(s)] {
+            let p = whole.trimmingCharacters(in: .whitespaces)
+            guard p.filter({ $0.isLetter || $0.isNumber }).count >= 2 else { continue }
+            if seen.insert(p).inserted { out.append(p) }
+            if let sib = HanScript.sibling(p), seen.insert(sib).inserted { out.append(sib) }
+        }
         var pieces: [String] = []
         let separators = CharacterSet(charactersIn: "&/、,，;；|-–—")
         for base in [s, stripBracketsForHeaderMatch(s)] where !base.isEmpty {
@@ -793,8 +810,6 @@ public final class LyricsSyncEngine {
             pieces.append(contentsOf: flattened.components(separatedBy: separators))
             pieces.append(contentsOf: scriptRuns(base))
         }
-        var out: [String] = []
-        var seen = Set<String>()
         for raw in pieces {
             let p = raw.trimmingCharacters(in: .whitespaces)
             guard !p.isEmpty, longEnoughForHeaderMatch(p) else { continue }
