@@ -581,6 +581,14 @@ public final class FeatureSettingsStore: ObservableObject {
     /// 新用户拿到旧默认值,他在设置里一眼看得见、随手能改;判成新机器却其实是老用户,等于
     /// 背着他改了 scrobble 行为 —— 而 scrobble 落进 Last.fm 之后基本删不掉。同一条
     /// "写侧不可逆、宁可不动"的取舍贯穿这个开关,见 lastfmScrobbleArtistMode 的声明。
+    /// 用户排的顺序补全成全部源的排列:认得的按原顺序保留(去重),没排进去的按 `LyricsSource.allCases`(默认顺序)
+    /// 补在末尾。原来对不上就整体退回默认顺序 —— 每加一个新源,「顺序优先」模式下用户手排的顺序就被静默清掉。
+    static func completedLyricsSourceOrder(_ order: [LyricsSource]) -> [LyricsSource] {
+        var seen = Set<LyricsSource>()
+        let kept = order.filter { seen.insert($0).inserted }
+        return kept + LyricsSource.allCases.filter { !seen.contains($0) }
+    }
+
     static var isFreshInstall: Bool {
         if UserDefaults.standard.object(forKey: "np:hasCompletedOnboarding") != nil { return false }
         let fm = FileManager.default
@@ -683,7 +691,19 @@ public final class FeatureSettingsStore: ObservableObject {
     ///
     /// 优先 `CFBundleDisplayName`(本地化名,中文系统上「酷狗音乐」这种)再退
     /// `CFBundleName`,最后退文件名去掉 .app —— 三级都落空才 nil。
+    ///
+    /// 结果按 bundle id 记 60 秒(查不到的也记):它要走一次 LaunchServices 再读 Info.plist,而设置页几处在 body 里
+    /// 逐项调(时间轴偏移下拉的每一项、播放器页的浏览器排序),页面每重算一次就全部重查一遍。
     public static func appDisplayName(forBundleID bundleID: String) -> String? {
+        if let hit = displayNameCache[bundleID], Date().timeIntervalSince(hit.at) < 60 { return hit.name }
+        let name = lookUpAppDisplayName(bundleID)
+        displayNameCache[bundleID] = (name, Date())
+        return name
+    }
+
+    private static var displayNameCache: [String: (name: String?, at: Date)] = [:]
+
+    private static func lookUpAppDisplayName(_ bundleID: String) -> String? {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             return nil
         }
@@ -881,13 +901,10 @@ public final class FeatureSettingsStore: ObservableObject {
         }
         lyricsSources = enabled
         lyricsSourceMode = f.lyricsSourceMode.flatMap(LyricsSourceMode.init(rawValue:)) ?? .smart
-        // 必须是全部源的完整排列(数量 == LyricsSource.allCases.count,不是写死的字面量——
-        // 这句注释曾经写死过"4 个",源数量涨到 8 个都没跟着改,不要重蹈一样的坑)。数量
-        // 对不上(文件被手动改坏/缺字段,或者刚加了新源、旧文件的顺序列表还没跟上)就整体
-        // 退回默认顺序,不做"缺的补在末尾"这种部分修复,避免搞出一份既不是默认顺序、
-        // 也不是用户真实排过的四不像顺序。
-        let decodedOrder = (f.lyricsSourceOrder ?? []).compactMap(LyricsSource.init(rawValue:))
-        lyricsSourceOrder = decodedOrder.count == LyricsSource.allCases.count ? decodedOrder : LyricsSource.allCases
+        // 顺序表跟全部源对不上(刚加了新源、旧文件的顺序表还没有它;文件被手改过)时,用户排过的那几位原样保留,
+        // 缺的按默认顺序补在末尾(见 completedLyricsSourceOrder)。collector 读同一份文件时按同一个口径补
+        // (resolveLyricsSourceOrder),两边显示的和实际用的是同一份顺序。
+        lyricsSourceOrder = Self.completedLyricsSourceOrder((f.lyricsSourceOrder ?? []).compactMap(LyricsSource.init(rawValue:)))
         // 信任列表里后来成了内置播放器的(KKBOX)挪进播放器选择,见 TrustedPlayers.promotingBuiltins。
         let promoted = TrustedPlayers.promotingBuiltins(trusted: f.trustedPlayers ?? [:], players: players)
         trustedPlayers = promoted.trusted
@@ -1008,8 +1025,11 @@ public final class FeatureSettingsStore: ObservableObject {
         // 切换(lyricsdirswitch.go)。见 CollectorRestartPolicy 头注。
         logger.notice("saved, collector hot-reloads it (\(changedKeys.sorted().joined(separator: ","), privacy: .public))")
         lastError = nil
-        // 后台服务没在跑(用户停用了)时,文件已是新值、下次启动读盘生效;状态条据此提示「服务已停用」。
-        pendingUntilServiceEnabled = !CollectorServiceManager.isRunning
+        // 后台服务被用户停用时,文件已是新值、下次启用读盘生效;状态条据此提示「服务已停用」。
+        // 看的是开关、不问 launchctl:每次保存(每拨一个开关、退出时的兜底保存)都会走到这里,
+        // `CollectorServiceManager.isRunning` 会在主线程同步起一个子进程等它退出;而状态条本来也只在
+        // 开关关着时才显示这条提示(CollectorApplyStatusBar)。
+        pendingUntilServiceEnabled = !AppSettings.shared.collectorServiceEnabled
         commitSnapshot()
         return true
     }

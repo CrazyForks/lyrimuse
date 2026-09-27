@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 import OSLog
@@ -79,6 +80,8 @@ final class LastfmLoveModel: ObservableObject {
             if ok { LastfmLovedTracks.shared.apply(newValue, target: target) }
             guard let self, !ok, self.generation == gen, self.target == target else { return }
             self.loved = !newValue
+            // 翻回去的同时响一声:只是静默翻回来的话,看上去像点了没反应(授权失效时尤其如此)。
+            NSSound.beep()
         }
     }
 
@@ -241,6 +244,12 @@ enum LastfmLoveAPI {
             let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
             NetworkAuditLog.record(service: "lastfm", operation: operation, host: host, statusCode: status,
                                    durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
+            // 跟统计那边的请求共用一个全局限流器:这里拿到的限流 / 连不上也要报给它,不然它不知道该退避。
+            await LastfmRateLimiter.shared.reportResponse()
+            let apiError = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? Int
+            if status == 429 || apiError == 29 {
+                await LastfmRateLimiter.shared.reportThrottled(cooldown: 2)
+            }
             // Last.fm 的 API 错误多以 200 + {"error":N} 返回,也有 4xx 带同样 body 的;两种都交给
             // 调用方按 body 判。body 读不出来才算失败。
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -251,6 +260,9 @@ enum LastfmLoveAPI {
         } catch {
             NetworkAuditLog.record(service: "lastfm", operation: operation, host: host, statusCode: nil,
                                    durationMs: Date().timeIntervalSince(start) * 1000, error: error)
+            if LastfmRequestGate.isTransportFailure(error) {
+                _ = await LastfmRateLimiter.shared.reportTransportFailure()
+            }
             logger.notice("\(operation, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }

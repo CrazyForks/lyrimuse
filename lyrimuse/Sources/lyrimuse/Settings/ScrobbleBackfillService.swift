@@ -226,47 +226,33 @@ final class ScrobbleBackfillService: ObservableObject {
     private static func run(dryRun: Bool) async -> Outcome? {
         let path = collectorPath
         return await Task.detached(priority: .userInitiated) { () -> Outcome? in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            // 子命令必须跟本 App 同一份配置目录 / 日志文件(Dev 构建是另一套),见 LyrimusePaths.collectorEnvironment。
-            process.environment = LyrimusePaths.collectorProcessEnvironment()
-            process.arguments = dryRun ? ["backfill-lastfm", "-dry-run"] : ["backfill-lastfm"]
-            let pipe = Pipe()
-            let errPipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = errPipe
+            // 走 ProcessRunner 并接 stderr:它把两根管子并发读空。原来先读空 stdout、等退出之后才读 stderr,
+            // 子命令往 stderr 写满管道缓冲(64KB,每条被忽略的记录一行日志就能写满)时会阻塞在 write 上不退出,
+            // 父进程等它退出 —— 互相等死,直到看门狗杀掉它,而那时 scrobble 已经发出去了、界面却报失败。
+            //
+            // 超时:真跑一批 50 条、批间还要歇 2 秒,几百条可能跑上几分钟,所以给得比别处宽得多(子命令自己也有
+            // -timeout 兜着);空跑纯本地读文件,20 秒够了。超时**只杀进程、不重试**:那一刻可能有一批已经发出去,
+            // 重跑就是重复提交;子命令那边会把没拿到回执的批次写进隔离,不会自动重来。
+            let timeout: TimeInterval = dryRun ? 20 : 15 * 60
+            guard let result = ProcessRunner.run(
+                path, dryRun ? ["backfill-lastfm", "-dry-run"] : ["backfill-lastfm"], timeout: timeout,
+                // 子命令必须跟本 App 同一份配置目录 / 日志文件(Dev 构建是另一套),见 LyrimusePaths.collectorEnvironment。
+                environment: LyrimusePaths.collectorProcessEnvironment(), captureStderr: true)
+            else {
+                logger.error("backfill spawn failed: \(path, privacy: .public)")
+                return nil
+            }
+            guard result.succeeded else {
+                logger.error("backfill exited \(result.status, privacy: .public) timedOut=\(result.timedOut, privacy: .public): \(result.stderrText, privacy: .public)")
+                return nil
+            }
             do {
-                try process.run()
-                // 看门狗:真跑一批 50 条、批间还要歇 2 秒,几百条可能跑上几分钟,所以给得
-                // 比别处宽得多(子命令自己也有 -timeout 兜着)。空跑纯本地读文件,给 20 秒够了。
-                //
-                // 超时**只杀进程、不重试**:那一刻可能有一批已经发出去了,重跑就是
-                // 重复提交。子命令那边会把没拿到回执的批次写进隔离,不会自动重来。
-                let deadline: UInt64 = dryRun ? 20 : 15 * 60
-                let watchdog = Task.detached {
-                    try? await Task.sleep(nanoseconds: deadline * 1_000_000_000)
-                    if !Task.isCancelled, process.isRunning { process.terminate() }
-                }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                watchdog.cancel()
-                guard process.terminationStatus == 0 else {
-                    let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                                     encoding: .utf8) ?? ""
-                    logger.error("backfill exited \(process.terminationStatus, privacy: .public): \(err, privacy: .public)")
-                    return nil
-                }
-                do {
-                    return try JSONDecoder().decode(Outcome.self, from: data)
-                } catch {
-                    // 不写成 try?:解码失败在此之前是**完全无声**的 —— 子进程 exit 0,上面两条
-                    // error 日志一条都不会出现,界面只报一句「没能完成」,查起来要把"哪三条路径
-                    // 会返回 nil"一条条排除掉才能落到这里。留一行痕,下次十秒钟定位。
-                    logger.error("backfill decode failed dryRun=\(dryRun, privacy: .public): \(String(describing: error), privacy: .public)")
-                    return nil
-                }
+                return try JSONDecoder().decode(Outcome.self, from: result.stdout)
             } catch {
-                logger.error("backfill spawn failed: \(String(describing: error), privacy: .public)")
+                // 不写成 try?:解码失败在此之前是**完全无声**的 —— 子进程 exit 0,上面两条
+                // error 日志一条都不会出现,界面只报一句「没能完成」,查起来要把"哪三条路径
+                // 会返回 nil"一条条排除掉才能落到这里。留一行痕,下次十秒钟定位。
+                logger.error("backfill decode failed dryRun=\(dryRun, privacy: .public): \(String(describing: error), privacy: .public)")
                 return nil
             }
         }.value

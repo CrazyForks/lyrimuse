@@ -49,6 +49,14 @@ enum LyricsBackupStore {
     /// 读 3000 个小文件 + 编码 14.5 MB + 压缩,实测几百毫秒到一秒级 —— 所以主线程只取"目录
     /// 在哪、pins 是什么"这两个 @MainActor 状态,重活整段扔进 detached task。调用方是 alert
     /// 的确认按钮(SettingsView),那里不能卡。
+    /// 歌词文件夹里一个能打包的歌词文件都没有(新用户、还没播过歌)。跟 `buildArchive` 用同一条筛法,只列目录不读内容。
+    /// 两个导出入口靠它区分「没有可打包的」和「打包失败」:前者不是错误,不该报「没打包成功」。
+    static func hasNoLyricsFiles() -> Bool {
+        let dir = FeatureSettingsStore.shared.effectiveLyricsDir
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return true }
+        return !names.contains { LyricsBackupArchive.sanitizedFileName($0) != nil }
+    }
+
     static func buildArchive() async -> Data? {
         let dir = FeatureSettingsStore.shared.effectiveLyricsDir
         let pins = LyricsPinStore.shared.pins
@@ -87,7 +95,7 @@ enum LyricsBackupStore {
             // 契约,selftest 对它断言。
             let payload = LyricsBackupArchive.Payload(
                 at: ISO8601DateFormatter().string(from: Date()),
-                device: Host.current().localizedName ?? "",
+                device: ConfigPortability.computerName,
                 files: files,
                 pins: pins,
                 meta: meta

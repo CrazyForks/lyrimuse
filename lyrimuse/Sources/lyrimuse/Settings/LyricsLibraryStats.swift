@@ -159,6 +159,8 @@ struct LyricsLibrarySizeLabel: View {
 /// 免得为了传 counts 让外层再订阅一次。
 struct LyricsLibraryStatsPanel: View {
     @ObservedObject private var store = EnrichCacheStore.shared
+    /// body 里要把整库过一遍的三个数(统计、待补搜、全量待扫),见 `LibraryStatsMemo`。
+    @State private var memo = LibraryStatsMemo()
     /// 设置窗口看不见时不轮询:补搜 / 全量扫库期间每写一首缓存就变,这一页会跟着反复解析整份缓存。
     @Environment(\.previewHostVisible) private var windowVisible
     // collector 侧补空扫描的进度快照(LyricsFillSweep,进度文件按 mtime 读),由下面那个 .task 轮询。
@@ -192,7 +194,7 @@ struct LyricsLibraryStatsPanel: View {
     }
 
     var body: some View {
-        let counts = LyricsLibraryStats.counts(store.summaries)
+        let counts = memo.counts(store)
         // 用 VStack(spacing: 0) 而不是 Group 装这几行:修饰符挂在 Group 上会**逐个**作用到每个
         // 子视图 —— 下面那个 .task 就会跑出三份轮询循环。外层卡片本身就是 VStack(spacing: 0),
         // 这里再套一层对布局零影响。
@@ -423,7 +425,7 @@ struct LyricsLibraryStatsPanel: View {
         // 两个量分开,正是因为这一行只该画补空那一轮,而按钮要对**任意**一轮置灰。
         let running = status?.running == true
         let sweepRunning = running && status?.isFullScan != true
-        let retryable = store.summaries.filter(EnrichCacheStore.isFillSweepRetryable).count
+        let retryable = memo.retryable(store)
         return SettingsRow(
             icon: "text.magnifyingglass",
             title: L10n.t("补搜缺失歌词"),
@@ -538,8 +540,8 @@ struct LyricsLibraryStatsPanel: View {
     /// (`LyricsFullScan.tier`,selftest 覆盖),所以按钮上的数就是真会被扫的条数 ——
     /// 跟隔壁「重新扫描（N 首）」那个数是**包含**关系:那 N 首正是这里的第 0 层。
     private func fullScanPending(_ currentVersion: Int) -> Int {
-        Self.fullScanPendingCount(store.summaries, pinnedKeys: Set(pins.pins.keys),
-                                  currentVersion: currentVersion, passStart: fullScanState?.startedAt ?? 0)
+        memo.fullScanPending(store, pinnedKeys: Set(pins.pins.keys),
+                             currentVersion: currentVersion, passStart: fullScanState?.startedAt ?? 0)
     }
 
     /// 见 `fullScanPending`。静态版给「歌词管理」工具栏那个入口共用,两处的数必须是同一个口径。
@@ -682,5 +684,47 @@ struct LyricsLibraryStatsPanel: View {
         // 直接按实测速度算,不再绕"换算成等效首数"那一道:hoursText 现在收显式的每首秒数,
         // 把实测值原样传进去就行。
         return String(format: L10n.t("大约还要%@"), hoursText(left, secondsPerTrack: perTrack))
+    }
+}
+
+/// 统计面板 body 里三个要把整库几千条过一遍的数,按输入记住。扫描进行中 `.task` 每 2 秒更新一次进度、
+/// 整个 body 跟着重算,而这几个数只在缓存内容(`summariesGeneration`)或各自的其余输入变了才会变 ——
+/// 原来每次重算都在主线程上重新分类、过滤,全量待扫那个数还要按「歌手 + 专辑」分组找污染条目再逐条分层。
+/// 引用类型挂在 @State 里:实例跨重算保持不变,在 body 里更新它不会触发新的重算。
+@MainActor
+private final class LibraryStatsMemo {
+    private var countsGeneration: Int?
+    private var countsValue = LyricsLibraryStats.Counts()
+    private var retryableGeneration: Int?
+    private var retryableValue = 0
+    private var pendingInputs: (generation: Int, version: Int, passStart: Int64, pinnedKeys: Set<String>)?
+    private var pendingValue = 0
+
+    func counts(_ store: EnrichCacheStore) -> LyricsLibraryStats.Counts {
+        if countsGeneration != store.summariesGeneration {
+            countsValue = LyricsLibraryStats.counts(store.summaries)
+            countsGeneration = store.summariesGeneration
+        }
+        return countsValue
+    }
+
+    func retryable(_ store: EnrichCacheStore) -> Int {
+        if retryableGeneration != store.summariesGeneration {
+            retryableValue = store.summaries.filter(EnrichCacheStore.isFillSweepRetryable).count
+            retryableGeneration = store.summariesGeneration
+        }
+        return retryableValue
+    }
+
+    func fullScanPending(_ store: EnrichCacheStore, pinnedKeys: Set<String>,
+                         currentVersion: Int, passStart: Int64) -> Int {
+        if let inputs = pendingInputs, inputs.generation == store.summariesGeneration,
+           inputs.version == currentVersion, inputs.passStart == passStart, inputs.pinnedKeys == pinnedKeys {
+            return pendingValue
+        }
+        pendingValue = LyricsLibraryStatsPanel.fullScanPendingCount(
+            store.summaries, pinnedKeys: pinnedKeys, currentVersion: currentVersion, passStart: passStart)
+        pendingInputs = (store.summariesGeneration, currentVersion, passStart, pinnedKeys)
+        return pendingValue
     }
 }

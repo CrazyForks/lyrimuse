@@ -36375,6 +36375,57 @@
           }
         }
       }
+    },
+    "跟随「全部播放器」：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Following “All players”: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟隨「全部播放器」：%@"
+          }
+        }
+      }
+    },
+    "打不开这个文件夹：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't open this folder: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打不開這個資料夾：%@"
+          }
+        }
+      }
+    },
+    "有部分设置没能写入（%@），其余已导入。可以再导入一次，或检查配置文件夹的写入权限" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some settings couldn't be written (%@); the rest were imported. Try importing again, or check that the config folder is writable."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有部分設定沒能寫入（%@），其餘已匯入。可以再匯入一次，或檢查設定檔案夾的寫入權限"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

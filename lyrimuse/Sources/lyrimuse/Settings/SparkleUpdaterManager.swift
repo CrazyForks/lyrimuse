@@ -131,7 +131,9 @@ final class SparkleUpdaterManager: ObservableObject {
     /// Sparkle 最近一次查到、还没装上的那个版本(给「软件更新」页显示标题 / 大小 / 日期 / 发版日志)。
     /// 「已是最新」「跳过」「装好重启」都清掉。跟上面 `availableUpdate` 是同一件事的两个视角:那个给菜单栏
     /// 面板底栏(只要版本号),这个给页面(要全部细节)。
-    @Published private(set) var pendingItem: SoftwareUpdateItem?
+    @Published private(set) var pendingItem: SoftwareUpdateItem? {
+        didSet { refreshBadge() }
+    }
     /// 用户在「下完待装」那一步选了「退出时安装」,或周期检查已经把包下好(自动下载开着)—— Sparkle 会在
     /// App 退出时装,页面据此说明,并把按钮换成「立即重启」。
     @Published private(set) var installOnQuit = false
@@ -157,6 +159,12 @@ final class SparkleUpdaterManager: ObservableObject {
 
     /// 设置窗口该显示的「有新版本」:预览钩子优先,否则是 Sparkle 的真值。
     var shownItem: SoftwareUpdateItem? { previewItem ?? pendingItem }
+
+    /// 把「有没有要显示的新版本」同步给 `SoftwareUpdateBadge`,只在真的变了时写。
+    private func refreshBadge() {
+        let visible = shownItem != nil
+        if SoftwareUpdateBadge.shared.isVisible != visible { SoftwareUpdateBadge.shared.isVisible = visible }
+    }
 
     /// 页面上最近一次动作的意图,决定 Sparkle 回「找到了」时怎么答(见文件头注)。
     private enum PageIntent { case none, check, install }
@@ -422,6 +430,7 @@ final class SparkleUpdaterManager: ObservableObject {
         if AppSettings.shared.receiveBetaUpdates {
             Task { await refreshBetaFeed(force: false) }
         }
+        refreshBadge() // 预览钩子在这一刻就生效(见 previewItem)
     }
 
     private func handle(_ event: UpdaterDelegateBridge.Event) {
@@ -726,4 +735,13 @@ extension SparkleUpdaterManager {
     /// 不碰 Sparkle,页面上的「立即更新」仍是真检查(会如实显示「已是最新版本」)。菜单栏面板底栏不吃
     /// 这个钩子,只认真值。用 `settings:` 前缀:机器状态,配置导出天然不带走(同 SettingsTab.lastTabStorageKey)。
     static var previewUpdateVersionKey: String { "settings:previewUpdateVersion" }
+}
+
+/// 设置窗口侧栏只关心一位:有没有要显示的新版本(「有软件更新可用」那一行出不出现)。单独成一个对象:
+/// `SparkleUpdaterManager` 在下载时每收到一块数据、解包时每一格进度都会写一次 `flow`,顶层设置窗口要是订阅
+/// 它,整扇窗口(连同侧栏)就跟着逐块重算。这一位只在 `pendingItem` 变化时由它同步过来,值不变就不写。
+@MainActor
+final class SoftwareUpdateBadge: ObservableObject {
+    static let shared = SoftwareUpdateBadge()
+    @Published fileprivate(set) var isVisible = false
 }

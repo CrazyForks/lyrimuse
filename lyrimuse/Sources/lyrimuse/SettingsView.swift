@@ -239,8 +239,8 @@ struct SettingsView: View {
     /// 这扇窗口看不看得见。「歌词显示」页的几块预览靠它在被遮住 / 最小化时停表,
     /// 见 PreviewHostVisibility.swift。
     @StateObject private var windowSurface = SettingsWindowSurface()
-    /// 「有软件更新可用」那一行的数据源:Sparkle 查到、还没装上的版本。
-    @ObservedObject private var updater = SparkleUpdaterManager.shared
+    /// 「有软件更新可用」那一行出不出现。只订阅这一位,不订阅整个 SparkleUpdaterManager(见 SoftwareUpdateBadge)。
+    @ObservedObject private var updateBadge = SoftwareUpdateBadge.shared
     // 默认收起、点击 Section 头才展开,不持久化(每次打开设置窗口都从收起状态开始)。
     // 变量名跟 Section 标题「实验室功能」不一致是有意的:变量名是内部实现细节,不跟用户可见文案走。
     @State private var isAdditionalFeaturesExpanded = false
@@ -458,7 +458,7 @@ struct SettingsView: View {
         Section {
             LastfmIdentityRow()
                 .tag(SettingsSidebarItem.account(.lastfm))
-            if updater.shownItem != nil {
+            if updateBadge.isVisible {
                 // 点了就是选中「软件更新」页(tag),跟系统设置一样这一行会亮起来。
                 SoftwareUpdateSidebarRow()
                     .tag(SettingsSidebarItem.softwareUpdate)
@@ -616,11 +616,12 @@ struct SettingsView: View {
         // 六个顶层分类都记,包括「关于」——上次停在低频页下次也落在那里,行为可预测。
         .onChange(of: selection) { previous, item in
             if case .tab(let tab)? = item { lastTabRaw = tab.rawValue }
-            // 「有软件更新可用」那一行随更新装完 / 跳过 / 已是最新而消失时,List 会把选中清成 nil ——
-            // 页面本身还在,别退成「选择左侧的设置分类」,把选中放回去(此时侧栏没有行亮着,跟账号页
-            // 在折叠区里那种情形一样)。
-            if item == nil, previous == .softwareUpdate {
-                selection = .softwareUpdate
+            // 选中的那一行从侧栏里消失时,List 会把选中清成 nil:「有软件更新可用」随更新装完 / 跳过而消失、
+            // 输入搜索词后侧栏整个换成结果列表、在账号页上收起「实验室功能」都是。页面本身还在,别退成
+            // 「选择左侧的设置分类」(清空搜索后也回不来),把选中放回去(此时侧栏没有行亮着,跟账号页在折叠区里
+            // 那种情形一样)。用户在侧栏里点不出「什么都不选」,所以凡是变成 nil 都是这种情形。
+            if item == nil, let previous {
+                selection = previous
                 return
             }
             // 选到别的分类了,搜索框的光标就别再闪。
@@ -851,12 +852,22 @@ private struct LyricsSettingsTab: View {
         // 排的顺序,同一批播放器在这个下拉框里不该是另一个顺序。LyricsOffsetScope 自己在
         // LyrimuseCore,够不到 displayOrder(它在 App target 里依赖 AppSettings),所以顺序从这里
         // 传进去,见该函数参数注释。
-        LyricsOffsetScope.options(
+        let options = LyricsOffsetScope.options(
             builtInOrder: PlaybackPlayer.displayOrder,
             trusted: features.trustedPlayers,
             configured: Set(offsets.playerOffsets.keys),
             nowPlaying: nowPlayingBundleID
         )
+        // 当前选中的那个也得在候选里:「正在播放」那组跟着 2 秒一次的轮询变,选中一个没信任、偏移为 0 的
+        // 正在播放的 App 之后一暂停,它就从候选里掉出去 —— Picker 找不到选中值的 tag,下拉显示空白,
+        // 旁边的 Stepper 却还在改这个看不见的播放器。
+        guard !offsetScope.isEmpty, !options.contains(offsetScope) else { return options }
+        return options + [offsetScope]
+    }
+
+    /// 选中的播放器没有单独配过偏移:这时实际生效的是「全部播放器」那档(二选一,见 LyricsOffsetStore.baseOffsetMs)。
+    private var scopeFollowsGlobal: Bool {
+        !offsetScope.isEmpty && offsets.playerOffsets[offsetScope] == nil
     }
 
     /// bundle id → 人看得懂的名字。内置的用枚举自带的显示名,信任项用当初存下来的那份(空串时
@@ -912,6 +923,9 @@ private struct LyricsSettingsTab: View {
                 .transition(.opacity)
         }
         .id(L10n.current)
+        // Apple Music 连上 / 断开:上一轮的测试结果作废。未连接时「全部测试」照样测它(结果只是被藏起来),
+        // 不清的话连上账号后那颗过期的失败图标又冒出来。
+        .onChange(of: appleMusic.isConnected) { _, _ in sourceTestStates[.applemusic] = nil }
     }
 
     private var sectionPicker: some View {
@@ -1505,6 +1519,9 @@ private struct LyricsSettingsTab: View {
             features.lyricsSources.insert(source)
         } else if features.lyricsSources.count > 1 {
             features.lyricsSources.remove(source)
+        } else {
+            // 至少要留一个来源:拒绝时响一声(系统对「不允许的操作」的标准反馈),不然看上去像这个勾点不动、坏了。
+            NSSound.beep()
         }
         guard features.lyricsSources != before else { return }
         Task { await features.save() }
@@ -1907,7 +1924,12 @@ private struct LyricsSettingsTab: View {
                     // 早就用 `.fixedSize()` 护住了自己的宽度(见上面那行),HStack 空间紧张时只会挤
                     // 没有保护的那个,数字被压到比单字符还窄,SwiftUI 只能逐字换行。
                     // 用正常文字颜色:整段灰色读起来像这一项被禁用了。只在值为 0(没偏移)时淡一档。
-                    Text("\(AppSettings.signedSeconds(ms: scopedOffsetMs))\(L10n.t("秒"))")
+                    // 选中的播放器没单独配过时,说清楚实际用的是「全部播放器」那档的值 —— 写「0秒」会被读成
+                    // 「这个播放器不偏移」,而它其实跟着全局在偏。
+                    Text(scopeFollowsGlobal
+                         ? String(format: L10n.t("跟随「全部播放器」：%@"),
+                                  "\(AppSettings.signedSeconds(ms: offsets.globalOffsetMs))\(L10n.t("秒"))")
+                         : "\(AppSettings.signedSeconds(ms: scopedOffsetMs))\(L10n.t("秒"))")
                         .monospacedDigit()
                         .foregroundStyle(scopedOffsetMs == 0 ? Color.secondary : Color.primary)
                         .fixedSize()
@@ -2012,10 +2034,19 @@ private struct LyricsSettingsTab: View {
                     .accessibilityValue(url.path)
                 Button(L10n.t("在访达中显示")) {
                     // collector 那边(见 collector/lyricsexport.go)只在真正解析/导出过
-                    // 至少一首歌之后才会建这个目录,这里先兜底建一下,避免文件夹还不存在
-                    // 时 NSWorkspace 打不开、又没有任何提示。
-                    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-                    NSWorkspace.shared.open(url)
+                    // 至少一首歌之后才会建这个目录,这里先兜底建一下。建不成(自选目录在一块没挂载的外置盘上、
+                    // 没有写权限)或者打不开时要说一句,不能点了没反应。
+                    do {
+                        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                        guard NSWorkspace.shared.open(url) else {
+                            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: url.path])
+                        }
+                    } catch {
+                        let alert = NSAlert()
+                        alert.messageText = String(format: L10n.t("打不开这个文件夹：%@"), url.path)
+                        alert.informativeText = error.localizedDescription
+                        alert.runModal()
+                    }
                 }
                 .fixedSize()
                 Button(L10n.t("更改…")) {
@@ -2026,7 +2057,10 @@ private struct LyricsSettingsTab: View {
                     panel.prompt = L10n.t("选择")
                     panel.directoryURL = url
                     if panel.runModal() == .OK, let picked = panel.url {
-                        features.lyricsDir = picked.path
+                        // 选回默认位置就记成空串(= 用默认位置),别记成一条跟默认一样的「自定义路径」。
+                        let isDefault = picked.standardizedFileURL.path
+                            == LyrimusePaths.configFile("lyrics").standardizedFileURL.path
+                        features.lyricsDir = isDefault ? "" : picked.path
                         Task { await features.save() }
                     }
                 }
@@ -3927,11 +3961,16 @@ private struct PlayerSettingsTab: View {
     /// 15 秒 = 主轮询周期(2s)的七倍多,足够容忍一次卡顿,又不至于把停播后的残影留太久。
     private func refreshUngatedNowPlaying() {
         guard let seen = MediaControlClient.lastUngatedNowPlaying,
-              Date().timeIntervalSince(seen.at) < 15 else {
+              Date().timeIntervalSince(seen.at) < UnknownPlayerAlert.freshWindow else {
             if ungatedNowPlaying != nil { ungatedNowPlaying = nil }
             return
         }
-        if ungatedNowPlaying != seen { ungatedNowPlaying = seen }
+        // 只在「谁在放、放的什么」变了才赋值。观察时刻 `at` 每一拍都刷新,带着它比较(结构体的 ==)就是
+        // 每 2 秒整页重算一次 —— 每次还要逐个浏览器查安装、从磁盘读 features.json 判信任。陈旧由上面那道
+        // 判据负责(每拍都跑),存下来的 at 停在第一次看到的时刻,所以卡片那边的新鲜度按此刻算。
+        if let current = ungatedNowPlaying, current.bundleID == seen.bundleID, current.artist == seen.artist,
+           current.album == seen.album, current.title == seen.title { return }
+        ungatedNowPlaying = seen
     }
 
     private func refreshNotificationStatus() {
@@ -3982,7 +4021,8 @@ private struct PlayerSettingsTab: View {
         if let seen = ungatedNowPlaying,
            UnknownPlayerAlert.shouldOffer(
                bundleID: seen.bundleID, artist: seen.artist, album: seen.album,
-               observedAt: seen.at, isAutoDetect: stores.players.contains(.auto), now: Date(),
+               // 新鲜度由 refreshUngatedNowPlaying 每拍把关(陈旧就置 nil),这里存的 at 是第一次看到的时刻。
+               observedAt: Date(), isAutoDetect: stores.players.contains(.auto), now: Date(),
                isAccepted: { TrustedPlayers.isAccepted($0) }) {
             SettingsCard {
                 SettingsRow(
@@ -4336,6 +4376,11 @@ private struct PlayerSettingsTab: View {
     }
     @State private var browserLiveStatus: [String: BrowserLiveStatus] = [:]
     @State private var browserLiveStatusInFlight = false
+    /// 查着的时候又来了一次刷新请求(配对表变了、自动化授权刚有结果):当前这轮查完再补一轮,不直接丢掉 ——
+    /// 丢掉的话刚配对的浏览器那个气泡前几秒一直显示「无法确认状态 / 没在运行」。
+    @State private var browserLiveStatusRerun = false
+    /// 切回 App 之后补的那一拍延迟刷新。只留一个:连着切几次不叠加,离开这一页也收掉。
+    @State private var delayedAutomationRecheck: Task<Void, Never>?
 
     /// 把浏览器卡片要显示的实时状态**一次性在后台查完**,回主线程写进 `browserLiveStatus`。
     ///
@@ -4353,7 +4398,10 @@ private struct PlayerSettingsTab: View {
     /// `isRunning` 读 `NSWorkspace.runningApplications`,在主线程读完再带进后台 —— 它便宜,
     /// 而且 NSWorkspace 那套属性按文档就该在主线程碰。
     private func refreshBrowserLiveStatus() {
-        guard !browserLiveStatusInFlight else { return }
+        guard !browserLiveStatusInFlight else {
+            browserLiveStatusRerun = true
+            return
+        }
         let ids = Set(stores.browserPlatformPairs.values.flatMap { $0 })
         guard !ids.isEmpty else {
             if !browserLiveStatus.isEmpty { browserLiveStatus = [:] }
@@ -4381,6 +4429,10 @@ private struct PlayerSettingsTab: View {
             }
             browserLiveStatusInFlight = false
             if fresh != browserLiveStatus { browserLiveStatus = fresh }
+            if browserLiveStatusRerun {
+                browserLiveStatusRerun = false
+                refreshBrowserLiveStatus()
+            }
         }
     }
 
@@ -4554,10 +4606,16 @@ private struct PlayerSettingsTab: View {
                 // 12 秒是个**留余量的兜底值,不是量出来的常数** —— 没有公开保证的提交
                 // 间隔可依。真要立刻确认,气泡里那个「重新检测」是**不看文件**的活证据
                 // (它直接执行一段 JavaScript),那条路任何时候都即时准确。
-                Task { @MainActor in
+                delayedAutomationRecheck?.cancel()
+                delayedAutomationRecheck = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 12_000_000_000)
+                    guard !Task.isCancelled else { return }
                     automationRefreshTick &+= 1
                 }
+            }
+            .onDisappear {
+                delayedAutomationRecheck?.cancel()
+                delayedAutomationRecheck = nil
             }
         }
     }
@@ -4896,18 +4954,13 @@ private struct PlayerSettingsTab: View {
             // 但措辞必须是"上次检测通过"而不是"已开启" —— 用户后来把开关关掉我们无从得知,
             // 断言当下就又成了一句会过期的谎(见 AppSettings.browserJSVerifiedAt 那段)。
             if let at = stores.browserJSVerifiedAt[bundleID] {
-                return String(format: L10n.t("上次检测通过（%@）"), Self.verifiedAtFormatter.localizedString(for: at, relativeTo: Date()))
+                return String(format: L10n.t("上次检测通过（%@）"), SettingsDateText.relative(at))
             }
             return L10n.t("无法确认状态（读不到该浏览器的配置文件）")
         case .unsupported: return ""
         }
     }
 
-    private static let verifiedAtFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .full
-        return f
-    }()
 
     /// **有没有硬证据证明这个浏览器现在真的驱得动** —— 这一轮自检通过,或者以前某次通过过
     /// 并落了盘。后者是 Chromium 系在没有完全磁盘访问权限时唯一拿得到的证据。
@@ -5640,6 +5693,9 @@ private struct GeneralSettingsTab: View {
                             if ICloudConfigStore.write(archive, filename: lyricsName) == nil {
                                 note = L10n.t("设置已存好，但歌词库那一份没写成功")
                             }
+                        } else if !LyricsBackupStore.hasNoLyricsFiles() {
+                            // 有歌词却没打成包:跟「导出到文件」那条路说同一句,别照样显示「已保存」。
+                            note = L10n.t("设置已存好，但歌词库那一份没写成功")
                         }
                         // **这里不做任何自动清理,备份想攒多少份就多少份**。
                         //
@@ -5696,7 +5752,10 @@ private struct GeneralSettingsTab: View {
                         // 找到它的(NSSavePanel 只能给一个落点,所以是"兄弟文件"而不是两次面板)。
                         Task { @MainActor in
                             guard let archive = await LyricsBackupStore.buildArchive() else {
-                                configMessage = L10n.t("设置已导出；歌词库这次没打包成功，只有设置那一个文件")
+                                // 歌词库本来就是空的(新用户)不算失败,不提示。
+                                if !LyricsBackupStore.hasNoLyricsFiles() {
+                                    configMessage = L10n.t("设置已导出；歌词库这次没打包成功，只有设置那一个文件")
+                                }
                                 return
                             }
                             let sidecarName = LyricsBackupArchive.sidecarName(forConfigName: url.lastPathComponent)
@@ -5746,6 +5805,14 @@ private struct GeneralSettingsTab: View {
                             // 不会被导入的包覆盖,但顺序反了会先被写、再被这一句改回来。
                             if let folder = pendingImportFolder {
                                 ICloudConfigStore.adoptFolder(folder)
+                            }
+                            // 有一份没写成(盘满、没有写权限):说清楚是哪部分,这次不重启 —— 重启了提示就没了,
+                            // 用户会以为全部导入成功。其余部分已经生效,可以再导一次。
+                            let failed = ConfigPortability.lastImportFailures
+                            guard failed.isEmpty else {
+                                configMessage = String(format: L10n.t("有部分设置没能写入（%@），其余已导入。可以再导入一次，或检查配置文件夹的写入权限"),
+                                                       failed.joined(separator: ", "))
+                                return
                             }
                             ConfigPortability.restartApp()
                         }
@@ -5811,14 +5878,11 @@ private struct GeneralSettingsTab: View {
     private var pendingImportSourceDescription: String? {
         guard let data = pendingImportData else { return nil }
         let meta = ICloudConfigStore.metadata(in: data)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
         switch (meta.exportedAt, meta.deviceName) {
         case let (when?, device?) where !device.isEmpty:
-            return String(format: L10n.t("%1$@ 从「%2$@」导出的备份"), formatter.string(from: when), device)
+            return String(format: L10n.t("%1$@ 从「%2$@」导出的备份"), SettingsDateText.mediumShort(when), device)
         case let (when?, _):
-            return String(format: L10n.t("%@ 导出的备份"), formatter.string(from: when))
+            return String(format: L10n.t("%@ 导出的备份"), SettingsDateText.mediumShort(when))
         case let (nil, device?) where !device.isEmpty:
             return String(format: L10n.t("从「%@」导出的备份"), device)
         default:
@@ -5838,10 +5902,7 @@ private struct GeneralSettingsTab: View {
             }
             return String(format: L10n.t("备份到「%@」，还没存过"), ICloudConfigStore.folderURL.lastPathComponent)
         }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        let when = formatter.string(from: snap.exportedAt ?? snap.modifiedAt)
+        let when = SettingsDateText.mediumShort(snap.exportedAt ?? snap.modifiedAt)
         let base: String
         if let device = snap.deviceName, !device.isEmpty {
             base = String(format: L10n.t("%1$@ · 来自 %2$@"), when, device)
@@ -5892,33 +5953,47 @@ private struct GeneralSettingsTab: View {
         if ICloudConfigStore.isAvailable {
             panel.directoryURL = ICloudConfigStore.folderURL
         }
-        guard panel.runModal() == .OK, let url = panel.url,
-              let data = try? Data(contentsOf: url) else { return }
-        // 长得像不像我们的导出包:顶层是个对象、且带 appSettings 或 config 之一。
-        // 判据刻意宽松(只挡"明显不是"),严格校验仍然在 importData 里,这里只是把
-        // "一眼就知道不对"的情况提前拦掉。
-        let looksLikeExport: Bool = {
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-            return obj["appSettings"] != nil || obj["config"] != nil || obj["version"] != nil
-        }()
-        guard looksLikeExport else {
-            configMessage = L10n.t("这个文件不是 Lyrimuse 的设置备份，没有导入")
-            return
-        }
-        configMessage = nil
-        pendingImportData = data
-        pendingImportFolder = nil
+        guard panel.runModal() == .OK, let url = panel.url else { return }
         // 同目录下的兄弟歌词包(同名、-Config- 换成 -Lyrics-)。没有就是一份老备份或用户
         // 只想恢复设置 —— 那就什么都不动,绝不能当成"空歌词库"去清掉本机现有的。
         let sidecar = url.deletingLastPathComponent().appendingPathComponent(
             LyricsBackupArchive.sidecarName(forConfigName: url.lastPathComponent))
-        pendingImportLyrics = try? Data(contentsOf: sidecar)
-        pendingImportLyricsCount = 0
-        showImportConfigConfirm = true
-        if let lyrics = pendingImportLyrics {
-            Task { @MainActor in
-                pendingImportLyricsCount = await LyricsBackupStore.peek(lyrics)?.files ?? 0
+        Task { @MainActor in
+            // 两份都放到后台读:面板默认开在 iCloud 备份文件夹,对还没下载的占位文件直接读会当场下载、卡住调用线程
+            // (见 ICloudConfigStore 那条实测),歌词包有好几 MB。
+            let (read, lyrics) = await Task.detached(priority: .userInitiated) {
+                (try? Data(contentsOf: url), try? Data(contentsOf: sidecar))
+            }.value
+            guard let data = read else {
+                configMessage = L10n.t("这个文件不是 Lyrimuse 的设置备份，没有导入")
+                return
             }
+            // 长得像不像我们的导出包:顶层是个对象、且带 appSettings 或 config 之一。
+            // 判据刻意宽松(只挡"明显不是"),严格校验仍然在 importData 里,这里只是把
+            // "一眼就知道不对"的情况提前拦掉。
+            let looksLikeExport: Bool = {
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+                return obj["appSettings"] != nil || obj["config"] != nil || obj["version"] != nil
+            }()
+            guard looksLikeExport else {
+                configMessage = L10n.t("这个文件不是 Lyrimuse 的设置备份，没有导入")
+                return
+            }
+            configMessage = nil
+            pendingImportData = data
+            pendingImportFolder = nil
+            pendingImportLyrics = lyrics
+            pendingImportLyricsCount = 0
+            // 先数完再弹确认框:确认框的正文弹出之后不一定跟着状态刷新,先弹的话会一直写「0 个歌词文件」。
+            // 解不开(损坏)就当这份备份没带歌词,不拿它去恢复。
+            if let lyrics {
+                if let files = await LyricsBackupStore.peek(lyrics)?.files {
+                    pendingImportLyricsCount = files
+                } else {
+                    pendingImportLyrics = nil
+                }
+            }
+            showImportConfigConfirm = true
         }
     }
 
@@ -6144,10 +6219,13 @@ private struct AboutSettingsTab: View {
     // 离开设置页再回来不该重读缓存、更不该重复发请求。
     @ObservedObject private var updater = SparkleUpdaterManager.shared
     @ObservedObject private var githubStars = GitHubStarsService.shared
-    /// 只为「接收测试版更新」那一个开关订阅 AppSettings —— 这一页其余内容不读它。
+    /// 这一页不读 AppSettings 的任何字段,订阅它是为了切界面语言时重跑 body、让下面的 `.id(L10n.current)`
+    /// 换身份整页重建(不订阅的话切语言后这一页不刷新)。
     @ObservedObject private var settings = AppSettings.shared
     /// 版本胶囊刚被点过(版本信息已在剪贴板)的短暂反馈态,1.6 秒后自动复原。
     @State private var versionCopied = false
+    /// 上面那个反馈态的失效令牌(同 iCloudJustSavedToken):1.6 秒内连点两下时,第一次的计时到点不把第二次的提前收掉。
+    @State private var versionCopiedToken = 0
 
     // CFBundleIconFile 指向 AppIcon.icns(build.sh 生成的 .app 包本身自带),直接读系统认的这份
     // "当前 App 图标",不用再手动拼一遍 Bundle 里的文件路径。
@@ -6294,8 +6372,11 @@ private struct AboutSettingsTab: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         versionCopied = true
+        versionCopiedToken &+= 1
+        let token = versionCopiedToken
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard versionCopiedToken == token else { return }
             versionCopied = false
         }
     }
@@ -6486,10 +6567,10 @@ struct SettingsWindowConfigurator: NSViewRepresentable {
     let surface: SettingsWindowSurface
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        // 视图刚建好时还没挂进窗口,拿不到 window,推迟到下一个 runloop。
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
+        let view = WindowHookView()
+        // 视图刚建好时还没挂进窗口,在它真正挂进窗口那一刻(viewDidMoveToWindow)再配。原来是推迟到下一个
+        // runloop 取一次 view.window、拿不到就放弃 —— 那一拍还没挂上的话窗口拉不大、黄灯是灰的、预览停表也不接。
+        view.onWindow = { window in
             surface.attach(window)
             window.styleMask.insert([.resizable, .miniaturizable])
             // `Settings` 场景默认给窗口的是 `.preference` 样式 —— AppKit 对它的定义就是
@@ -6508,4 +6589,45 @@ struct SettingsWindowConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+
+    /// 挂进窗口时回调一次;同一个窗口只配一次(窗口关了再开会重新挂进来)。
+    private final class WindowHookView: NSView {
+        var onWindow: ((NSWindow) -> Void)?
+        private weak var configured: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, window !== configured else { return }
+            configured = window
+            onWindow?(window)
+        }
+    }
+}
+
+/// 设置页里几处日期文字共用的格式化器:共用实例(原来 body 每次重算都新建一个 DateFormatter),
+/// 每次用之前把 locale 设成界面语言 —— 不设就跟系统语言走,界面选英文、系统是中文时出现
+/// "Verified working (3天前)" 这种混排(同「上次检查」那处的做法)。
+@MainActor
+private enum SettingsDateText {
+    private static let mediumShortFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+
+    static func mediumShort(_ date: Date) -> String {
+        mediumShortFormatter.locale = L10n.locale
+        return mediumShortFormatter.string(from: date)
+    }
+
+    static func relative(_ date: Date) -> String {
+        relativeFormatter.locale = L10n.locale
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
 }

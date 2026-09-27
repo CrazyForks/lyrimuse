@@ -569,8 +569,16 @@ struct LastfmStatsSection: View {
             || (links.kkbox != nil && Self.isInstalled(.kkbox))
     }
 
+    /// 装没装这个播放器,按 bundle id 记 30 秒:榜单每一行渲染都要问(Top 50 时一次渲染最多上百次),而整张卡
+    /// 订阅了整个 LastfmStatsService,封面 / 头像每补一批都会整卡重算。装 / 卸一个播放器最多晚半分钟反映到右键菜单上。
+    private static var installedCache: [String: (installed: Bool, at: Date)] = [:]
+
     private static func isInstalled(_ player: PlaybackPlayer) -> Bool {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: player.bundleIdentifier) != nil
+        let id = player.bundleIdentifier
+        if let hit = installedCache[id], Date().timeIntervalSince(hit.at) < 30 { return hit.installed }
+        let installed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil
+        installedCache[id] = (installed, Date())
+        return installed
     }
 
     /// music:// 深链交给 Music.app。Music 没在跑时直接 open 会被冷启动吞掉、停在上次的页面,先把它拉起来。
@@ -683,8 +691,10 @@ struct LastfmStatsSection: View {
 
     /// 榜单下面那一行:对比的是哪一段;上一期一条收听都没有时说明为什么没有箭头。
     private func chartWindowCaption(_ window: LastfmStatsService.ChartWindow) -> some View {
-        let from = window.from.formatted(.dateTime.year().month().day())
-        let to = window.to.formatted(.dateTime.year().month().day())
+        // 日期跟界面语言走(不指定 locale 就是系统语言:英文界面配中文系统时句子是英文、日期是中文)。
+        let style = Date.FormatStyle.dateTime.year().month().day().locale(L10n.locale)
+        let from = window.from.formatted(style)
+        let to = window.to.formatted(style)
         let text = window.listens > 0
             ? String(format: L10n.t("对比 %@ – %@"), from, to)
             : String(format: L10n.t("上一期（%@ – %@）没有收听记录，不显示升降"), from, to)
@@ -1155,16 +1165,17 @@ struct LastfmStatsSection: View {
     private static var relFmt = RelativeDateTimeFormatter()
 
     private static func ensureFormatters() {
-        let lang = L10n.current == "en" ? "en_US" : "zh_CN"
+        // 按界面语言(L10n.locale):原来非英文一律映射成 zh_CN,繁体界面里是简体的「4分钟前」。
+        let lang = L10n.current
         guard lang != fmtLang else { return }
         fmtLang = lang
         absFmt = DateFormatter()
         absFmt.dateStyle = .medium
         absFmt.timeStyle = .short
-        absFmt.locale = Locale(identifier: lang)
+        absFmt.locale = L10n.locale
         relFmt = RelativeDateTimeFormatter()
         relFmt.unitsStyle = .short
-        relFmt.locale = Locale(identifier: lang)
+        relFmt.locale = L10n.locale
     }
 
     /// 精确时刻("2026年8月11日 14:32"),给相对时间的悬停提示用。

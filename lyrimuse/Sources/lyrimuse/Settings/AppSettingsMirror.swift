@@ -103,9 +103,15 @@ enum AppSettingsMirror {
     /// 用它的地方(`FeatureSettingsStore.isFreshInstall`)读到的就是启动前的样子。
     static let existedBeforeLaunch = FileManager.default.fileExists(atPath: fileURL.path)
 
+    /// 每次启动最多恢复一次(AppSettings.shared 的初始化和 AppDelegate 都会调)。第二次再恢复会拿镜像盖掉
+    /// 这次启动里已经改过的值。
+    nonisolated(unsafe) private static var restoreAttempted = false
+
     @discardableResult
     static func restoreIfPristine() -> Bool {
         _ = existedBeforeLaunch
+        guard !restoreAttempted else { return false }
+        restoreAttempted = true
         // 判据用 hasCompletedOnboarding:它是"这台机器走完引导了没有",而且被刻意排除在
         // 导出/镜像之外(见 ConfigPortability 的排除表),所以它在新机器上一定不存在 ——
         // 正好是"这台机器还没有自己的偏好"最可靠的信号。

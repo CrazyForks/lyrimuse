@@ -2532,12 +2532,21 @@ final class LastfmStatsService: ObservableObject {
         snapshotSaveTask = Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled, let cred = credentials else { return }
-            // 只快照第一页:快照是给"重开时先端上桌"用的,端一页历史上来没有意义
-            guard recentPage == 1 else { return }
+            // 最近记录只快照第一页:快照是给"重开时先端上桌"用的,端一页历史上来没有意义。停在历史页时用
+            // 第 1 页的缓存顶上(原来整份不写,连榜单、头像、那年今日、刷新时间戳一起丢,重启后全要重取);
+            // 连第 1 页的缓存都没有才不写。
+            let firstPage: [RecentTrack]
+            if recentPage == 1 {
+                firstPage = recent
+            } else if let cached = recentPageCache[1] {
+                firstPage = cached
+            } else {
+                return
+            }
             // 只带**这一页用得上的**次数/封面下快照。这三张表在内存里随"听过多少歌、翻过
             // 多少页"只增不减,整份写盘的话文件会月复一月长大,而快照的用途只是"重开时先把
             // 第一页端上桌",多出来的键一个也用不上(否则是无界增长)。
-            let rows = recent.filter { $0.date != nil }
+            let rows = firstPage.filter { $0.date != nil }
             var keptCounts: [String: Int] = [:]
             var keptCovers: [String: URL] = [:]
             var keptAlbumCovers: [String: URL] = [:]
@@ -2659,8 +2668,10 @@ final class LastfmStatsService: ObservableObject {
         // (下面 guard gen == baselineGen 会挡掉那种情况让整批作废,但缓存键仍然按
         // "这次到底请求的是哪一页"来记,不跟着显示状态漂)。
         let requestedPage = recentPage
+        // 同步清掉上一轮的失败标记:refreshBaselineAndWait 调完这个函数立刻就看它,放进 Task 里清的话那一刻还是旧的
+        // true,上一次失败过的话下拉刷新一松手就收起。
+        baselineFailed = false
         Task {
-            baselineFailed = false
             // 总数不用单独打 user.getinfo:下面拉最近记录那次(不带 from)的 @attr.total
             // 本来就是全量 scrobble 数,一个请求两用,4 个请求并成 3 个。
             async let recentJSON = request(method: "user.getrecenttracks", cred: cred,
@@ -2975,14 +2986,16 @@ final class LastfmStatsService: ObservableObject {
         let key = "listens|\(period.rawValue)"
         guard fresh(key) == false, let cred = credentials else { return }
         fetchedAt[key] = Date()
-        let gen = baselineGen
+        // 核对的是账号代际,不是 baselineGen:后者每次刷新、翻页、feed 有新内容都会递增,这一行摘要一碰上就被作废,
+        // 而 fetchedAt 已经占了 15 分钟,摘要就消失 15 分钟。这里要防的只是换账号时旧结果写进新账号。
+        let epoch = accountEpoch
         Task {
             let now = Date()
             let json = await request(method: "user.getrecenttracks", cred: cred,
                                      extra: ["from": String(Int(now.addingTimeInterval(-span).timeIntervalSince1970)),
                                              "to": String(Int(now.timeIntervalSince1970)),
                                              "limit": "1"])
-            guard gen == baselineGen else { return }
+            guard epoch == accountEpoch else { return }
             guard let json, let s = dig(json, "recenttracks", "@attr", "total") as? String, let total = Int(s) else {
                 fetchedAt[key] = nil
                 return
@@ -3929,6 +3942,7 @@ final class LastfmStatsService: ObservableObject {
             var rows: [String: [String: Any]] = [:]
             do {
                 try process.run()
+                let stderrDrain = PipeDrain(errPipe.fileHandleForReading)
                 // 看门狗:子命令自己有 15 秒网络超时,25 秒还没退就是卡死了 —— 不杀的话
                 // readDataToEndOfFile 永远不返回,这个榜单转圈到天荒地老,fetchedAt 还把
                 // 重试锁 15 分钟。terminate 后读端拿到 EOF,走下面
@@ -3945,8 +3959,7 @@ final class LastfmStatsService: ObservableObject {
                 else {
                     // 失败时把子命令的 stderr 带进日志 —— 原来丢 nullDevice,collector 侧
                     // log.Fatal 的死因(配置缺失/网络全挂)从这边完全看不见。
-                    let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                                     encoding: .utf8)?.prefix(300) ?? ""
+                    let err = String(data: stderrDrain.wait(), encoding: .utf8)?.prefix(300) ?? ""
                     logger.notice("top-artists failed (exit \(process.terminationStatus)): \(String(err), privacy: .public)")
                     throw CocoaError(.fileReadCorruptFile)
                 }
@@ -4075,8 +4088,10 @@ final class LastfmStatsService: ObservableObject {
             process.standardOutput = pipe
             process.standardError = errPipe
             var gotFinal = false
+            var stderrDrain: PipeDrain?
             do {
                 try process.run()
+                stderrDrain = PipeDrain(errPipe.fileHandleForReading)
                 // 看门狗:子命令自己 30 秒整体超时,45 秒还没退就是卡死了。
                 let watchdog = Task.detached {
                     try? await Task.sleep(nanoseconds: 45_000_000_000)
@@ -4104,8 +4119,7 @@ final class LastfmStatsService: ObservableObject {
             }
             let ok = gotFinal
             if !ok {
-                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                                 encoding: .utf8)?.suffix(300) ?? ""
+                let err = String(data: stderrDrain?.wait() ?? Data(), encoding: .utf8)?.suffix(300) ?? ""
                 logger.notice("artist-tracks failed: \(String(err), privacy: .public)")
             }
             await MainActor.run {
@@ -4161,6 +4175,7 @@ final class LastfmStatsService: ObservableObject {
                 await MainActor.run { LastfmStatsService.shared.avatarRequested.subtract(missing) }
                 return
             }
+            let stderrDrain = PipeDrain(errPipe.fileHandleForReading)
             // 看门狗:冷缓存串行解析 10 个名字最坏约一分钟(每名 6s 超时),75 秒兜底,
             // 只防真正卡死的进程,不误杀正常的冷启动。
             let watchdog = Task.detached {
@@ -4171,8 +4186,7 @@ final class LastfmStatsService: ObservableObject {
             process.waitUntilExit()
             watchdog.cancel()
             guard let map = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
-                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                                 encoding: .utf8)?.prefix(300) ?? ""
+                let err = String(data: stderrDrain.wait(), encoding: .utf8)?.prefix(300) ?? ""
                 logger.notice("artist-avatars failed (exit \(process.terminationStatus)): \(String(err), privacy: .public)")
                 await MainActor.run { LastfmStatsService.shared.avatarRequested.subtract(missing) }
                 return
@@ -4351,3 +4365,28 @@ private struct JSONObjectBox: @unchecked Sendable {
     init(_ object: [String: Any]?) { self.object = object }
 }
 
+/// 子进程的 stderr 从起跑那一刻就在后台读空,要用时 `wait()` 取。只在读完 stdout / 进程退出之后再读 stderr 的话,
+/// 子命令往 stderr 写满管道缓冲(64KB)就会阻塞在 write 上不退出,父进程在等它的 stdout EOF 或退出 —— 互相等死,
+/// 直到看门狗杀掉它(同 ProcessRunner 头注那条)。`wait()` 在进程退出后调用,那时读端已经到 EOF,不会久等。
+private final class PipeDrain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private let done = DispatchSemaphore(value: 0)
+
+    init(_ handle: FileHandle) {
+        DispatchQueue.global(qos: .utility).async {
+            let read = handle.readDataToEndOfFile()
+            self.lock.lock()
+            self.data = read
+            self.lock.unlock()
+            self.done.signal()
+        }
+    }
+
+    func wait() -> Data {
+        done.wait()
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}

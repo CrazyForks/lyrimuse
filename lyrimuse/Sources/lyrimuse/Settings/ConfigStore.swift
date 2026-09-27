@@ -452,8 +452,9 @@ public final class ConfigStore: ObservableObject {
         }
         // 不重启 collector:它按 mtime 自己热重读 config.json(configreload.go)。见 CollectorRestartPolicy 头注。
         lastError = nil
-        // 同 FeatureSettingsStore.save():后台服务没在跑时,下次启动读盘生效,状态条提示「服务已停用」。
-        pendingUntilServiceEnabled = !CollectorServiceManager.isRunning
+        // 同 FeatureSettingsStore.save():后台服务被停用时下次启用读盘生效,状态条提示「服务已停用」。
+        // 看开关、不问 launchctl,理由见那边。
+        pendingUntilServiceEnabled = !AppSettings.shared.collectorServiceEnabled
         commitSnapshot()
         return true
     }

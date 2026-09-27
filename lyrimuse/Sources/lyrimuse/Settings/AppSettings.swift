@@ -174,7 +174,13 @@ extension LyricsRestingAlignment {
 // UserDefaults 支撑的设置存储。
 @MainActor
 final class AppSettings: ObservableObject {
-    static let shared = AppSettings()
+    // 从配置文件夹镜像恢复必须发生在 init 从 UserDefaults 读值**之前**(见 AppSettingsMirror.restoreIfPristine)。
+    // 放在这里而不是只靠 AppDelegate 那一行:App 入口的属性初始化(LyrimuseApp.languageSettings)在 main() 阶段
+    // 就先构造了这个单例,那时 AppDelegate 还没跑 —— 新机器上恢复只落了盘、这一轮界面仍是默认值。
+    static let shared: AppSettings = {
+        AppSettingsMirror.restoreIfPristine()
+        return AppSettings()
+    }()
 
     private enum Keys {
         /// 已废弃:全局「卡拉OK效果」拆成三个展示面各自的开关,只在 init() 里读一次做迁移

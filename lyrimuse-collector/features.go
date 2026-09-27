@@ -727,11 +727,28 @@ func resolveLyricsSourceMode(mode string) string {
 	return lyricsModeSmart
 }
 
+// resolveLyricsSourceOrder:用户排的顺序里认得的源按原顺序保留(去重、丢掉不认得的),没排进去的按默认顺序
+// 补在末尾 —— 新加了一个源、旧文件的顺序表还没有它时,用户手排的前几位原样生效,新源排最后。口径与 Swift 侧
+// FeatureSettingsStore.completedLyricsSourceOrder 一致。原来非空就原样用,缺的源在「顺序优先」模式下永远选不到。
 func resolveLyricsSourceOrder(order []string) []string {
-	if len(order) == 0 {
-		return append([]string(nil), lyricsSourceDefaultOrder...)
+	known := make(map[string]bool, len(lyricsSourceDefaultOrder))
+	for _, s := range lyricsSourceDefaultOrder {
+		known[s] = true
 	}
-	return order
+	out := make([]string, 0, len(lyricsSourceDefaultOrder))
+	seen := make(map[string]bool, len(lyricsSourceDefaultOrder))
+	for _, s := range order {
+		if known[s] && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range lyricsSourceDefaultOrder {
+		if !seen[s] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // resolveLyricsTranslationLanguage 把共享文件里的"auto"/空值解析成一个具体的 ISO

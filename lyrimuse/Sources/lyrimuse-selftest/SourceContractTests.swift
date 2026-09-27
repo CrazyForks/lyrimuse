@@ -3252,8 +3252,11 @@ func runSourceContractTests() {
         for f in ["Settings/ConfigStore.swift", "Settings/FeatureSettingsStore.swift"] {
             let s = code(f)
             expectEqual(s.contains("var pendingUntilServiceEnabled"), true, "应用状态: \(f) 区分「服务已停用」与「重启失败」")
-            expectEqual(s.contains("pendingUntilServiceEnabled = !CollectorServiceManager.isRunning"), true,
-                        "应用状态: \(f) 保存后看后台服务在不在跑,没在跑才提示「服务已停用」")
+            // 看开关、不问 launchctl:每次保存都走这里,isRunning 会在主线程同步起子进程;状态条本来也只在开关关着时提示。
+            expectEqual(s.contains("pendingUntilServiceEnabled = !AppSettings.shared.collectorServiceEnabled"), true,
+                        "应用状态: \(f) 保存后按后台服务开关定性,关着才提示「服务已停用」")
+            expectEqual(s.contains("pendingUntilServiceEnabled = !CollectorServiceManager.isRunning"), false,
+                        "应用状态: \(f) 保存路径不在主线程同步问 launchctl")
             expectEqual(s.contains("func clearApplyStatus()"), true, "应用状态: \(f) 给状态条一个关闭出口")
             expectEqual(s.contains("L10n.t(\"后台采集服务重启失败\")"), false, "应用状态: \(f) 的失败文案换成说清后果的那句")
         }

@@ -400,8 +400,11 @@ func runSettingsInteractionTests() {
         }
         expectEqual(picker.contains("!customFonts.isImported($0) && customFonts.availableFamilies.contains($0)"), true,
                     "字体选择器(契约): 系统字体区不重复列导入字体、不列已删掉的族")
-        expectEqual(picker.contains("String(format: L10n.t(\"%@（未安装）\"), selection)"), true,
+        // 「未安装」收在 displayName(for:) 里:几处摘要(编辑台工具栏、菜单栏)跟选择器按钮说同一句话。
+        expectEqual(picker.contains("CustomFontStore.shared.isAvailable(family) ? family : String(format: L10n.t(\"%@（未安装）\"), family)"), true,
                     "字体选择器(契约): 选中的族不在时标「未安装」")
+        expectEqual(picker.contains("private var currentLabel: String { Self.displayName(for: selection) }"), true,
+                    "字体选择器(契约): 按钮文字跟各处摘要走同一个 displayName")
     }
 
     // ---- Apple Music 令牌文件:到期、被拒、老文件 ----

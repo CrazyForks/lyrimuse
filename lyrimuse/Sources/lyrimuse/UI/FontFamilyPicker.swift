@@ -73,16 +73,17 @@ struct FontFamilyPicker: View {
     /// 「Aa 文字…」按钮上显示同一截摘要(见 OverlayStyleSummary.text),而那个位置手里
     /// 只有一个字符串、构造不出这个 View。"空串 = 系统字体"这条规则只能有一处 ——
     /// 抄一份的话,以后把哨兵值从空串换成别的,漏改的那处会显示成一个空白按钮。
+    /// 选中的族名此刻没有字体可用时带上「（未安装）」:几处摘要(编辑台工具栏、歌词窗口、菜单栏)跟这个选择器的
+    /// 按钮说同一句话 —— 原来摘要照常显示族名,点开的选择器却标着未安装。
     static func displayName(for family: String) -> String {
-        family.isEmpty ? L10n.t("系统字体") : family
+        if family.isEmpty { return L10n.t("系统字体") }
+        return CustomFontStore.shared.isAvailable(family) ? family : String(format: L10n.t("%@（未安装）"), family)
     }
 
     /// 选中的族名此刻没有字体可用(换机后没带过来 / 在别处删掉了):标「未安装」,按钮上用系统字体显示。
     private var selectionMissing: Bool { !customFonts.isAvailable(selection) }
 
-    private var currentLabel: String {
-        selectionMissing ? String(format: L10n.t("%@（未安装）"), selection) : Self.displayName(for: selection)
-    }
+    private var currentLabel: String { Self.displayName(for: selection) }
 
     var body: some View {
         Button {

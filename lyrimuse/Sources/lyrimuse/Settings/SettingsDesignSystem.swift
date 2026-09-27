@@ -1095,6 +1095,18 @@ private struct SegmentedControlRepresentable<T: Identifiable & Equatable>: NSVie
     }
     
     func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        // 段数、文字只在 makeNSView 里设过一次:选项列表变了(决策面板的记录数)、运行中切了界面语言,都要在这里跟上,
+        // 不然显示的还是旧的段。变了才重建,并重新量一次固定尺寸。
+        context.coordinator.selection = $selection
+        context.coordinator.options = options
+        let labels = options.map(label)
+        if control.segmentCount != labels.count
+            || labels.indices.contains(where: { control.label(forSegment: $0) != labels[$0] }) {
+            control.segmentCount = labels.count
+            for (index, text) in labels.enumerated() { control.setLabel(text, forSegment: index) }
+            control.sizeToFit()
+            context.coordinator.fixedSize = control.fittingSize
+        }
         // 同步 SwiftUI 的 selection 到 NSSegmentedControl
         if let selectedIndex = options.firstIndex(where: { $0.id == selection.id }) {
             if control.selectedSegment != selectedIndex {
@@ -1108,19 +1120,20 @@ private struct SegmentedControlRepresentable<T: Identifiable & Equatable>: NSVie
     }
     
     class Coordinator: NSObject {
-        @Binding var selection: T
-        let options: [T]
+        // 两个都是 var:updateNSView 每次都换成最新的,不然选项列表变了之后点击还映射到旧的那一份上。
+        var selection: Binding<T>
+        var options: [T]
         var fixedSize: NSSize = .zero
         
         init(selection: Binding<T>, options: [T]) {
-            self._selection = selection
+            self.selection = selection
             self.options = options
         }
         
         @objc func segmentChanged(_ sender: NSSegmentedControl) {
             let index = sender.selectedSegment
             guard index >= 0 && index < options.count else { return }
-            selection = options[index]
+            selection.wrappedValue = options[index]
         }
     }
     
@@ -1162,6 +1175,18 @@ private struct SegmentedControlRepresentableHashable<T: Hashable>: NSViewReprese
     }
     
     func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        // 段数、文字只在 makeNSView 里设过一次:选项列表变了(决策面板的记录数)、运行中切了界面语言,都要在这里跟上,
+        // 不然显示的还是旧的段。变了才重建,并重新量一次固定尺寸。
+        context.coordinator.selection = $selection
+        context.coordinator.options = options
+        let labels = options.map(label)
+        if control.segmentCount != labels.count
+            || labels.indices.contains(where: { control.label(forSegment: $0) != labels[$0] }) {
+            control.segmentCount = labels.count
+            for (index, text) in labels.enumerated() { control.setLabel(text, forSegment: index) }
+            control.sizeToFit()
+            context.coordinator.fixedSize = control.fittingSize
+        }
         // 同步 SwiftUI 的 selection 到 NSSegmentedControl
         if let selectedIndex = options.firstIndex(of: selection) {
             if control.selectedSegment != selectedIndex {
@@ -1175,19 +1200,20 @@ private struct SegmentedControlRepresentableHashable<T: Hashable>: NSViewReprese
     }
     
     class Coordinator: NSObject {
-        @Binding var selection: T
-        let options: [T]
+        // 两个都是 var:updateNSView 每次都换成最新的,不然选项列表变了之后点击还映射到旧的那一份上。
+        var selection: Binding<T>
+        var options: [T]
         var fixedSize: NSSize = .zero
         
         init(selection: Binding<T>, options: [T]) {
-            self._selection = selection
+            self.selection = selection
             self.options = options
         }
         
         @objc func segmentChanged(_ sender: NSSegmentedControl) {
             let index = sender.selectedSegment
             guard index >= 0 && index < options.count else { return }
-            selection = options[index]
+            selection.wrappedValue = options[index]
         }
     }
     

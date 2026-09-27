@@ -720,6 +720,7 @@
 "截屏时隐藏" = "Hide in Screenshots";
 "所有候选都相同的项：%@" = "Terms identical on every candidate: %@";
 "手动重新匹配" = "Manual re-match";
+"打不开这个文件夹：%@" = "Couldn't open this folder: %@";
 "打开" = "Open";
 "打开 %@" = "Open %@";
 "打开 %@ 时启动 Lyrimuse" = "Launch Lyrimuse when %@ opens";
@@ -924,6 +925,7 @@
 "有源明确说这首是纯音乐，没有可用的歌词候选" = "A source says this track is instrumental; there is no usable lyric candidate";
 "有记录 · 日均 %@ 首" = "Days with plays · %@ per day";
 "有软件更新可用" = "Software Update Available";
+"有部分设置没能写入（%@），其余已导入。可以再导入一次，或检查配置文件夹的写入权限" = "Some settings couldn't be written (%@); the rest were imported. Try importing again, or check that the config folder is writable.";
 "服务器报错（5xx）：%@" = "Server error (5xx): %@";
 "服务器报错（HTTP 5xx），稍后重试通常会恢复" = "Server error (HTTP 5xx); retrying later usually works";
 "服务器设置 → 整合（Integrations） → Webhook → 新建 Webhook，选好要发到的频道后复制 Webhook URL" = "Server Settings → Integrations → Webhooks → New Webhook. Pick the channel to post to, then copy the Webhook URL";
@@ -1429,6 +1431,7 @@
 "跟着演唱进度把已唱到的部分染成系统强调色。只在这首歌有逐字时间轴时生效；打开菜单反白期间暂不染色" = "Tints the sung portion with the system accent color, following the vocal timing. Only takes effect when this track has word-level timing; fill pauses while the menu is open and highlighted";
 "跟进算法升级" = "Follow Algorithm Upgrades";
 "跟随 %@ 启动" = "Launch when %@ opens";
+"跟随「全部播放器」：%@" = "Following “All players”: %@";
 "跟随封面" = "Follow Cover Art";
 "跟随封面开着，这个颜色只在拿不到封面主色时才用" = "Following the artwork, so this is used only when no color can be read from it";
 "跟随播放器启动" = "Launch when your player opens";

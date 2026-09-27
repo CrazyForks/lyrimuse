@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 import LyrimuseCore
@@ -86,6 +87,7 @@ final class LastfmLovedTracks: ObservableObject {
                 LastfmLoveModel.shared.noteChanged(newValue, target: target)
             } else {
                 self.apply(!newValue, target: target)
+                NSSound.beep() // 翻回去时响一声,理由同 LastfmLoveModel.toggle
             }
         }
     }

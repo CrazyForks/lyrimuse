@@ -62,7 +62,7 @@ enum DiagnosticsExporter {
             defer { status.isExporting = false }
             // 状态段要读 @MainActor 的单例,在主线程取;自动化权限先 await 出来传进去,
             // 不能在主线程上同步查(见 `automationLine`)。日志段(慢的那部分)扔后台。
-            let head = stateLines(automation: await automationLine())
+            let head = stateLines(automation: await automationLine(), collectorState: await collectorStateOffMain())
             await Task.detached(priority: .userInitiated) {
                 writeDiagnosticsBundle(to: url, bundleName: bundleName, head: head,
                                        secrets: secrets, currentTrackLines: currentTrackLines)
@@ -84,7 +84,7 @@ enum DiagnosticsExporter {
     /// 交互式导出请用 `exportInteractively()`,别在主线程上等这个。
     @MainActor
     static func buildReport() async -> String {
-        return (stateLines(automation: await automationLine()) + logLines(secrets: ConfigStore.shared.secretsForRedaction,
+        return (stateLines(automation: await automationLine(), collectorState: await collectorStateOffMain()) + logLines(secrets: ConfigStore.shared.secretsForRedaction,
                                         currentTrackLines: currentTrackLyricsLines()))
             .joined(separator: "\n")
     }
@@ -106,9 +106,15 @@ enum DiagnosticsExporter {
         return "Automation permission: " + (status.map { "\($0)" } ?? "timed out")
     }
 
-    /// 报告的状态段 —— 全部来自 @MainActor 隔离的单例,但都是内存读,很便宜。
+    /// launchd 里那条服务的状态。`CollectorServiceManager.state` 会起 `launchctl print` 子进程并同步等它退出,
+    /// 而 stateLines 在主线程上跑 —— 在后台取好再传进去。
+    private static func collectorStateOffMain() async -> LaunchdJobState {
+        await Task.detached(priority: .userInitiated) { CollectorServiceManager.state }.value
+    }
+
+    /// 报告的状态段 —— 全部来自 @MainActor 隔离的单例,但都是内存读,很便宜(launchd 状态由调用方在后台取好传进来)。
     @MainActor
-    private static func stateLines(automation: String) -> [String] {
+    private static func stateLines(automation: String, collectorState: LaunchdJobState) -> [String] {
         var lines: [String] = []
 
         lines.append("Lyrimuse Diagnostics")
@@ -161,7 +167,7 @@ enum DiagnosticsExporter {
         lines.append("Collector service enabled (setting): \(settings.collectorServiceEnabled)")
         // 报完整三态而不是 true/false —— "注册了但起不来"正是最需要出现在诊断报告里的那
         // 一档(带上次退出码),以前它跟"在跑"一样报 true,报告等于把最关键的线索抹掉了。
-        lines.append("Collector service state: \(CollectorServiceManager.state)")
+        lines.append("Collector service state: \(collectorState)")
         // 两份共享配置文件的三态:损坏时所有保存被拒,「设置保存不上 / 账号全空」第一个该看的原因。
         // reason 只含解析位置、键名与期望类型,不含文件内容(config.json 是凭据)。
         lines.append("config.json: \(describe(config.fileState))")
@@ -552,65 +558,26 @@ enum DiagnosticsExporter {
             return ["(collector binary not found at \(collectorPath))"]
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: collectorPath)
-        // 子命令必须跟本 App 同一份配置目录 / 日志文件(Dev 构建是另一套),见 LyrimusePaths.collectorEnvironment。
-        process.environment = LyrimusePaths.collectorProcessEnvironment()
-        process.arguments = ["healthcheck"]
-        // 分两路管道,不合成一路:healthcheck 报告本身走 fmt.Println(stdout),但它触发的
-        // 两首探测曲会经 doHTTPTracked 打一堆 `api call: ...` 审计行到 log.Printf(stderr)。
-        // 合成一路会让结构化报告跟这堆网络噪音交叉穿插,可读性反而更差(实测直接在终端跑
-        // 一次就验证到这一点)。分开之后 stdout 是主体,stderr 只在非空时作为附注折叠展示。
+        // stdout / stderr 分两路,不合成一路:healthcheck 报告本身走 fmt.Println(stdout),但它触发的两首探测曲会经
+        // doHTTPTracked 打一堆 `api call: ...` 审计行到 log.Printf(stderr)。合成一路会让结构化报告跟这堆网络噪音交叉
+        // 穿插,可读性反而更差。分开之后 stdout 是主体,stderr 只在非空时作为附注折叠展示。
         //
-        // 两路各自开独立队列并发读,不能顺序读——跟 LyricsSearchService 读 collector
-        // 子进程 stdout/stderr 同一个理由:某一路写满 64KB 内核管道缓冲区时会阻塞在
-        // write() 上,父进程如果还在顺序等另一路先读完,就会死锁。
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return ["(failed to launch collector healthcheck: \(error.localizedDescription))"]
+        // 走 ProcessRunner:两根管子并发读空(某一路写满 64KB 管道缓冲时顺序读会死锁);15 秒超时先 SIGTERM、再不退就
+        // SIGKILL(原来只发 SIGTERM,collector 响应得慢时导出会卡在 15 秒以外);`timedOut` 由它如实报出「是不是我们杀的」,
+        // 不要事后用 terminationReason == .uncaughtSignal 去猜 —— 那个条件任何信号杀死的进程都会命中。
+        // 子命令必须跟本 App 同一份配置目录 / 日志文件(Dev 构建是另一套),见 LyrimusePaths.collectorEnvironment。
+        guard let result = ProcessRunner.run(
+            collectorPath, ["healthcheck"], timeout: 15,
+            environment: LyrimusePaths.collectorProcessEnvironment(), captureStderr: true)
+        else {
+            return ["(failed to launch collector healthcheck)"]
         }
+        let timedOut = result.timedOut
+        let stderrData = result.stderr
 
-        // 超时保护:两首探测曲各自有 collector 内部的网络超时,但子进程整体卡死的可能性
-        // 不能排除,15s 后强制结束——足够覆盖正常情况(实测通常 1~3s),又不会让一次
-        // 诊断导出因为这一步被无限期拖住。timedOut 显式记一下"是不是我们自己杀的",
-        // 不要事后用 terminationReason == .uncaughtSignal 去猜——那个条件任何信号
-        // 杀死的进程都会命中,拿它反推"超时"会把真实崩溃误报成超时。
-        var timedOut = false
-        let timeoutTimer = DispatchSource.makeTimerSource()
-        timeoutTimer.schedule(deadline: .now() + 15)
-        timeoutTimer.setEventHandler {
-            guard process.isRunning else { return }
-            timedOut = true
-            process.terminate()
-        }
-        timeoutTimer.resume()
-
-        var stdoutData = Data()
-        var stderrData = Data()
-        let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-        group.wait()
-        process.waitUntilExit()
-        timeoutTimer.cancel()
-
-        let stdoutText = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stdoutText = result.stdoutText
         guard !stdoutText.isEmpty else {
-            return ["(collector healthcheck produced no output, exit code \(process.terminationStatus))"]
+            return ["(collector healthcheck produced no output, exit code \(result.status))"]
         }
         var resultLines = stdoutText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if timedOut {

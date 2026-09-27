@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import LyrimuseCore
 import OSLog
+import SystemConfiguration
 
 // 导入路径里每一步(JSON 解析/写 config.json/写 features.json)失败都只记日志、不
 // 中断后续步骤(见下面 importData 内部注释)——这样才能区分"整个没解析出来"和"部分
@@ -113,6 +114,9 @@ enum ConfigPortability {
         // 让那台机器默认收测试版,正好把这道闸绕开;而且它开着时 Sparkle 会多查一次 GitHub Release 列表,
         // 新机器上的人未必知道自己在收什么。宁可在新机器上自己再开一次。
         "np:receiveBetaUpdates",
+        // 「这台机器上哪个浏览器的 JS 自检通过过、在什么时候」。是这台机器上那几个浏览器的状态,不是偏好:
+        // 带去新机器的话,那边从没开过 JS 开关的浏览器也会显示「上次检测已生效」。
+        "np:browserJSVerifiedAtJSON",
         // 「这台机器上现在装进 launchd 的是哪个 collector 二进制」(路径+大小+mtime,见
         // CollectorServiceManager.installedFingerprintKey)。跟上面那条同类,而且带过去更糟:
         // 新机器上的二进制必然是另一个文件,却因为指纹"对得上"而跳过启动时那次本该做的重装,
@@ -181,6 +185,16 @@ enum ConfigPortability {
         }
     }
 
+    /// 「共享」设置里的电脑名称(备份元数据里的「来自哪台 Mac」)。不用 `Host.current().localizedName`:它在部分
+    /// 网络环境下会做名称解析、阻塞好几秒,而这里在点「导出 / 存到 iCloud」的那一下(主线程)就会被调到。
+    nonisolated static var computerName: String {
+        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? ""
+    }
+
+    /// 最近一次 `importData` 里没写成的那几份(`config.json` / `features.json`)。`importData` 返回 true 只代表
+    /// 「这是一份能读的备份」,不代表每一份都写进去了 —— 调用方据此说清楚哪部分没写成,别照常报成功再重启。
+    nonisolated(unsafe) static var lastImportFailures: [String] = []
+
     static func suggestedFilename() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HHmmss"
@@ -233,7 +247,7 @@ enum ConfigPortability {
             // 从哪台机器导出的。iCloud 文件夹里会攒着好几份配置,只有时间戳的话分不清
             // 是哪台机器写的 —— 导入前的那句确认里要能说清楚"这份来自谁"。
             // 只是台机器名,不是敏感信息。
-            ConfigExportMetadata.deviceNameKey: Host.current().localizedName ?? "",
+            ConfigExportMetadata.deviceNameKey: computerName,
         ]
 
         if let configData = try? Data(contentsOf: configURL),
@@ -279,6 +293,8 @@ enum ConfigPortability {
     // 可能的第四个),忘一个就是同一个 bug 再来一次。
     @discardableResult
     static func importData(_ data: Data) async -> Bool {
+        // 这一次导入里哪几份没写成(见 lastImportFailures)。
+        lastImportFailures = []
         guard let bundle = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             logger.error("importData: top-level JSON parse failed — not a valid export file")
             return false
@@ -312,6 +328,7 @@ enum ConfigPortability {
                     await MainActor.run { ConfigStore.shared.load() }
                 } catch {
                     logger.error("importData: writing config.json failed — \(String(describing: error), privacy: .public)")
+                    lastImportFailures.append("config.json")
                 }
             } else {
                 logger.error("importData: re-serializing 'config' from the import bundle failed")
@@ -328,6 +345,7 @@ enum ConfigPortability {
                     await MainActor.run { FeatureSettingsStore.shared.load() }
                 } catch {
                     logger.error("importData: writing features.json failed — \(String(describing: error), privacy: .public)")
+                    lastImportFailures.append("features.json")
                 }
             } else {
                 logger.error("importData: re-serializing 'features' from the import bundle failed")

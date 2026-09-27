@@ -527,6 +527,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 退出原因日志:所有退出路径的汇合点,在这里打、只打一次。原因由 AppExit.request
         // 登记,没登记的按信号推断(Sparkle 正在装更新 → sparkle_install,否则 external_request)。
         AppExit.logTermination(sparkleInstalling: SparkleUpdaterManager.shared.isInstallingUpdate)
+        // 镜像写盘有 2 秒防抖,退出前这 2 秒里改的设置还没进镜像;引导没走完的机器每次启动都会从镜像恢复
+        // (restoreIfPristine),不补这一次就会把那几项改动回滚成旧值。
+        AppSettingsMirror.write()
         guard ConfigStore.shared.isDirty else { return .terminateNow }
         Task {
             _ = await ConfigStore.shared.save()

@@ -16,7 +16,9 @@ struct PlayerPicker<Trailing: View>: View {
     /// 追加在播放器卡之后、「更多播放器」之前的卡(引导页那张 YouTube Music)。
     @ViewBuilder let trailing: () -> Trailing
 
-    @State private var installed: Set<PlaybackPlayer> = PlayerPickerLayout.installedPlayers()
+    // @State 的初值表达式在**每次**构造这个结构体时都会求一次(SwiftUI 只是丢掉结果),父视图每重算一次就逐个
+    // 播放器查一遍 LaunchServices;走一份几秒内有效的缓存。真正刷新仍是下面的 refreshInstalled。
+    @State private var installed: Set<PlaybackPlayer> = InstalledPlayersCache.current()
     @State private var showsMore = false
 
     init(features: FeatureSettingsStore, @ViewBuilder trailing: @escaping () -> Trailing) {
@@ -100,7 +102,7 @@ struct PlayerPicker<Trailing: View>: View {
     }
 
     private func refreshInstalled() {
-        let now = PlayerPickerLayout.installedPlayers()
+        let now = InstalledPlayersCache.refresh()
         if now != installed { installed = now }
     }
 }
@@ -134,5 +136,25 @@ struct MorePlayersCard: View {
         }
         .buttonStyle(.plain)
         .help(L10n.t("这台 Mac 上没装的播放器"))
+    }
+}
+
+/// 已安装播放器的查询结果,几秒内复用(泛型结构体不能有静态存储属性,所以放在文件级)。
+@MainActor
+private enum InstalledPlayersCache {
+    private static var value: Set<PlaybackPlayer>?
+    private static var at = Date.distantPast
+    private static let ttl: TimeInterval = 5
+
+    static func current() -> Set<PlaybackPlayer> {
+        if let value, Date().timeIntervalSince(at) < ttl { return value }
+        return refresh()
+    }
+
+    static func refresh() -> Set<PlaybackPlayer> {
+        let now = PlayerPickerLayout.installedPlayers()
+        value = now
+        at = Date()
+        return now
     }
 }
