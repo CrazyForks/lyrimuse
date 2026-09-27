@@ -109,3 +109,21 @@ func TestLoadConfigMissingFileIsNotAnIssue(t *testing.T) {
 		t.Errorf("默认 apiRoot 没填, got %q", cfg.APIRoot)
 	}
 }
+
+// 粘贴进来的 token 带尾随换行 / 前导空格:拼进 `Authorization: Token …` 之前必须去掉,
+// 带换行是非法 header、带空格服务端认不出。
+func TestConfigTrimsCredentialWhitespace(t *testing.T) {
+	cfg := configFromBytes([]byte(`{"listenbrainz_token":"  tok-123\n","lastfm_scrobble_session_key":"sk\t","bark_url":" https://api.day.app/KEY ","listenbrainz_user":"me"}`))
+	if cfg.Token != "tok-123" {
+		t.Errorf("Token = %q, want trimmed", cfg.Token)
+	}
+	if cfg.LastfmScrobbleSessionKey != "sk" {
+		t.Errorf("LastfmScrobbleSessionKey = %q, want trimmed", cfg.LastfmScrobbleSessionKey)
+	}
+	if cfg.NotificationWebhookURL != "https://api.day.app/KEY" {
+		t.Errorf("NotificationWebhookURL = %q, want trimmed", cfg.NotificationWebhookURL)
+	}
+	if cfg.User != "me" {
+		t.Errorf("User = %q, untouched values must survive", cfg.User)
+	}
+}

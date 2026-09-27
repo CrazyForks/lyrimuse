@@ -25,6 +25,11 @@ final class ListenBrainzTokenCheck: ObservableObject {
 
     private var task: Task<Void, Never>?
     private var lastChecked = ""
+    /// 这个实例看到过非空 Token 没有(清空了也算看到过)。快速路径只给「页面刚打开、Token 还是存着的那个」用。
+    private var hasSeenToken = false
+
+    /// 连不上时自动重试的间隔(秒)。界面上「连不上」那句承诺了会自动重试。
+    private static let retryDelays: [UInt64] = [30, 60, 120]
 
     /// Token 变化时调。自带防抖 —— 输入框每敲一个字符都会来一次,不防抖就是一串废请求。
     ///
@@ -38,6 +43,8 @@ final class ListenBrainzTokenCheck: ObservableObject {
         guard !trimmed.isEmpty else {
             lastChecked = ""
             state = .empty
+            // 清空过就不再信存着的用户名:接着粘贴的是另一个 Token 时,它还是上一个 Token 的主人。
+            hasSeenToken = true
             return
         }
         // 同一个 Token 已经查过就别再查(切换页面/重绘都会走到这里)。
@@ -48,7 +55,8 @@ final class ListenBrainzTokenCheck: ObservableObject {
         // 只在 lastChecked 为空(= 这个实例还没查过任何东西)时才走这条快速路径。用户在
         // 输入框里改 Token 时 lastChecked 早就被设成旧 Token 了,不会命中,照常走校验 ——
         // 否则改完 Token 会一直显示旧用户名。
-        if lastChecked.isEmpty, !knownUser.isEmpty {
+        if !hasSeenToken, !knownUser.isEmpty {
+            hasSeenToken = true
             lastChecked = trimmed
             state = .valid(user: knownUser)
             // 仍然在后台**静默**复核一次(不置 .checking、不转圈):Token 可能是从别处导进来的,
@@ -56,7 +64,8 @@ final class ListenBrainzTokenCheck: ObservableObject {
             task = Task { [weak self] in
                 let outcome = await Self.validate(token: trimmed)
                 guard !Task.isCancelled, let self else { return }
-                if outcome != .valid(user: knownUser) {
+                // 静默复核没问到(断网、服务端限流):维持「已连接」,不把存好的状态改成连不上。
+                if outcome != .valid(user: knownUser), outcome != .unreachable {
                     self.state = outcome
                     if case .valid(let user) = outcome { onResolvedUser(user) }
                 }
@@ -64,11 +73,20 @@ final class ListenBrainzTokenCheck: ObservableObject {
             return
         }
 
+        hasSeenToken = true
         state = .checking
         task = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled else { return }
-            let outcome = await Self.validate(token: trimmed)
+            var outcome = await Self.validate(token: trimmed)
+            // 连不上就隔一会儿再问,最多三次;期间界面显示「连不上」。Token 一改这个 Task 就被取消。
+            for delay in Self.retryDelays where outcome == .unreachable {
+                guard !Task.isCancelled else { return }
+                self?.state = outcome
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                outcome = await Self.validate(token: trimmed)
+            }
             guard !Task.isCancelled else { return }
             self?.lastChecked = trimmed
             self?.state = outcome
@@ -93,6 +111,8 @@ final class ListenBrainzTokenCheck: ObservableObject {
             // **HTTP 200 + {"valid":false}**,不是 401。所以真正的判据是下面那个 valid 字段,
             // 这一行只是兜底 —— 万一哪天它改成标准的鉴权失败,也别把 401 当成"网络没问到"。
             if status == 401 { return .invalid }
+            // 限流、服务端出错:问不出 Token 对不对,不能说成「无效」(那会让人白白去重新生成一个)。
+            if let status, status == 429 || status >= 500 { return .unreachable }
             guard
                 let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return .unreachable }

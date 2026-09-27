@@ -37,7 +37,7 @@ final class MotionCoverStore {
 
     private let fm = FileManager.default
     /// 正在下的 key → 任务。同一个 key 并发只跑一次(同 `ImageMemoryCache` 的做法)。
-    private var inflight: [String: Task<URL?, Never>] = [:]
+    private var inflight: [String: (task: Task<URL?, Never>, reference: CoverFingerprint.Reference?)] = [:]
     /// 这一次运行里已经失败过的 key —— 失败多半是"Apple 改了结构 / 这档拿不到",反复重试
     /// 只是白发请求。刻意**不落盘**:进程重启后再给一次机会。
     ///
@@ -78,7 +78,16 @@ final class MotionCoverStore {
         if failed.contains(key) { return nil }
         // 同一份参照图上次就没过终审,不必再下一遍那几 MB;参照图一换就是新组合,自然重试。
         if let reference, referenceRejected.contains(Self.rejectionKey(key, reference)) { return nil }
-        if let running = inflight[key] { return await running.value }
+        if let running = inflight[key] {
+            let result = await running.task.value
+            // 在跑的那一轮拿的是另一张参照图(换歌那一刻参照图还是上一首的),它被终审拒了,不代表拿现在这张也会被拒:
+            // 用这张再试一次。参照图相同、或者资源本身取不到(已记进 failed),就认这个结果。
+            if result == nil, let reference, running.reference != reference, !failed.contains(key),
+               !referenceRejected.contains(Self.rejectionKey(key, reference)) {
+                return await prepare(master: master, reference: reference)
+            }
+            return result
+        }
 
         let task = Task<URL?, Never> { [weak self] in
             guard let self else { return nil }
@@ -96,10 +105,13 @@ final class MotionCoverStore {
                 case .unavailable:
                     self.failed.insert(key)
                     return nil
+                case .transient:
+                    // 断网、超时这类:这一次没下成,下次换到这张专辑再试,不记进 failed(那会封到进程重启)。
+                    return nil
                 }
             }
         }
-        inflight[key] = task
+        inflight[key] = (task, reference)
         return await task.value
     }
 
@@ -118,6 +130,8 @@ final class MotionCoverStore {
         case ready(URL)
         case referenceMismatch
         case unavailable
+        /// 网络层失败(断网、超时、DNS、服务端 5xx / 429):不是资源的问题,不进 `failed`。
+        case transient
     }
 
     private nonisolated func download(master: URL, reference: CoverFingerprint.Reference?) async -> DownloadOutcome {
@@ -143,7 +157,7 @@ final class MotionCoverStore {
             let (data, response) = try await URLSession.shared.data(from: mediaURL)
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 logger.notice("motion cover: media http \(http.statusCode, privacy: .public)")
-                return .unavailable
+                return http.statusCode == 429 || http.statusCode >= 500 ? .transient : .unavailable
             }
             guard Self.looksLikeMP4(data) else {
                 logger.notice("motion cover: payload is not an mp4 (\(data.count, privacy: .public) bytes)")
@@ -162,11 +176,16 @@ final class MotionCoverStore {
                 case .undecidable: return .unavailable
                 }
             }
-            // ⑤ 通过终审才落盘。
-            return .ready(try await MainActor.run { try self.store(data, master: master, width: picked.width) })
+            // ⑤ 通过终审才落盘:把这份已经写好的临时文件挪进缓存目录(几 MB 的写入留在这条后台路径上,
+            // 主线程只做一次改名)。
+            let final = await MainActor.run { self.fileURL(for: master) }
+            try Self.moveIntoPlace(scratch, final: final)
+            logger.info("motion cover: stored \(picked.width, privacy: .public)px \(data.count / 1024, privacy: .public)KB")
+            await MainActor.run { self.pruneIfNeeded() }
+            return .ready(final)
         } catch {
             logger.notice("motion cover: fetch failed — \(error.localizedDescription, privacy: .public)")
-            return .unavailable
+            return error is URLError ? .transient : .unavailable
         }
     }
 
@@ -219,17 +238,12 @@ final class MotionCoverStore {
         return s
     }
 
-    /// 落盘:临时文件 + 原子改名(同 collector 那几份缓存),半份文件永远不会被当成可播的。
-    private func store(_ data: Data, master: URL, width: Int) throws -> URL {
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let final = fileURL(for: master)
-        let tmp = final.appendingPathExtension("tmp")
-        try data.write(to: tmp, options: .atomic)
+    /// 落盘:下载时写好的临时文件整份挪到最终位置(同卷是一次改名),半份文件永远不会被当成可播的。
+    private nonisolated static func moveIntoPlace(_ scratch: URL, final: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
         if fm.fileExists(atPath: final.path) { try? fm.removeItem(at: final) }
-        try fm.moveItem(at: tmp, to: final)
-        logger.info("motion cover: stored \(width, privacy: .public)px \(data.count / 1024, privacy: .public)KB")
-        pruneIfNeeded()
-        return final
+        try fm.moveItem(at: scratch, to: final)
     }
 
     // MARK: - 磁盘管理
@@ -262,6 +276,10 @@ final class MotionCoverStore {
             at: directory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
         var files: [(url: URL, size: Int64, date: Date)] = []
         var total: Int64 = 0
+        // 老版本落盘时先写 `<key>.mp4.tmp` 再改名,中途失败会留下这种孤儿,预算只数 mp4、永远删不到它们。
+        for url in items where url.pathExtension == "tmp" {
+            try? fm.removeItem(at: url)
+        }
         for url in items where url.pathExtension == "mp4" {
             guard let v = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
                   let size = v.fileSize, let date = v.contentModificationDate else { continue }

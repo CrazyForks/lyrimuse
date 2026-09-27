@@ -13,6 +13,14 @@ struct LastfmHeatmapView: View {
     @Binding var year: Int
     /// 量到的卡身宽度,格子边长按它反算(见 cellSize)。首帧量不到,先按保守档画。
     @State private var width: CGFloat = 0
+    /// 一整年的周列只跟年份和「今天」有关,而这个视图订阅着整个统计服务、同步时每翻一页都重算 body:
+    /// 按 (年份, 今天) 记住,不每次都重新格式化三百多个日期。
+    @State private var weeksMemo = WeeksMemo()
+
+    private final class WeeksMemo {
+        var key = ""
+        var weeks: [WeekColumn] = []
+    }
 
     // GitHub 的两套官方色阶(浅/深色模式),第 0 档(零播放)用系统填充色融入设置页背景。
     private static let lightLevels = ["#9be9a8", "#40c463", "#30a14e", "#216e39"]
@@ -78,9 +86,10 @@ struct LastfmHeatmapView: View {
     // MARK: - 网格
 
     private static let horizontalPadding: CGFloat = 14
-    /// 一年最多跨 53 个周列。**按这个常数算边长,不按当年真实列数** —— 今年只画到今天
-    /// (列数不满),按真实列数算的话今年的格子会比往年大一圈,切年份时整幅图跳一下。
-    private static let columnCount = 53
+    /// 一年最多跨 54 个周列(周一起算:1 月 1 日是周日的闰年,例如 2012、2040,头尾各占一个残列)。
+    /// **按这个常数算边长,不按当年真实列数** —— 今年只画到今天(列数不满),按真实列数算的话今年的格子会比
+    /// 往年大一圈,切年份时整幅图跳一下。写成 53 时那种年份最右一列会溢出卡片。
+    private static let columnCount = 54
     private static let cellGap: CGFloat = 2
     private static let weekdayLabelWidth: CGFloat = 12
     private static let maxCell: CGFloat = 11
@@ -94,7 +103,7 @@ struct LastfmHeatmapView: View {
     private var cellSize: CGFloat {
         guard width > 0 else { return Self.fallbackCell }
         let columns = CGFloat(Self.columnCount)
-        // 列间 52 档 + 星期标签列后面那一档 = 53 档
+        // 列间 columnCount-1 档 + 星期标签列后面那一档 = columnCount 档
         let forCells = width - 2 * Self.horizontalPadding - Self.weekdayLabelWidth
             - Self.cellGap * columns
         let raw = ((forCells / columns) * 2).rounded(.down) / 2
@@ -102,8 +111,9 @@ struct LastfmHeatmapView: View {
     }
 
     private var grid: some View {
-        let weeks = weekColumns(year: year)
+        let weeks = memoizedWeekColumns(year: year)
         let thresholds = levelThresholds(year: year)
+        let levels = levelColors
         let cell = cellSize
         return VStack(alignment: .leading, spacing: 3) {
             // 月份标签行:在包含每月 1 号的那一列上方标注。标签宽度超出列宽,靠
@@ -136,7 +146,7 @@ struct LastfmHeatmapView: View {
                         ForEach(0..<7, id: \.self) { row in
                             if let day = week.days[row] {
                                 let n = stats.dailyCounts[day.key] ?? 0
-                                cellShape(fill: color(for: n, thresholds: thresholds))
+                                cellShape(fill: color(for: n, thresholds: thresholds, levels: levels))
                                     .help("\(day.label) · \(n.formatted()) \(L10n.t("次"))")
                             } else {
                                 // 年头/年尾不属于本年的格子:占位保持列对齐,完全透明。
@@ -164,6 +174,16 @@ struct LastfmHeatmapView: View {
     private struct DayCell {
         var key: String   // "yyyy-MM-dd"
         var label: String // 悬停提示里的人话日期
+    }
+
+    private func memoizedWeekColumns(year: Int) -> [WeekColumn] {
+        // 月份标签和悬停日期是按界面语言拼的,语言也进键。
+        let key = "\(year)|\(LastfmStatsService.dayKey(Date()))|\(L10n.current)"
+        if weeksMemo.key != key {
+            weeksMemo.weeks = weekColumns(year: year)
+            weeksMemo.key = key
+        }
+        return weeksMemo.weeks
     }
 
     /// 把一年切成周列(周一起始)。只生成 1/1 到 12/31(未来的天不生成格子)。
@@ -216,15 +236,14 @@ struct LastfmHeatmapView: View {
         return t
     }
 
-    private var levelColors: [Color] {
-        (colorScheme == .dark ? Self.darkLevels : Self.lightLevels)
-            .compactMap { NSColor(hexStringWithAlpha: $0 + "FF").map(Color.init) }
-    }
+    /// 四档颜色解析一次存着:原来每个格子都要把四个十六进制串重新解析一遍。
+    private static let lightLevelColors = lightLevels.compactMap { NSColor(hexStringWithAlpha: $0 + "FF").map(Color.init) }
+    private static let darkLevelColors = darkLevels.compactMap { NSColor(hexStringWithAlpha: $0 + "FF").map(Color.init) }
+    private var levelColors: [Color] { colorScheme == .dark ? Self.darkLevelColors : Self.lightLevelColors }
     private var emptyColor: Color { Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.07) }
 
-    private func color(for count: Int, thresholds: [Int]) -> Color {
+    private func color(for count: Int, thresholds: [Int], levels: [Color]) -> Color {
         guard count > 0 else { return emptyColor }
-        let levels = levelColors
         if count <= thresholds[0] { return levels[0] }
         if count <= thresholds[1] { return levels[1] }
         if count <= thresholds[2] { return levels[2] }

@@ -31,6 +31,9 @@ final class PlayCountBreakdownLoader: ObservableObject {
     private var inputs: [PlayCountBreakdownMath.VariantInput] = []
     /// 各写法已拉到第几页(0 = 还没拉过/失败)。
     private var pagesFetched: [Int] = []
+    /// `load()` 每跑一次加一。`loadOlder()` 每等完一页都要核对:等的时候用户点了「重试」,`inputs` 已经整份换成
+    /// 新的一批(可能更短),按旧下标写进去会越界崩溃,就算不越界也是写错了行。
+    private var generation = 0
 
     init(artist: String, title: String) {
         self.artist = artist
@@ -38,6 +41,8 @@ final class PlayCountBreakdownLoader: ObservableObject {
     }
 
     func load() async {
+        generation += 1
+        let myGeneration = generation
         state = .loading
         let family = LastfmStatsService.shared.playCountFamily(artist: artist, title: title)
         let base = family[0]
@@ -52,6 +57,8 @@ final class PlayCountBreakdownLoader: ObservableObject {
             }
             for await (i, page) in group { pages[i] = page }
         }
+        // 等的时候又点了一次「重试」:结果归那一次,这一次作废。
+        guard myGeneration == generation else { return }
         var built: [PlayCountBreakdownMath.VariantInput] = []
         var fetched: [Int] = []
         for (i, member) in family.enumerated() {
@@ -89,11 +96,15 @@ final class PlayCountBreakdownLoader: ObservableObject {
         guard !loadingOlder, let current = breakdown, current.canLoadOlder else { return }
         loadingOlder = true
         defer { loadingOlder = false }
+        let myGeneration = generation
         for (i, variant) in current.variants.enumerated() where !variant.failed && !variant.exhausted {
+            guard i < pagesFetched.count else { break }
             let next = pagesFetched[i] + 1
             guard let page = await LastfmStatsService.shared.fetchTrackScrobbles(
                 artist: variant.artist, title: variant.title, page: next, limit: Self.pageSize)
             else { continue } // 这一页没拿到:原地不动,下次再点再试;不把这一写法标成 failed
+            // 等这一页的时候点了「重试」:inputs 已经是新的一批,这一轮补页整个作废。
+            guard myGeneration == generation, i < inputs.count else { return }
             inputs[i].plays.append(contentsOf: page.plays)
             // total 以最新一页为准(期间可能又 scrobble 了一次)。
             inputs[i].total = page.total

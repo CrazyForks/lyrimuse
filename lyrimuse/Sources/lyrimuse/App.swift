@@ -5,7 +5,16 @@ struct LyrimuseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     // 只为了让"歌词管理"这个 Window 的标题在手动切换语言时跟着重新解析——App.body
     // 原来不观察任何东西,加了才会在 appLanguage 变化时重新构造 Scene 树。
-    @ObservedObject private var languageSettings = AppSettings.shared
+    @ObservedObject private var languageSettings: AppSettings
+
+    init() {
+        // 这是整个进程第一次碰 AppSettings.shared 的地方(比 applicationDidFinishLaunching 早):它的 init()
+        // 末尾就按字体族名解析悬浮歌词 / 灵动岛的字体,用户导入的字体这时必须已经注册进 Core Text,否则静默
+        // 落回系统字体、直到下次改字体设置才纠正(见 CustomFontStore 头注)。属性初值会在 init 体之前求值,
+        // 所以不能写成 `= AppSettings.shared`。
+        _ = CustomFontStore.shared
+        _languageSettings = ObservedObject(wrappedValue: AppSettings.shared)
+    }
 
     var body: some Scene {
         // 这里**没有** MenuBarExtra。状态栏那一项改成自建 NSStatusItem 了

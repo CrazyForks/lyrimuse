@@ -268,12 +268,17 @@ struct OnboardingView: View {
         .onChange(of: step) { _, _ in
             guard currentStep == .done || currentStep == .background else { return }
             automation.refresh(automationTargets)
-            collectorRunning = CollectorServiceManager.isRunning
-            // 走到这一步就开始装,页面照样显示安装过程和结果(不在 App 启动时静默装)。
-            if OnboardingFlow.autoStartsBackgroundService(
-                at: currentStep, collectorRunning: collectorRunning,
-                installing: isTogglingCollectorService, lastAttemptFailed: collectorFailure != nil) {
-                enableCollectorService()
+            let arrivedAt = currentStep
+            Task {
+                await refreshCollectorRunning()
+                // 查状态的这一会儿又翻走了:别在别的页面上起安装。
+                guard currentStep == arrivedAt else { return }
+                // 走到这一步就开始装,页面照样显示安装过程和结果(不在 App 启动时静默装)。
+                if OnboardingFlow.autoStartsBackgroundService(
+                    at: currentStep, collectorRunning: collectorRunning,
+                    installing: isTogglingCollectorService, lastAttemptFailed: collectorFailure != nil) {
+                    enableCollectorService()
+                }
             }
         }
         // 走到最后一页就撒一阵花。判据挂 `currentStep` 而不是 `step`:最后一页的
@@ -287,6 +292,11 @@ struct OnboardingView: View {
         // 「完全磁盘访问」的状态文件由 collector 写,不会推通知过来;只在用得到它的两步轮询
         // (按 mtime 读,很便宜)。
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            // 服务没跑起来的时候,用户多半正照着失败文案去设置里「播放器 → 歌词引擎」修:修好了这里要跟着变绿、
+            // 放开「下一步」,收尾页点「开始使用」也要能记成走完。跑起来之后就不用再问了。
+            if (currentStep == .background || currentStep == .done), !collectorRunning, !isTogglingCollectorService {
+                Task { await refreshCollectorRunning() }
+            }
             switch currentStep {
             case .done: fullDiskAccess.refresh()
             // 用户可能去系统设置里手动开,窗口不在前台时收不到「切回来」那次刷新。
@@ -306,7 +316,7 @@ struct OnboardingView: View {
         .onReceive(Self.liveInputs) { liveInput = $0 }
         .onAppear {
             automation.refresh(automationTargets)
-            collectorRunning = CollectorServiceManager.isRunning
+            Task { await refreshCollectorRunning() }
             // 「YouTube Music」那一格的选中态按**当前真实配置**播种:已经配过
             // 浏览器的人重跑引导时,那一格该是亮的、后面那一步也该在,而不是让他重新勾一遍。
             // 这也是这个布尔不需要自己持久化的原因(见它的声明处)。
@@ -320,6 +330,7 @@ struct OnboardingView: View {
         // 留着转圈/超时提示,就是状态文字说已授权、下面却还在等,两处互相矛盾。
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             automation.refresh(automationTargets, clearRequestUI: true)
+            Task { await refreshCollectorRunning() }
         }
         .onReceive(PlaybackCoordinator.shared.$isPlayingNow.removeDuplicates()) { playing in
             isPlayingNow = playing
@@ -706,7 +717,9 @@ struct OnboardingView: View {
                 case .idle:
                     Text(L10n.t("授权对已经在运行的歌词引擎不生效。在系统设置里勾上之后，回到这里点一下「重启歌词引擎」。"))
                 }
-                if fullDiskAccess.restartPhase != .waiting {
+                // 歌词引擎没在跑(没装上、被跳过)或者正在装的时候不给这颗按钮:重启一个不存在的服务只会白转圈,
+                // 跟正在进行的安装撞在一起还可能互相杀掉对方刚拉起的进程。
+                if fullDiskAccess.restartPhase != .waiting, collectorRunning, !isTogglingCollectorService {
                     Button(L10n.t("重启歌词引擎")) {
                         Task { await fullDiskAccess.restartCollector(for: targets) }
                     }
@@ -1253,7 +1266,8 @@ struct OnboardingView: View {
         let entries = chosenEntries
         let autoDetect = entries.contains { if case .player(.auto) = $0 { return true } else { return false } }
         let apps = entries.filter { if case .player(.auto) = $0 { return false } else { return true } }
-        let appNames = apps.map(\.displayName).joined(separator: "、")
+        // 按界面语言拼(「A、B 和 C」/「A, B, and C」),不写死中文顿号。
+        let appNames = ListFormatter.localizedString(byJoining: apps.map(\.displayName))
         let detail = !autoDetect ? appNames
             : apps.isEmpty ? L10n.t("自动识别正在播放的 App")
             : String(format: L10n.t("自动识别正在播放的 App，外加 %@"), appNames)
@@ -1273,7 +1287,7 @@ struct OnboardingView: View {
             EmptyView()
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(L10n.t("你选的播放器") + "：" + detail)
+        .accessibilityLabel(String(format: L10n.t("你选的播放器：%@"), detail))
     }
 
     @ViewBuilder
@@ -1369,6 +1383,13 @@ struct OnboardingView: View {
     ///
     /// 在这里要、而不是等到后面那一步:后面那一步只在**列表非空**时才存在,而列表正是由
     /// 这一下决定的;等翻过去再问,用户已经离开"我刚说我用它"那个语境了。
+    /// 重新读一次后台服务在不在跑。`CollectorServiceManager.isRunning` 会起 `launchctl print` 子进程同步等它退出,
+    /// 放到后台线程上查,不卡引导窗口。
+    private func refreshCollectorRunning() async {
+        let running = await Task.detached(priority: .userInitiated) { CollectorServiceManager.isRunning }.value
+        if collectorRunning != running { collectorRunning = running }
+    }
+
     private func enableCollectorService() {
         isTogglingCollectorService = true
         collectorFailure = nil

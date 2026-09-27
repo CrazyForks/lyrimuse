@@ -675,14 +675,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
     }
 
+    /// 看不见歌词的三种情况,任意一个成立就停逐字渲染:锁屏、熄屏(不一定锁屏,取决于「需要密码」的延迟)、
+    /// 快速切换到另一个用户。分开记、合起来判:熄屏之后又锁上,醒来时屏幕亮了但还锁着,不能提前恢复。
+    private var screenIsLocked = false
+    private var screensAreAsleep = false
+    private var sessionIsInactive = false
+
+    private func applyScreenHidden() {
+        LocalPlaybackSource.shared.setScreenLocked(screenIsLocked || screensAreAsleep || sessionIsInactive)
+    }
+
     private func startObservingScreenLock() {
         let center = DistributedNotificationCenter.default()
         for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
             center.addObserver(
                 forName: NSNotification.Name(name), object: nil, queue: .main
-            ) { _ in
+            ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    LocalPlaybackSource.shared.setScreenLocked(locked)
+                    self?.screenIsLocked = locked
+                    self?.applyScreenHidden()
+                }
+            }
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        let workspaceEvents: [(NSNotification.Name, (AppDelegate) -> Void)] = [
+            (NSWorkspace.screensDidSleepNotification, { $0.screensAreAsleep = true }),
+            (NSWorkspace.screensDidWakeNotification, { $0.screensAreAsleep = false }),
+            (NSWorkspace.sessionDidResignActiveNotification, { $0.sessionIsInactive = true }),
+            (NSWorkspace.sessionDidBecomeActiveNotification, { $0.sessionIsInactive = false }),
+        ]
+        for (name, update) in workspaceEvents {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    update(self)
+                    self.applyScreenHidden()
                 }
             }
         }

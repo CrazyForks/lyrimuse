@@ -26537,29 +26537,6 @@
         }
       }
     },
-    "你选的播放器" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The players you picked"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你选的播放器"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你選的播放器"
-          }
-        }
-      }
-    },
     "菜单栏歌词的笔画粗细。字体族继续跟随系统菜单栏，「常规」就是系统菜单栏本来的粗细；中文只变粗不变宽，英文越粗越宽一点" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36706,6 +36683,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "回報問題時請附上：打包記錄檔、當機報告與執行狀態，已移除帳號憑證和本機使用者名稱"
+          }
+        }
+      }
+    },
+    "你选的播放器：%@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The players you picked: %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你選的播放器：%@"
           }
         }
       }

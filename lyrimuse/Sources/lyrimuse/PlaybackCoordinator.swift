@@ -805,8 +805,11 @@ final class PlaybackCoordinator: ObservableObject {
             s.$title.assign(to: \.title, on: self),
             // 换歌就重读一次"喜欢"状态。用 title+artist 组合去重而不是只看 title:同名不同
             // 歌手的曲目(翻唱/合辑里很常见)只看 title 会被当成同一首,漏掉一次刷新。
+            // 防抖 50ms:LocalPlaybackSource 换歌时 title / artist 是先后分开写的,不压一下会先放出一个
+            // 「新歌名|旧歌手」的中间态,一次换歌就起两次 osascript 回读(停播时依次清空也一样)。
             s.$title.combineLatest(s.$artist)
                 .map { "\($0)|\($1)" }
+                .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
                 .removeDuplicates()
                 .sink { [weak self] _ in
                     // 三项合并成一次 osascript 回读,见
@@ -916,9 +919,11 @@ final class PlaybackCoordinator: ObservableObject {
                 },
             // 动态封面的两个总闸变化时立刻重算:用户拨了开关、或者系统进出低电量模式。
             // 关掉要当场停下(而不是等下一首),打开也该当场生效。
+            // @Published 在 willSet 时发布:回调里再读 AppSettings.shared.motionCoverEnabled 拿到的是旧值,
+            // 新值只能用发布出来的这个参数。
             settings.$motionCoverEnabled
                 .dropFirst()
-                .sink { [weak self] _ in self?.refreshMotionCover() },
+                .sink { [weak self] enabled in self?.refreshMotionCover(enabled: enabled) },
             NotificationCenter.default.publisher(for: NSNotification.Name.NSProcessInfoPowerStateDidChange)
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in self?.refreshMotionCover() },
@@ -1042,8 +1047,9 @@ final class PlaybackCoordinator: ObservableObject {
                  window: Self.bakeWindowBackgroundLayers(cgImage: cg, seed: seed))
             }.value
             guard let self, !Task.isCancelled else { return }
-            if let notch = baked.notch { self.blurredArtworkImage = notch }
-            if let window = baked.window { self.windowBackgroundLayers = window }
+            // 烘不出来(解码 / 渲染失败)也要覆盖掉:留着就是上一首的背景挂在这一首上。
+            self.blurredArtworkImage = baked.notch
+            self.windowBackgroundLayers = baked.window
         }
     }
 
@@ -1619,7 +1625,8 @@ final class PlaybackCoordinator: ObservableObject {
     ///   * 用 `albumMatchedMotionCover`(精确 key → 仍然认专辑的 looseMatch),同样不退到"忽略专辑"
     ///     那一级 —— 在这里退一步拿到的是**另一张专辑的动画**,比一张静态错图扎眼得多；
     ///   * 盘上已经有那份文件时**同步**换上、不走 Task:同一张专辑的下一首歌不该再闪一次静态图。
-    private func refreshMotionCover(onlyIfMissing: Bool = false) {
+    /// - Parameter enabled: 开关刚拨动时由订阅传进来的新值(那一刻 AppSettings 里还是旧值);其余调用读设置。
+    private func refreshMotionCover(onlyIfMissing: Bool = false, enabled: Bool? = nil) {
         if onlyIfMissing, motionCoverFile != nil { return }
         motionCoverTask?.cancel()
         motionCoverTask = nil
@@ -1638,7 +1645,7 @@ final class PlaybackCoordinator: ObservableObject {
         //
         // 低电量模式下不动:macOS 的低电量本来就降刷新、限后台活动,一个装饰性的 24fps 循环正是
         // 该第一个让位的东西。它变化时有 NSProcessInfoPowerStateDidChange,下面订阅了。
-        guard AppSettings.shared.motionCoverEnabled,
+        guard enabled ?? AppSettings.shared.motionCoverEnabled,
               !ProcessInfo.processInfo.isLowPowerModeEnabled else {
             clear()
             return
@@ -1816,7 +1823,9 @@ final class PlaybackCoordinator: ObservableObject {
         MusicPlaybackController.playPause()
         stopGraceWork?.cancel()
         stopGraceWork = nil
-        isPlayingSmoothed = !isPlayingNow
+        // 按界面此刻显示的翻,不按真值翻:快速连按两下时第二下真值还没回读,按真值翻会连写两次「暂停」,
+        // 而播放器实际已经恢复播放、真值没变也不会来纠正,界面要反着显示到 2.5 秒后的对账。
+        isPlayingSmoothed = !isPlayingSmoothed
         optimisticReconcileWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }

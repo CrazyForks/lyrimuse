@@ -34,6 +34,8 @@ enum DirectFirstImageLoad {
                 ImageMemoryCache.shared.store(image, for: url, variant: .original)
                 return image
             }
+            // 调用方取消了(切歌、封面换了):不是直连不通,别把这台主机拉黑 10 分钟,也别再去走系统代理。
+            if Task.isCancelled { return nil }
             directFailedAt[host] = Date()
         }
         return await ImageMemoryCache.shared.load(url, variant: .original)

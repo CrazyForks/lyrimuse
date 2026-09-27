@@ -9,6 +9,7 @@ import (
 	_ "image/jpeg" // 注册 JPEG 解码器
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
 	"os"
+	"strings"
 )
 
 type config struct {
@@ -99,6 +100,19 @@ func loadConfig(path string) (*config, error) {
 	return configFromBytes(data), nil
 }
 
+// trimCredentials 去掉凭据与地址字段的首尾空白。用户粘贴 token 常带尾随空格 / 换行:App 侧校验时去掉了
+// 空白所以显示「已连接」,这边原样拼进请求头(`Token <token>`)就是一个带换行的非法 header 或认不出的
+// token,提交全部失败还没有任何提示。App 存盘时也去一次,这里兜住手工改过、或旧版本存下的配置。
+func (c *config) trimCredentials() {
+	for _, f := range []*string{
+		&c.Token, &c.User, &c.APIRoot, &c.StateRelayURL, &c.StateRelayToken,
+		&c.LastfmUser, &c.LastfmAPIKey, &c.LastfmScrobbleAPIKey, &c.LastfmScrobbleSecret, &c.LastfmScrobbleSessionKey,
+		&c.NotificationWebhookURL, &c.DingtalkSignSecret, &c.FeishuSignSecret, &c.TelegramChatID,
+	} {
+		*f = strings.TrimSpace(*f)
+	}
+}
+
 // configFromBytes 是 loadConfig 读完文件之后的那一半:逐字段解、补默认值、登记脱敏。
 // data 为 nil 表示文件不存在。热重读(configreload.go)读到新内容后走同一条路,两边口径一致。
 func configFromBytes(data []byte) *config {
@@ -109,6 +123,7 @@ func configFromBytes(data []byte) *config {
 	if v := os.Getenv("LISTENBRAINZ_TOKEN"); v != "" {
 		cfg.Token = v
 	}
+	cfg.trimCredentials()
 	if cfg.APIRoot == "" {
 		cfg.APIRoot = "https://api.listenbrainz.org"
 	}

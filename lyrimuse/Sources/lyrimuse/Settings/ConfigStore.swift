@@ -371,23 +371,26 @@ public final class ConfigStore: ObservableObject {
     // 协调者。"只重启一次"这件事现在由 CollectorRestartCoordinator
     // 负责——两个 store 的 save() 都走它,它去抖合并。
     public func persistFile() throws {
+        // 凭据和地址落盘前去掉首尾空白:粘贴进来的 token 常带尾随空格 / 换行,界面上的校验去掉了空白所以显示
+        // 「已连接」,collector 却原样拼进请求头。collector 读配置时也会再去一次(config.go trimCredentials)。
+        func t(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
         let fields: [String: Any] = [
-            "listenbrainz_token": listenbrainzToken,
-            "listenbrainz_user": listenbrainzUser,
-            "state_relay_url": stateRelayURL,
-            "state_relay_token": stateRelayToken,
-            "lastfm_user": lastfmUser,
-            "lastfm_api_key": lastfmAPIKey,
-            "lastfm_scrobble_api_key": lastfmScrobbleAPIKey,
-            "lastfm_scrobble_secret": lastfmScrobbleSecret,
-            "lastfm_scrobble_session_key": lastfmScrobbleSessionKey,
-            "lastfm_scrobble_username": lastfmScrobbleUsername,
+            "listenbrainz_token": t(listenbrainzToken),
+            "listenbrainz_user": t(listenbrainzUser),
+            "state_relay_url": t(stateRelayURL),
+            "state_relay_token": t(stateRelayToken),
+            "lastfm_user": t(lastfmUser),
+            "lastfm_api_key": t(lastfmAPIKey),
+            "lastfm_scrobble_api_key": t(lastfmScrobbleAPIKey),
+            "lastfm_scrobble_secret": t(lastfmScrobbleSecret),
+            "lastfm_scrobble_session_key": t(lastfmScrobbleSessionKey),
+            "lastfm_scrobble_username": t(lastfmScrobbleUsername),
             "notification_platform": notificationPlatform.rawValue,
-            "bark_url": notificationWebhookURL,
+            "bark_url": t(notificationWebhookURL),
             "notification_webhook_urls": persistedWebhookURLs,
-            "dingtalk_sign_secret": dingtalkSignSecret,
-            "feishu_sign_secret": feishuSignSecret,
-            "telegram_chat_id": telegramChatID,
+            "dingtalk_sign_secret": t(dingtalkSignSecret),
+            "feishu_sign_secret": t(feishuSignSecret),
+            "telegram_chat_id": t(telegramChatID),
         ]
         do {
             // 合并进磁盘镜像(api_root / bundle_ids 这些 UI 不管的字段原样保留)→ 原子写 + 0600(这份就是
