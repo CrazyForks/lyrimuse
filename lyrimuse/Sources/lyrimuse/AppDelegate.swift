@@ -335,6 +335,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 那只有一次机会,见 UnknownPlayerNotifier.ensureAuthorized。
         UnknownPlayerNotifier.shared.registerCategory()
         UnknownPlayerNotifier.shared.start()
+        // 补搜 / 全量扫库跑完时弹一条结果通知。delegate 由上面 registerCategory 设好(点通知的分流在那边)。
+        LyricsSweepNotifier.shared.start()
         // 捕获 openSettings/openWindow 这两个环境 action 的隐藏锚点窗口。原来这件事挂在
         // MenuBarExtra 的 label 上,随 MenuBarExtra 一起没了 —— 见该文件注释。
         MenuBarSceneActions.install()

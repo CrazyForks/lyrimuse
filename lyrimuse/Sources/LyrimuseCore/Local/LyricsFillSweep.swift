@@ -96,6 +96,37 @@ public enum LyricsFillSweep {
         }
     }
 
+    /// 一轮扫描收尾时弹哪一种系统通知(App 侧 `LyricsSweepNotifier` 按它投递)。
+    public enum FinishNotice: Equatable, Sendable {
+        /// 手动补搜跑完:搜了几首、补全 / 没找到 / 跳过各几首。
+        case fillDone(done: Int, filled: Int, missed: Int, skipped: Int)
+        /// 手动补搜因为一直连不上歌词源而停下(补搜不自动续跑,要用户再点一次)。
+        case fillOffline(done: Int, filled: Int)
+        /// 全量重新扫库整场跑完:`done` / `filled` 是整场累计的数。
+        case fullDone(done: Int, filled: Int)
+        /// 全量重新扫库因为断网暂停;collector 过一会儿会自己接着跑。
+        case fullOffline
+    }
+
+    /// 这份进度该不该弹收尾通知、弹哪一种。纯函数,selftest 覆盖。
+    ///
+    /// - `startedSince`:通知器开始盯的时刻(unix 秒)。在那之前开工、也没被看见在跑的一轮不算 ——
+    ///   App 启动时读到的是上一轮的收据,不是刚刚结束的事。
+    /// - `sawRunning`:这一轮(按 `startedAt` 认)被看见过在跑。App 在一轮中途重启时靠它补上。
+    ///
+    /// 不弹的:还在跑的;被停下的(用户自己按的「停止」,或进程重启打断 —— 全量扫库会自己接着跑);
+    /// 每天自动跑的那一轮补空(`manual == false`,没人在等它,天天弹就是打扰)。
+    public static func finishNotice(_ info: Info, startedSince: Int64, sawRunning: Bool) -> FinishNotice? {
+        guard !info.running, info.finishedAt != nil, info.cancelled != true else { return nil }
+        guard sawRunning || info.startedAt >= startedSince else { return nil }
+        if info.isFullScan {
+            return info.isOffline ? .fullOffline : .fullDone(done: info.done, filled: info.filled)
+        }
+        guard info.manual else { return nil }
+        if info.isOffline { return .fillOffline(done: info.done, filled: info.filled) }
+        return .fillDone(done: info.done, filled: info.filled, missed: info.missedCount, skipped: info.skippedCount)
+    }
+
     /// 缓存 key(`歌手|歌名|专辑`)在进度里的显示:「歌名 — 歌手」;歌手空就只写歌名,拆不开原样返回。纯函数,selftest 覆盖。
     public static func displayName(key: String) -> String {
         let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)

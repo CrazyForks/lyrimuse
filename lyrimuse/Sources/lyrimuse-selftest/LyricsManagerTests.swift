@@ -1155,6 +1155,34 @@ func runLyricsManagerTests() {
                     "补空重读: 换了一轮 → 重读")
         expectEqual(S.changesVisibleRows(previous: nil, current: r1), true, "补空重读: 第一次读到状态 → 重读")
         expectEqual(S.changesVisibleRows(previous: nil, current: nil), false, "补空重读: 从没跑过 → 不因它重读")
+
+        // 收尾通知:只弹这个进程里结束的、用户点出来的那一轮。
+        func finished(manual: Bool = true, full: Bool? = nil, done: Int = 10, filled: Int = 3, skipped: Int? = 2,
+                      startedAt: Int64 = 2_000, cancelled: Bool? = nil, offline: Bool? = nil) -> S.Info {
+            S.Info(running: false, manual: manual, full: full, total: 10, done: done, filled: filled, current: nil,
+                   startedAt: startedAt, updatedAt: startedAt + 60, finishedAt: startedAt + 60,
+                   cancelled: cancelled, offline: offline, skipped: skipped)
+        }
+        expectEqual(S.finishNotice(finished(), startedSince: 1_000, sawRunning: false),
+                    .fillDone(done: 10, filled: 3, missed: 5, skipped: 2), "收尾通知: 手动补搜跑完 → 结果(没找到 = 10 − 3 − 2)")
+        expectEqual(S.finishNotice(finished(offline: true), startedSince: 1_000, sawRunning: false),
+                    .fillOffline(done: 10, filled: 3), "收尾通知: 手动补搜断网停下 → 说原因")
+        expectEqual(S.finishNotice(finished(manual: false), startedSince: 1_000, sawRunning: true), nil,
+                    "收尾通知: 每天自动跑的补空不弹")
+        expectEqual(S.finishNotice(finished(cancelled: true), startedSince: 1_000, sawRunning: true), nil,
+                    "收尾通知: 被停下的不弹(用户自己按的,或重启打断)")
+        expectEqual(S.finishNotice(finished(full: true, done: 5_300, filled: 412), startedSince: 1_000, sawRunning: false),
+                    .fullDone(done: 5_300, filled: 412), "收尾通知: 全量扫库跑完 → 整场累计的数")
+        expectEqual(S.finishNotice(finished(full: true, offline: true), startedSince: 1_000, sawRunning: false), .fullOffline,
+                    "收尾通知: 全量扫库断网暂停")
+        expectEqual(S.finishNotice(finished(startedAt: 500), startedSince: 1_000, sawRunning: false), nil,
+                    "收尾通知: App 启动前就结束的上一轮收据不弹")
+        expectEqual(S.finishNotice(finished(startedAt: 500), startedSince: 1_000, sawRunning: true),
+                    .fillDone(done: 10, filled: 3, missed: 5, skipped: 2), "收尾通知: 开工早于启动、但看见过它在跑 → 照弹")
+        expectEqual(S.finishNotice(sweepInfo(running: true, startedAt: 2_000), startedSince: 1_000, sawRunning: true), nil,
+                    "收尾通知: 还在跑不弹")
+        expectEqual(S.finishNotice(finished(done: 0, filled: 0, skipped: nil), startedSince: 1_000, sawRunning: false),
+                    .fillDone(done: 0, filled: 0, missed: 0, skipped: 0), "收尾通知: 一首候选都没有也弹(说没有需要补搜的)")
     }
 
     // ---- 全量重新扫库(LyricsFullScan)----

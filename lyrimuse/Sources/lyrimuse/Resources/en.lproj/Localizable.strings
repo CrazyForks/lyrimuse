@@ -283,10 +283,14 @@
 "全部设置…" = "All Settings…";
 "全量重新扫库" = "Full library rescan";
 "全量重新扫库…" = "Full Library Rescan…";
+"全量重新扫库完成" = "Full Library Rescan Finished";
+"全量重新扫库已暂停" = "Full Library Rescan Paused";
 "全量重新扫库？" = "Rescan the whole library?";
+"共 %1$@ 首：补全 %2$@，没找到 %3$@，跳过 %4$@" = "%1$@ songs: %2$@ found, %3$@ not found, %4$@ skipped";
 "共 %@ 次" = "%@ plays total";
 "共 %@ 首" = "%@ songs";
 "共 %d 条，占用 %@" = "Cached: %d · %@ on disk";
+"共过了 %1$@ 首，更新了 %2$@ 首" = "Checked %1$@ songs, updated %2$@";
 "关于" = "About";
 "关于 Lyrimuse" = "About Lyrimuse";
 "关掉之后灵动岛只保留贴着刘海那一条的高度，歌词行不再渲染——适合想看播放状态、又不想被歌词挡住视线的场合。\n\n指向展开仍然可用（那是够到播放控制和进度条的唯一入口），只是展开区里那行「下一句」跟着一起不显示。" = "With this off, the notch keeps only the strip hugging the cutout and stops rendering the lyric row — handy when you want to see playback status without lyrics in the way.\n\nHovering to expand still works (it is the only way to reach the transport controls and the scrubber); the next-line row inside just goes away with it.";
@@ -1124,6 +1128,7 @@
 "没有找到带时间戳的版本，已自动采纳一份纯文本兜底（可在「歌词窗口」里查看）" = "No timed version found — automatically adopted a plain-text fallback (viewable in the Lyrics Window)";
 "没有授权" = "Not granted";
 "没有缺失" = "Nothing missing";
+"没有需要补搜的歌" = "No songs needed searching";
 "没能取到那年今日——Last.fm 没有响应" = "Couldn't load this day in past years — Last.fm didn't respond";
 "没能启动（%@）。可以先「暂时跳过」，之后到设置的「播放器 → 歌词引擎」里重试，那一页会给出更细的状态。" = "Couldn't start (%@). You can skip this for now and retry later under Settings → Player → Lyrics Engine, which reports a more detailed status.";
 "没能添加" = "Couldn’t add it";
@@ -1279,6 +1284,7 @@
 "网易云音乐" = "NetEase Cloud Music";
 "网易云音乐歌曲页" = "NetEase Music song page";
 "网络不通，已暂停，稍后会自动接着跑" = "Paused: no connection; it resumes automatically";
+"网络不通，搜了 %1$@ 首、补全 %2$@ 首后停下" = "No connection: stopped after %1$@ songs, %2$@ found";
 "网络不通，稍后重试…" = "No connection, retrying shortly…";
 "网络似乎不通" = "Couldn't Reach Any Source";
 "网络似乎不通，这一轮没搜到任何候选" = "The network looks down; no candidate came back this round";
@@ -1347,6 +1353,8 @@
 "补搜 %@ 首缺失的歌词" = "Search Lyrics for %@ Missing Songs";
 "补搜中 %1$@/%2$@" = "Searching %1$@/%2$@";
 "补搜歌词" = "Find Missing Lyrics";
+"补搜歌词完成" = "Lyrics Search Finished";
+"补搜歌词已停下" = "Lyrics Search Stopped";
 "补搜的范围：没有歌词的，加上只有纯文本的；纯音乐和人工修正过的不动" = "Searches again for songs with no lyrics or plain text only. Instrumentals and manually corrected songs are left alone.";
 "补搜缺失歌词" = "Missing lyrics refill";
 "补搜选中的 %@ 首" = "Find lyrics for %@ selected";

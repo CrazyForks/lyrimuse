@@ -36211,6 +36211,142 @@
           }
         }
       }
+    },
+    "补搜歌词完成" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lyrics Search Finished"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補搜歌詞完成"
+          }
+        }
+      }
+    },
+    "没有需要补搜的歌" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No songs needed searching"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有需要補搜的歌"
+          }
+        }
+      }
+    },
+    "共 %1$@ 首：补全 %2$@，没找到 %3$@，跳过 %4$@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ songs: %2$@ found, %3$@ not found, %4$@ skipped"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共 %1$@ 首：補全 %2$@，沒找到 %3$@，跳過 %4$@"
+          }
+        }
+      }
+    },
+    "补搜歌词已停下" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lyrics Search Stopped"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補搜歌詞已停下"
+          }
+        }
+      }
+    },
+    "网络不通，搜了 %1$@ 首、补全 %2$@ 首后停下" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection: stopped after %1$@ songs, %2$@ found"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路不通，搜了 %1$@ 首、補全 %2$@ 首後停下"
+          }
+        }
+      }
+    },
+    "全量重新扫库完成" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Library Rescan Finished"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全庫重新掃描完成"
+          }
+        }
+      }
+    },
+    "共过了 %1$@ 首，更新了 %2$@ 首" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checked %1$@ songs, updated %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共過了 %1$@ 首，更新了 %2$@ 首"
+          }
+        }
+      }
+    },
+    "全量重新扫库已暂停" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Library Rescan Paused"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全庫重新掃描已暫停"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

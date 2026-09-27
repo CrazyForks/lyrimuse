@@ -207,8 +207,9 @@ final class UnknownPlayerNotifier: NSObject {
     /// 授权。**在第一次真的有东西要通知的那一刻才请求** —— 授权只有一次机会
     /// (状态一旦变成 .denied,后续 requestAuthorization 立刻返回、再也不弹框),启动时
     /// 无脑请求会让用户在完全不知道这是干什么用的时候随手点「不允许」,这个功能就永久废了。
-    /// 此刻用户正在放歌,上下文明确。
-    private func ensureAuthorized() async -> Bool {
+    /// 此刻用户正在放歌,上下文明确。补搜 / 全量扫库的收尾通知(`LyricsSweepNotifier`)也走这里:
+    /// 那一刻用户刚等完自己点出来的一轮,上下文同样明确,授权只问一次、两边共用。
+    func ensureAuthorized() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
@@ -304,6 +305,16 @@ extension UnknownPlayerNotifier: UNUserNotificationCenterDelegate {
             AppActions.shared.suppressLyricsOnReopenUntil = Date().addingTimeInterval(2)
             Logger(subsystem: "me.yudaotor.lyrimuse", category: "notify")
                 .notice("suppress-lyrics flag set")
+        }
+        // 补搜 / 全量扫库的收尾通知:点正文打开歌词管理,结果就在那里(系统只允许一个 delegate,在这里分流)。
+        if response.notification.request.content.categoryIdentifier == LyricsSweepNotifier.categoryID {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                await MainActor.run {
+                    NSApp.activate(ignoringOtherApps: true)
+                    AppActions.shared.openLyricsManager?()
+                }
+            }
+            return
         }
         let info = response.notification.request.content.userInfo
         guard let bundleID = info[Self.bundleIDKey] as? String, !bundleID.isEmpty else { return }
