@@ -2319,7 +2319,9 @@ public final class LocalPlaybackSource: ObservableObject {
         if let words = line?.words {
             if line != settledThresholdLine {
                 settledThresholdLine = line
-                settledThresholdMs = KaraokeFill.lineFillSettledMs(words: words, groups: line?.wordGroups)
+                // 背景人声也在歌词窗口里逐字填色,常常唱到主句结束之后,一并算进去。
+                settledThresholdMs = KaraokeFill.lineFillSettledMs(
+                    words: words + (line?.backgroundWords ?? []), groups: line?.wordGroups)
             }
             // 必须用 effectiveOffsetMs(含歌词自带的 [offset:]),不能用 offsetMs:
             // settledThresholdMs 来自词时间戳(歌词原始时间轴),而"播放位置 → 歌词时间轴"
@@ -3422,7 +3424,7 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 抬头识别(trackTitle/trackArtist)全部停留在上一首,偏移校正会串歌。
     private struct LyricsReloadSnapshot: Equatable {
         let trackKey: String
-        let lyrics, lyricsTr, lyricsRoma, lyricsYRC: String
+        let lyrics, lyricsTr, lyricsRoma, lyricsYRC, lyricsBG: String
         let instrumental, resolved: Bool
         let variant: ChineseVariant
         let romanizationScripts: RomanizationScripts
@@ -3470,6 +3472,7 @@ public final class LocalPlaybackSource: ObservableObject {
             lyricsTr: found?.lyricsTr ?? "",
             lyricsRoma: found?.lyricsRoma ?? "",
             lyricsYRC: found?.lyricsYRC ?? "",
+            lyricsBG: found?.lyricsBG ?? "",
             instrumental: found?.instrumental ?? false,
             resolved: found?.resolved ?? false,
             variant: chineseVariant,
@@ -3498,6 +3501,7 @@ public final class LocalPlaybackSource: ObservableObject {
             lyricsTr: variant.converted(found?.lyricsTr ?? ""),
             lyricsRoma: found?.lyricsRoma ?? "",
             lyricsYRC: variant.converted(JapaneseKanjiRepair.repair(rawYRC, japaneseSong: japaneseSong)),
+            lyricsBG: variant.converted(found?.lyricsBG ?? ""),
             // 用来认出歌词文件开头那行「曲名 - 歌手」抬头,见 looksLikeHeaderLine。
             trackTitle: snapshot.title ?? "",
             trackArtist: snapshot.artist ?? "",

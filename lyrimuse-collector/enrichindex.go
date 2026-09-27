@@ -78,19 +78,26 @@ func enrichBodiesDirFor(cachePath string) string {
 	return filepath.Join(filepath.Dir(cachePath), clientName+"-lyrics-bodies")
 }
 
-// enrichBodyCRC 五个正文字段的校验值;全空为 0(没有正文就不写文件)。字段之间用 0x00 隔开,
-// 免得「a|bc」和「ab|c」撞成同一个值。
+// enrichBodyCRC 正文字段的校验值;全空为 0(没有正文就不写文件)。字段之间用 0x00 隔开,
+// 免得「a|bc」和「ab|c」撞成同一个值。背景人声(LyricsBG)只在非空时接在五个字段后面算进去:没有背景
+// 人声的条目校验值跟加这个字段之前一样,存量正文文件不用重写。App 侧 EnrichCacheSlim.bodyCRC 同一算法。
 //
 // 每次整份落盘都要给全部条目算一遍(几千条、上百 MB 正文),所以正文拷进池里复用的缓冲区再算,
 // 别写成 hash.Write([]byte(s)):经接口调用的转换每次都在堆上复制一整份正文,实测一次落盘因此多分配
 // 一百多 MB。见 09 章决策 112。
 func enrichBodyCRC(e enrichEntry) uint32 {
-	if e.Lyrics == "" && e.LyricsTr == "" && e.LyricsRoma == "" && e.LyricsYRC == "" && e.PlainLyrics == "" {
+	if e.Lyrics == "" && e.LyricsTr == "" && e.LyricsRoma == "" && e.LyricsYRC == "" && e.PlainLyrics == "" &&
+		e.LyricsBG == "" {
 		return 0
 	}
 	bp := enrichBodyCRCBufs.Get().(*[]byte)
 	var c uint32
-	for _, s := range [...]string{e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics} {
+	fields := [...]string{e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics, e.LyricsBG}
+	n := len(fields)
+	if e.LyricsBG == "" {
+		n--
+	}
+	for _, s := range fields[:n] {
 		b := append(append((*bp)[:0], s...), 0)
 		c = crc32.Update(c, crc32.IEEETable, b)
 		*bp = b
@@ -113,9 +120,10 @@ type enrichBody struct {
 	LyricsRoma  string `json:"lyrics_roma,omitempty"`
 	LyricsYRC   string `json:"lyrics_yrc,omitempty"`
 	PlainLyrics string `json:"plain_lyrics,omitempty"`
+	LyricsBG    string `json:"lyrics_bg,omitempty"`
 }
 
-// enrichBodyFields 索引里去掉的四块正文各有没有:1 逐字 / 2 译文 / 4 罗马音 / 8 纯文本,128 恒置位 ——
+// enrichBodyFields 索引里去掉的几块正文各有没有:1 逐字 / 2 译文 / 4 罗马音 / 8 纯文本 / 16 背景人声,128 恒置位 ——
 // App(`EnrichCacheSlim.Fields`)靠「有 body_crc 却没有 body_fields」认出这个字段出现之前写的老索引。
 func enrichBodyFields(e enrichEntry) uint8 {
 	f := uint8(128)
@@ -131,16 +139,19 @@ func enrichBodyFields(e enrichEntry) uint8 {
 	if e.PlainLyrics != "" {
 		f |= 8
 	}
+	if e.LyricsBG != "" {
+		f |= 16
+	}
 	return f
 }
 
-// leanForIndex 索引里的那一条:去掉四块大正文,记上校验值和位图。主歌词 `lyrics` 留着(本机别名推断、
+// leanForIndex 索引里的那一条:去掉几块大正文(逐字 / 译文 / 罗马音 / 纯文本 / 背景人声),记上校验值和位图。主歌词 `lyrics` 留着(本机别名推断、
 // 「歌词管理」的批量锁定和时间轴偏移指纹都要)。没有正文(crc 0)的不记位图。
 func leanForIndex(e enrichEntry, crc uint32) enrichEntry {
 	if crc != 0 {
 		e.BodyFields = enrichBodyFields(e)
 	}
-	e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics = "", "", "", ""
+	e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics, e.LyricsBG = "", "", "", "", ""
 	e.BodyCRC = crc
 	return e
 }
@@ -198,7 +209,7 @@ func writeEnrichBodies(snapshot map[string]enrichEntry) map[string]uint32 {
 		}
 		e := snapshot[k]
 		b, err := json.Marshal(enrichBody{CRC: crc, Lyrics: e.Lyrics, LyricsTr: e.LyricsTr,
-			LyricsRoma: e.LyricsRoma, LyricsYRC: e.LyricsYRC, PlainLyrics: e.PlainLyrics})
+			LyricsRoma: e.LyricsRoma, LyricsYRC: e.LyricsYRC, PlainLyrics: e.PlainLyrics, LyricsBG: e.LyricsBG})
 		if err == nil {
 			err = writeFileAtomic(filepath.Join(dir, decisionSidecarName(k)), b)
 		}

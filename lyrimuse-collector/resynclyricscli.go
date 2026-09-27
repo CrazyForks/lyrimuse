@@ -172,6 +172,7 @@ func runResyncLyrics(keys []string, apply bool) int {
 		cur.LyricsDecisionApplied = cur.LyricsDecision
 		cur.Lyrics = picked.Lyrics
 		cur.LyricsTr, cur.LyricsRoma, cur.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
+		cur.LyricsBG, cur.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
 		if !trSame {
 			// 译文换人了(哪怕正文没变),描述译文的两个字段必须跟着换——不然旧的
 			// "machine" 标记会让新换上来的源自带译文被误标成机翻,见 rescoreLyrics 同款注释。

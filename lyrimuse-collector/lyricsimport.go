@@ -269,6 +269,8 @@ func importLyricsFrom(dir string, persist bool) int {
 		if _, ok := g.files[".lrc"]; ok {
 			if v := readBody(".lrc"); e.Lyrics != v {
 				e.Lyrics, changed = v, true
+				// 歌词文件里没有背景人声(导出不写它),正文换了就清掉,别挂在新正文下面。
+				e.LyricsBG = ""
 			}
 		}
 		if _, ok := g.files[".tr.lrc"]; ok {
@@ -287,6 +289,7 @@ func importLyricsFrom(dir string, persist bool) int {
 		if _, ok := g.files[".yrc"]; ok {
 			if v := readBody(".yrc"); e.LyricsYRC != v {
 				e.LyricsYRC, changed = v, true
+				e.LyricsBG = ""
 			}
 		}
 		if e.LyricsSource != parsed.source {

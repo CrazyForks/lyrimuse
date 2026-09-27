@@ -10,6 +10,8 @@ public struct EnrichCacheEntry: Decodable, Sendable {
     let lyricsTr: String?
     let lyricsRoma: String?
     let lyricsYRC: String?
+    /// 背景人声轨(collector enrichEntry.LyricsBG,YRC 语法,每行行头是所属主句的起止)。
+    let lyricsBG: String?
     let lyricsSource: String?
     let coverSource: String?
     // collector 解析出的封面地址(网易云/QQ/Apple)。桌面这边原来只读歌词字段,封面一直
@@ -87,6 +89,7 @@ public struct EnrichCacheEntry: Decodable, Sendable {
         case lyricsTr = "lyrics_tr"
         case lyricsRoma = "lyrics_roma"
         case lyricsYRC = "lyrics_yrc"
+        case lyricsBG = "lyrics_bg"
         case lyricsSource = "lyrics_source"
         case coverSource = "cover_source"
         case coverURL = "cover_url"
@@ -121,6 +124,7 @@ public struct EnrichCacheBody: Decodable, Sendable {
     public let lyricsRoma: String?
     public let lyricsYRC: String?
     public let plainLyrics: String?
+    public let lyricsBG: String?
 
     enum CodingKeys: String, CodingKey {
         case crc
@@ -129,6 +133,7 @@ public struct EnrichCacheBody: Decodable, Sendable {
         case lyricsRoma = "lyrics_roma"
         case lyricsYRC = "lyrics_yrc"
         case plainLyrics = "plain_lyrics"
+        case lyricsBG = "lyrics_bg"
     }
 }
 
@@ -152,6 +157,8 @@ public struct EnrichCacheLyrics {
     public let lyricsTr: String
     public let lyricsRoma: String
     public let lyricsYRC: String
+    /// 背景人声轨(见 EnrichCacheEntry.lyricsBG),没有时为空串。
+    public let lyricsBG: String
     public let instrumental: Bool
     /// 这首歌已经被完整解析过一轮了吗(见 EnrichCacheEntry.ts)。
     /// 它为 true 而 lyrics 为空,就是"搜过了,确实没有"——UI 靠这个区别把
@@ -381,7 +388,7 @@ public enum EnrichCacheReader {
            p.key == key || EnrichCacheKeys.looseKey(p.key) == EnrichCacheKeys.looseKey(key) {
             let e = p.entry
             return makeLyrics(e, lyrics: e.lyrics ?? "", tr: e.lyricsTr ?? "", roma: e.lyricsRoma ?? "",
-                              yrc: e.lyricsYRC ?? "", plain: e.plainLyrics ?? "")
+                              yrc: e.lyricsYRC ?? "", plain: e.plainLyrics ?? "", bg: e.lyricsBG ?? "")
         }
         guard let all = loadEntries() else { return nil }
         let matchedKey = all[key] != nil ? key : looseIndex(in: all)[EnrichCacheKeys.looseKey(key)]
@@ -389,25 +396,26 @@ public enum EnrichCacheReader {
         // 精简条目(索引,以及新版 collector 写的主缓存都是)的四块大正文在这首的正文小文件里。读不到就先用
         // 条目里的主歌词顶着;读的是索引时同时作废这一版索引、后台改读主缓存 —— 绝不拿不自洽的正文拼进来。
         var lyrics = entry.lyrics ?? "", tr = entry.lyricsTr ?? "", roma = entry.lyricsRoma ?? ""
-        var yrc = entry.lyricsYRC ?? "", plain = entry.plainLyrics ?? ""
+        var yrc = entry.lyricsYRC ?? "", plain = entry.plainLyrics ?? "", bg = entry.lyricsBG ?? ""
         if let crc = entry.bodyCRC, crc != 0 {
             if let b = body(forKey: matchedKey, crc: crc) {
                 lyrics = b.lyrics ?? ""; tr = b.lyricsTr ?? ""; roma = b.lyricsRoma ?? ""
-                yrc = b.lyricsYRC ?? ""; plain = b.plainLyrics ?? ""
+                yrc = b.lyricsYRC ?? ""; plain = b.plainLyrics ?? ""; bg = b.lyricsBG ?? ""
             } else {
                 rejectCurrentIndex()
             }
         }
-        return makeLyrics(entry, lyrics: lyrics, tr: tr, roma: roma, yrc: yrc, plain: plain)
+        return makeLyrics(entry, lyrics: lyrics, tr: tr, roma: roma, yrc: yrc, plain: plain, bg: bg)
     }
 
     private static func makeLyrics(_ entry: EnrichCacheEntry, lyrics: String, tr: String, roma: String,
-                                   yrc: String, plain: String) -> EnrichCacheLyrics {
+                                   yrc: String, plain: String, bg: String) -> EnrichCacheLyrics {
         EnrichCacheLyrics(
             lyrics: lyrics,
             lyricsTr: tr,
             lyricsRoma: roma,
             lyricsYRC: yrc,
+            lyricsBG: bg,
             instrumental: entry.instrumental ?? false,
             resolved: (entry.ts ?? 0) > 0,
             isCantonese: entry.songLanguage == songLanguageCantonese,

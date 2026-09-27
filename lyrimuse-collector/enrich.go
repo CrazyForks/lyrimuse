@@ -172,6 +172,13 @@ type enrichEntry struct {
 	// 精简快照,列表上「逐字 / 译文 / 罗马音 / 纯文本」四个标记靠它,不必去读几千个正文小文件。
 	BodyFields uint8  `json:"body_fields,omitempty"`
 	LyricsYRC  string `json:"lyrics_yrc,omitempty"` // 逐字(词级，网易云 yrc 格式)
+	// LyricsBG:背景人声轨(YRC 语法,每行行头是所属主句的起止,见 amllResult.bg),只有 amll / applemusic
+	// 胜出时才有。它跟 Lyrics / LyricsYRC 是一组:从新的解析结果成套写歌词字段的地方都要带上它,
+	// 正文或逐字被替换、它又没有跟着换的地方要清掉,漏一处就是把上一份歌词的和声挂在新歌词下面。
+	LyricsBG string `json:"lyrics_bg,omitempty"`
+	// LyricsBGChecked:这条的歌词已经按哪一版背景人声解析器取过(lyricsBGParserVersion)。0 = 还没有,
+	// 胜出源是 amll / applemusic 时播放到会补一次(bgbackfill.go)。
+	LyricsBGChecked int `json:"lyrics_bg_checked,omitempty"`
 	// SongLanguage 是这首歌的语种真值(songLanguageMandarin/songLanguageCantonese 之一,
 	// 见 lyricCandidate.language),取自**全部**候选里第一个给出这个信号的那个(见
 	// songLanguageFromScored),不是只看最终拿到歌词正文的那个候选——目前只有 QQ/酷狗
@@ -692,6 +699,10 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		} else if needsLyricsRetry(e, wrongDuration, pinned, features().LyricsAutoUpgrade) && !enrichInflight[key] {
 			enrichInflight[key] = true
 			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
+		} else if needsBackgroundVocalsBackfill(e) && !enrichInflight[key] && bgBackfillOnce(key) {
+			// 存量 amll / applemusic 条目补背景人声,只重取那一个源、不动正文(见 bgbackfill.go)。
+			enrichInflight[key] = true
+			go backfillBackgroundVocals(key, artist, title, album, durationSecs)
 		}
 		// 机翻不排上面这条链,跟哪一路都能同时跑,理由见 translatestart.go。
 		startTranslationBackfillLocked(key, e)
@@ -1588,6 +1599,7 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 		e.LyricsScoringVersion = lyricsScoringVersion
 		e.ResolvedDurationSecs = durationSecs
 		e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
+		e.LyricsBG, e.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
 		e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 		e.dropHokkienRoma()
 		e.dropMandarinRomaForCantonese()
@@ -1864,6 +1876,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 			log.Printf("lyrics rescore: %s  %s(v%d) -> %s(%d)", key, e.LyricsSource, e.LyricsScoringVersion, picked.Source, picked.Score)
 			e.Lyrics = picked.Lyrics
 			e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
+			e.LyricsBG, e.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
 			e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 			e.dropHokkienRoma()
 			e.dropMandarinRomaForCantonese()
@@ -1877,6 +1890,11 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 			log.Printf("lyrics rescore: %s  %s gained word timing", key, picked.Source)
 			e.LyricsYRC = picked.LyricsYRC
 			lyricsChanged = true
+		}
+		// 正文没变、这条还没按背景人声解析器取过:这一轮取到的背景人声(可能为空)就是它该有的。
+		// 背景人声不导出成歌词文件,不用置 lyricsChanged。
+		if picked.Lyrics == e.Lyrics && e.LyricsBGChecked < lyricsBGParserVersion {
+			e.LyricsBG, e.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
 		}
 		if picked.Source != e.LyricsSource {
 			// 正文一样但冠军换了源:导出的 .lrc 里 [source:] 头也得跟着重写。lyrics/ 文件夹是
@@ -2855,6 +2873,7 @@ type scoredLyricCandidateResult struct {
 	LyricsTrLang  string `json:"lyrics_tr_lang,omitempty"`
 	LyricsRoma    string `json:"lyrics_roma,omitempty"`
 	LyricsYRC     string `json:"lyrics_yrc,omitempty"`
+	LyricsBG      string `json:"lyrics_bg,omitempty"` // 背景人声轨(YRC 语法,形状见 amllResult.bg),只有 amll / applemusic 会给。不参与打分。
 	HasWordTiming bool   `json:"has_word_timing"`
 	Score         int    `json:"score"`
 	// ScoreTerms 是这个分数的构成明细(或者被判 -1 时的唯一那条原因),给"搜索候选歌词"
@@ -3685,6 +3704,7 @@ type lyricSourceResult struct {
 	source                  string
 	ne                      neteaseInfo
 	lyr, yrc, tr, roma      string // roma:源自带罗马音(逐行 LRC),目前只有 qq 走这里(网易云的在 ne.Roma),2026-09-02 加
+	bg                      string // 背景人声轨(YRC 语法,形状见 amllResult.bg)。只有 applemusic 走这里,amll 的在 amll.bg。
 	matchTitle, matchArtist string
 	matchAlbum, matchCover  string
 	srcDur                  float64 // 源自己声明的曲长(秒),0=没给。见 lyricCandidate.sourceReportedDurationSecs
@@ -3761,6 +3781,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	dzLyr, dzYRC, dzTr, dzTitle, dzArtist, dzAlbum, dzCover, dzDur, dzPlainOnly := dz.lyr, dz.yrc, dz.tr, dz.matchTitle, dz.matchArtist, dz.matchAlbum, dz.matchCover, dz.srcDur, dz.plainOnly
 	am := raw["applemusic"]
 	amLyr, amYRC, amTr, amRoma, amTitle, amArtist, amAlbum, amCover, amDur, amPlainOnly := am.lyr, am.yrc, am.tr, am.roma, am.matchTitle, am.matchArtist, am.matchAlbum, am.matchCover, am.srcDur, am.plainOnly
+	amBG := am.bg
 	soda := raw["soda"]
 	kk := raw[kkboxLocalLyricsSource]
 	spl := raw[spotifyLocalLyricsSource]
@@ -4040,6 +4061,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			if usableRomaForResult(c.lyrics, amll.roma) {
 				r.LyricsRoma = amll.roma
 			}
+			r.LyricsBG = amll.bg
 		case "applemusic":
 			// 官方译文(<translations type="subtitle">)与官方音译(<transliterations>),语言标注口径同
 			// amll:判定"能不能用"时 trLang 传的就是目标语言本身。
@@ -4050,6 +4072,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			if usableRomaForResult(c.lyrics, amRoma) {
 				r.LyricsRoma = amRoma
 			}
+			r.LyricsBG = amBG
 		case "soda":
 			// 汽水 lyric.translations.cn 固定中文,口径同 migu。
 			if c.hasUsableTranslation {
@@ -4457,7 +4480,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// Music.app 自己的歌词缓存,拿到官方逐字 + 官方译文,见 applemusiclocal.go。
 		appleID, _ := playbackTrackIDsFor(artist, title, album)
 		r := applemusicLyric(ctx, artist, title, album, durationSecs, appleID)
-		resultsCh <- lyricSourceResult{source: "applemusic", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, roma: r.roma, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, identityFromLocalClient: r.fromLocalClient}
+		resultsCh <- lyricSourceResult{source: "applemusic", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, roma: r.roma, bg: r.bg, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, identityFromLocalClient: r.fromLocalClient}
 	}()
 	go func() {
 		if skipSource("soda") {

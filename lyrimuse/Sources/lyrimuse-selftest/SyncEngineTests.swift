@@ -168,6 +168,31 @@ func runSyncEngineTests() {
         expectEqual(engine2.tickQuery(atMs: 3000).index, 0, "提前滚动(LRC): 两个下标一致")
     }
 
+    // ---- 背景人声(collector lyrics_bg):按行头挂到主句下面,这一行唱到背景人声唱完 ----
+    do {
+        // 照《Leave The Door Open》的形状:主句 13719~14301 唱完,背景人声 14457~15143 才开口,
+        // 下一句 15253 开始。第三行的背景人声行头对不上任何主句,不挂。
+        let engine = LyricsSyncEngine()
+        let yrc = "[13719,582](13719,144,0)What(13863,176,0) you(14039,262,0) doing?\n"
+            + "[15253,680](15253,300,0)Where(15553,380,0) at?\n"
+        let bg = "[13719,582](14457,218,0)(What(14675,205,0) you(14880,263,0) doing?)\n"
+            + "[40000,500](40100,300,0)(stray)\n"
+        engine.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc, lyricsBG: bg)
+        let lines = engine.allLines(idPrefix: "t")
+        expectEqual(lines[0].line.backgroundWords?.map(\.text), ["(What", " you", " doing?)"],
+                    "背景人声: 按行头挂到所属主句")
+        expectEqual(lines[0].line.backgroundWords?.first?.startMs, 14457, "背景人声: 词带自己的时间")
+        expectEqual(lines[1].line.backgroundWords == nil, true, "背景人声: 行头对不上的不挂")
+        expectEqual(engine.activeLine(atMs: 14000)?.backgroundWords?.count, 3, "背景人声: 当前行也带着")
+        expectEqual(engine.tickQuery(atMs: 14600).scrollIndex, 0, "背景人声: 主句唱完、背景人声还在唱,不换行")
+        expectEqual(engine.tickQuery(atMs: 15200).scrollIndex, 1, "背景人声: 背景人声唱完才滚向下一句")
+        expectEqual(lines[0].line.lineLevel.backgroundWords == nil, true, "背景人声: 整行形态不带背景人声")
+
+        let plain = LyricsSyncEngine()
+        plain.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc)
+        expectEqual(plain.tickQuery(atMs: 14600).scrollIndex, 1, "背景人声: 没有背景人声时照旧一唱完就滚")
+    }
+
     // ---- LyricsSyncEngine: 单曲歌词时间轴微调(offsetMs) ----
 
     do {

@@ -41,7 +41,8 @@ func TestApplemusicTransliteration(t *testing.T) {
 		`<text for="L9"><span begin="1" end="2">nai</span></text>` +
 		`</transliteration></transliterations></iTunesMetadata></metadata></head>` +
 		`<body><div><p begin="14.402" end="17.116" itunes:key="L1"><span begin="14.402" end="15.345">まる</span><span begin="15.345" end="16.162">で</span><span begin="16.279" end="17.116">この</span></p></div></body></tt>`
-	lrc, _, _, roma, ok := applemusicParseTTML(doc)
+	p, ok := applemusicParseTTML(doc)
+	lrc, roma := p.lrc, p.roma
 	if !ok || lrc == "" {
 		t.Fatal("解析失败")
 	}

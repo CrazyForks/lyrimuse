@@ -71,6 +71,7 @@ func decodeLyricSourceResultEntities(r lyricSourceResult) lyricSourceResult {
 	r.yrc = decodeLyricEntities(r.yrc)
 	r.tr = decodeLyricEntities(r.tr)
 	r.roma = decodeLyricEntities(r.roma)
+	r.bg = decodeLyricEntities(r.bg)
 	r.ne.Lyrics = decodeLyricEntities(r.ne.Lyrics)
 	r.ne.Trans = decodeLyricEntities(r.ne.Trans)
 	r.ne.Roma = decodeLyricEntities(r.ne.Roma)
@@ -78,6 +79,8 @@ func decodeLyricSourceResultEntities(r lyricSourceResult) lyricSourceResult {
 	r.amll.lrc = decodeLyricEntities(r.amll.lrc)
 	r.amll.yrc = decodeLyricEntities(r.amll.yrc)
 	r.amll.tr = decodeLyricEntities(r.amll.tr)
+	r.amll.roma = decodeLyricEntities(r.amll.roma)
+	r.amll.bg = decodeLyricEntities(r.amll.bg)
 	return r
 }
 
@@ -124,13 +127,15 @@ func migrateLyricEntities() {
 		roma := decodeLyricEntities(e.LyricsRoma)
 		yrc := decodeLyricEntities(e.LyricsYRC)
 		plain := decodeLyricEntities(e.PlainLyrics)
-		if lyrics == e.Lyrics && tr == e.LyricsTr && roma == e.LyricsRoma && yrc == e.LyricsYRC && plain == e.PlainLyrics {
+		bg := decodeLyricEntities(e.LyricsBG)
+		if lyrics == e.Lyrics && tr == e.LyricsTr && roma == e.LyricsRoma && yrc == e.LyricsYRC && plain == e.PlainLyrics &&
+			bg == e.LyricsBG {
 			continue
 		}
 		if e.ManualPickSHA != "" && e.ManualPickSHA == manualPickFingerprint(e.Lyrics) {
 			e.ManualPickSHA = manualPickFingerprint(lyrics)
 		}
-		e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics = lyrics, tr, roma, yrc, plain
+		e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics, e.LyricsBG = lyrics, tr, roma, yrc, plain, bg
 		enrichCache[k] = e
 		fixed++
 	}

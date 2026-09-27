@@ -74,6 +74,8 @@ type applemusicResult struct {
 	lyrics, yrc, tr, title, artist, album string
 	// roma:官方音译(<transliterations>,日文 ja-Latn 等)拼成的逐行 LRC,没有时为空。
 	roma string
+	// bg:背景人声轨(YRC 语法,形状见 amllResult.bg),没有时为空。
+	bg string
 	// cover:artwork.url 是个带 {w}x{h} 占位的模板,取词时替换成原图尺寸,见 applemusicSong.cover。
 	cover string
 	// durationSecs:Apple 自报的曲长(秒),透传给打分的 sourceReportedDurationSecs。
@@ -830,26 +832,25 @@ func applemusicFetchTTML(ctx context.Context, storefront, songID, kind, devToken
 	return out.Data[0].Attributes.TTML, nil
 }
 
-// applemusicParseTTML 把一份 Apple TTML 解析成整行 / 逐字 / 译文 / 罗马音。直接复用
+// applemusicParseTTML 把一份 Apple TTML 解析成整行 / 逐字 / 译文 / 罗马音 / 背景人声。直接复用
 // amllttml.go 的解析器 —— AMLL 的方言就是照着这份抄的(连 ttm:agent 对唱标注都一样)。
-func applemusicParseTTML(ttml string) (lrc, yrc, tr, roma string, ok bool) {
+func applemusicParseTTML(ttml string) (amllResult, bool) {
 	if strings.TrimSpace(ttml) == "" {
-		return "", "", "", "", false
+		return amllResult{}, false
 	}
 	r, ok := parseAMLLTTML(ttml)
 	if !ok {
-		return "", "", "", "", false
+		return amllResult{}, false
 	}
-	tr, roma = r.tr, r.roma
-	if tr == "" {
+	if r.tr == "" {
 		// Apple 把译文放在 <iTunesMetadata><translations> 里,parseAMLLTTML 认的是 AMLL 那套
 		// ttm:role="x-translation" 形状,看不到它。见 applemusicSubtitleTranslation。
-		tr = applemusicSubtitleTranslation(ttml)
+		r.tr = applemusicSubtitleTranslation(ttml)
 	}
-	if roma == "" {
-		roma = applemusicTransliteration(ttml)
+	if r.roma == "" {
+		r.roma = applemusicTransliteration(ttml)
 	}
-	return r.lrc, r.yrc, tr, roma, true
+	return r, true
 }
 
 var (
@@ -1000,13 +1001,13 @@ func resolveApplemusicLyric(ctx context.Context, artist, title, album string, du
 		if c.song.Attributes.HasTimeSynced {
 			if ttml, err := applemusicFetchTTML(ctx, storefront, id, "syllable-lyrics", devToken, userToken); err != nil {
 				return applemusicResult{} // 令牌被拒之类,继续试别的候选也是白试
-			} else if lrc, yrc, tr, roma, ok := applemusicParseTTML(ttml); ok && lrc != "" {
-				return applemusicResultFrom(c.song, lrc, yrc, tr, roma, false)
+			} else if p, ok := applemusicParseTTML(ttml); ok && p.lrc != "" {
+				return applemusicResultFrom(c.song, p, false)
 			}
 			if ttml, err := applemusicFetchTTML(ctx, storefront, id, "lyrics", devToken, userToken); err != nil {
 				return applemusicResult{}
-			} else if lrc, yrc, tr, roma, ok := applemusicParseTTML(ttml); ok && lrc != "" {
-				return applemusicResultFrom(c.song, lrc, yrc, tr, roma, !isTimedLRC(lrc))
+			} else if p, ok := applemusicParseTTML(ttml); ok && p.lrc != "" {
+				return applemusicResultFrom(c.song, p, !isTimedLRC(p.lrc))
 			}
 			continue
 		}
@@ -1015,8 +1016,8 @@ func resolveApplemusicLyric(ctx context.Context, artist, title, album string, du
 		if err != nil {
 			return applemusicResult{}
 		}
-		if lrc, yrc, tr, roma, ok := applemusicParseTTML(ttml); ok && lrc != "" {
-			return applemusicResultFrom(c.song, lrc, yrc, tr, roma, !isTimedLRC(lrc))
+		if p, ok := applemusicParseTTML(ttml); ok && p.lrc != "" {
+			return applemusicResultFrom(c.song, p, !isTimedLRC(p.lrc))
 		}
 	}
 	return applemusicResult{}
@@ -1026,9 +1027,9 @@ func resolveApplemusicLyric(ctx context.Context, artist, title, album string, du
 // 里的 build 闭包,提成包级是为了让本地缓存那条路(applemusiclocal.go)复用**同一份**构造 ——
 // 两条路进下游的字段形状必须一致(尤其 cover 的 {w}x{h} 替换和 durationSecs 的毫秒换算),
 // 否则其中一条会悄悄少给打分层证据。
-func applemusicResultFrom(s applemusicSong, lrc, yrc, tr, roma string, plainOnly bool) applemusicResult {
+func applemusicResultFrom(s applemusicSong, p amllResult, plainOnly bool) applemusicResult {
 	return applemusicResult{
-		lyrics: lrc, yrc: yrc, tr: tr, roma: roma,
+		lyrics: p.lrc, yrc: p.yrc, tr: p.tr, roma: p.roma, bg: p.bg,
 		title: s.Attributes.Name, artist: s.Attributes.ArtistName, album: s.Attributes.AlbumName,
 		cover: s.cover(), durationSecs: float64(s.Attributes.DurationInMillis) / 1000,
 		plainOnly: plainOnly,

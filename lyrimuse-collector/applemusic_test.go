@@ -19,7 +19,8 @@ import (
 const appleTTMLSample = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" itunes:timing="Word" xml:lang="es"><head><metadata><ttm:agent type="person" xml:id="v1"/></metadata></head><body dur="2:24.000"><div begin="7.439" end="10.928" itunes:songPart="Verse"><p begin="7.439" end="9.027" itunes:key="L1" ttm:agent="v1"><span begin="7.439" end="7.619">De</span> <span begin="7.619" end="7.759">la</span> <span begin="7.759" end="8.037">rumba</span></p><p begin="9.341" end="10.928" itunes:key="L2" ttm:agent="v1"><span begin="9.341" end="9.581">Casi</span> <span begin="9.581" end="9.741">ni</span></p></div></body></tt>`
 
 func TestApplemusicParseTTMLOffsetTime(t *testing.T) {
-	lrc, yrc, _, _, ok := applemusicParseTTML(appleTTMLSample)
+	p, ok := applemusicParseTTML(appleTTMLSample)
+	lrc, yrc := p.lrc, p.yrc
 	if !ok {
 		t.Fatal("解析失败")
 	}

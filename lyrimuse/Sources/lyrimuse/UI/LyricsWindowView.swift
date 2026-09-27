@@ -4461,7 +4461,9 @@ private struct LyricsLineRow: View, Equatable {
     static func == (a: LyricsLineRow, b: LyricsLineRow) -> Bool {
         // item 比整行而不只比 id:id 只保证同一首、同一份歌词正文,译文 / 罗马音 / 逐字是后补进来的,
         // 补进来时 id 不变,只比 id 这一行就不重画。
+        // 背景人声例外:它是存量条目后补进来的,正文和逐字都不变,id 也就不变,得单独比。
         a.item == b.item
+            && a.item.line.backgroundWords == b.item.line.backgroundWords
             && a.distance == b.distance
             && a.isActive == b.isActive
             && a.isHovered == b.isHovered
@@ -4489,6 +4491,9 @@ private struct LyricsLineRow: View, Equatable {
     }
 
     private var secondaryTextColor: Color { secondaryColor }
+
+    /// 背景人声整行的不透明度,叠在逐字填色之上:唱到的字也不会跟主句一样亮。
+    static let backgroundVocalsOpacity: Double = 0.6
 
     /// 对唱歌词的左右分栏(见 LyricDuet)。
     ///
@@ -4555,9 +4560,46 @@ private struct LyricsLineRow: View, Equatable {
     // SwiftUI 的 .blur() 本身是可动画属性,复用调用点已有的 .animation(value: distance)。
     private var lineBlur: CGFloat { LyricsWindowDepth.blurRadius(distance: distance, fontSize: fontSize) }
 
+    /// 背景人声显示用的词:去掉整段首尾的括号(源里写成「(What you doing?)」,Apple Music 显示时不带)。
+    /// 只在完整布局显示,迷你「多行」字小行紧、不上浮,不显示。
+    private var backgroundDisplayWords: [SyncedLyricWord]? {
+        guard wordRise, var words = item.line.backgroundWords, !words.isEmpty else { return nil }
+        func replaced(_ w: SyncedLyricWord, _ text: String) -> SyncedLyricWord {
+            SyncedLyricWord(text: text, startMs: w.startMs, durationMs: w.durationMs)
+        }
+        if let first = words.first, let c = first.text.first, c == "(" || c == "（" {
+            words[0] = replaced(first, String(first.text.dropFirst()))
+        }
+        if let last = words.last, let c = last.text.last, c == ")" || c == "）" {
+            words[words.count - 1] = replaced(last, String(last.text.dropLast()))
+        }
+        words.removeAll { $0.text.trimmingCharacters(in: .whitespaces).isEmpty }
+        return words.isEmpty ? nil : words
+    }
+
     var body: some View {
         VStack(alignment: alignment.horizontal, spacing: 6) {
             mainText
+            // 背景人声紧贴正文下面,比正文小、淡,自己按时间逐字填色,不上浮。所有行都显示(跟译文一样),
+            // 只在当前行才显示的话,换行时行高一变整列会跳。
+            if let bgWords = backgroundDisplayWords {
+                KaraokeLineText(
+                    words: bgWords,
+                    groups: nil,
+                    base: textColor,
+                    isActive: isActive,
+                    isPlaying: isPlaying,
+                    fillSettled: fillSettled,
+                    fontSize: translationFontSize,
+                    romaFontSize: romaFontSize,
+                    fontFamily: fontFamily,
+                    reduceMotion: reduceMotion,
+                    displayScale: displayScale,
+                    rowAlignment: rowAlignment,
+                    rises: false
+                )
+                .opacity(Self.backgroundVocalsOpacity)
+            }
             // 罗马音在**下面**,跟 Apple Music 一致(原来在上面)。分得出词组的行(不论
             // 活跃)读音已经逐词标进 mainText 里了,这里就不再重复一整行。
             if showRomanization, !usesPerWordRomanization, let roma = item.line.romanization {

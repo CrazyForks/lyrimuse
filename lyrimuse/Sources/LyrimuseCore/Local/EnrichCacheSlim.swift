@@ -22,8 +22,8 @@ public enum EnrichCacheSlim {
     public static let crcKey = "body_crc"
     public static let fieldsKey = "body_fields"
     public static let bodiesDirectoryName = "lyrimuse-lyrics-bodies"
-    /// 精简时去掉的四块正文。
-    public static let strippedFields = ["lyrics_yrc", "lyrics_tr", "lyrics_roma", "plain_lyrics"]
+    /// 精简时去掉的几块正文。改这张表要跟 collector `leanForIndex` 同步。
+    public static let strippedFields = ["lyrics_yrc", "lyrics_tr", "lyrics_roma", "plain_lyrics", "lyrics_bg"]
 
     /// `body_fields` 位图,跟 collector `enrichBodyFields` 一致。`known` 恒置位:老版本索引没有这个字段,
     /// 「有校验值却没有位图」就认出是老索引、不拿它当精简快照(它的四个布尔全是假的)。
@@ -34,6 +34,7 @@ public enum EnrichCacheSlim {
         public static let tr = Fields(rawValue: 2)
         public static let roma = Fields(rawValue: 4)
         public static let plain = Fields(rawValue: 8)
+        public static let bg = Fields(rawValue: 16)
         public static let known = Fields(rawValue: 128)
     }
 
@@ -43,11 +44,12 @@ public enum EnrichCacheSlim {
         (entry[crcKey] as? NSNumber)?.uint32Value
     }
 
-    /// 五个正文字段的校验值,跟 collector `enrichBodyCRC` 逐位一致(字段之间 0x00 隔开、全空为 0、
-    /// 算出 0 记成 1)。只对完整条目有意义。
+    /// 正文字段的校验值,跟 collector `enrichBodyCRC` 逐位一致(字段之间 0x00 隔开、全空为 0、
+    /// 算出 0 记成 1;背景人声 `lyrics_bg` 只在非空时接在五个字段后面)。只对完整条目有意义。
     public static func bodyCRC(_ entry: [String: Any]) -> UInt32 {
-        let parts = ["lyrics", "lyrics_tr", "lyrics_roma", "lyrics_yrc", "plain_lyrics"]
+        var parts = ["lyrics", "lyrics_tr", "lyrics_roma", "lyrics_yrc", "plain_lyrics"]
             .map { entry[$0] as? String ?? "" }
+        if let bg = entry["lyrics_bg"] as? String, !bg.isEmpty { parts.append(bg) }
         if parts.allSatisfy(\.isEmpty) { return 0 }
         var c = crc32(0, nil, 0)
         var zero: UInt8 = 0
@@ -71,6 +73,7 @@ public enum EnrichCacheSlim {
         if has("lyrics_tr") { f.insert(.tr) }
         if has("lyrics_roma") { f.insert(.roma) }
         if has("plain_lyrics") { f.insert(.plain) }
+        if has("lyrics_bg") { f.insert(.bg) }
         return f
     }
 
@@ -96,7 +99,8 @@ public enum EnrichCacheSlim {
               body.crc == crc || bodyCRC(jsonSerializationView(body)) == crc else { return nil }
         var out = stripMarkers(entry)
         let pairs: [(String, String?)] = [("lyrics_yrc", body.lyricsYRC), ("lyrics_tr", body.lyricsTr),
-                                          ("lyrics_roma", body.lyricsRoma), ("plain_lyrics", body.plainLyrics)]
+                                          ("lyrics_roma", body.lyricsRoma), ("plain_lyrics", body.plainLyrics),
+                                          ("lyrics_bg", body.lyricsBG)]
         for (k, v) in pairs {
             if let v, !v.isEmpty { out[k] = v }
         }
@@ -108,7 +112,7 @@ public enum EnrichCacheSlim {
     public static func isSelfConsistent(_ body: EnrichCacheBody) -> Bool {
         body.crc != 0 && bodyCRC(["lyrics": body.lyrics ?? "", "lyrics_tr": body.lyricsTr ?? "",
                                   "lyrics_roma": body.lyricsRoma ?? "", "lyrics_yrc": body.lyricsYRC ?? "",
-                                  "plain_lyrics": body.plainLyrics ?? ""]) == body.crc
+                                  "plain_lyrics": body.plainLyrics ?? "", "lyrics_bg": body.lyricsBG ?? ""]) == body.crc
     }
 
     /// 正文小文件跟精简条目记的校验值对不上、但文件自洽:条目那一版比小文件旧 —— collector 先写小文件、再写
@@ -122,14 +126,14 @@ public enum EnrichCacheSlim {
         var out = stripMarkers(entry)
         let pairs: [(String, String?)] = [("lyrics", body.lyrics), ("lyrics_yrc", body.lyricsYRC),
                                           ("lyrics_tr", body.lyricsTr), ("lyrics_roma", body.lyricsRoma),
-                                          ("plain_lyrics", body.plainLyrics)]
+                                          ("plain_lyrics", body.plainLyrics), ("lyrics_bg", body.lyricsBG)]
         for (k, v) in pairs {
             if let v, !v.isEmpty { out[k] = v } else { out.removeValue(forKey: k) }
         }
         return out
     }
 
-    /// 精简条目的四块正文从另一份完整条目(盘上 / 主缓存里的那一条)取;其余字段一律以精简条目为准。
+    /// 精简条目去掉的那几块正文从另一份完整条目(盘上 / 主缓存里的那一条)取;其余字段一律以精简条目为准。
     /// 已经是完整条目的原样返回。
     public static func restoreBodies(_ entry: [String: Any], from full: [String: Any]?) -> [String: Any] {
         guard isSlim(entry) else { return entry }
@@ -147,7 +151,8 @@ public enum EnrichCacheSlim {
             return s.unicodeScalars.first == "\u{FEFF}" ? String(s.unicodeScalars.dropFirst()) : s
         }
         return ["lyrics": strip(body.lyrics), "lyrics_tr": strip(body.lyricsTr), "lyrics_roma": strip(body.lyricsRoma),
-                "lyrics_yrc": strip(body.lyricsYRC), "plain_lyrics": strip(body.plainLyrics)]
+                "lyrics_yrc": strip(body.lyricsYRC), "plain_lyrics": strip(body.plainLyrics),
+                "lyrics_bg": strip(body.lyricsBG)]
     }
 
     public static func stripMarkers(_ entry: [String: Any]) -> [String: Any] {

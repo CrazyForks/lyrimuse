@@ -290,17 +290,17 @@ done:
 	if !ok {
 		return applemusicResult{}, false
 	}
-	lrc, yrc, tr, roma, parsed := applemusicParseTTML(e.ttml)
-	if !parsed || lrc == "" {
+	p, parsed := applemusicParseTTML(e.ttml)
+	if !parsed || p.lrc == "" {
 		return applemusicResult{}, false
 	}
 	// plainOnly 的判据跟网络那条一致:逐字那份必然带时间轴;逐行那份要看解析出来的
 	// LRC 到底有没有时间戳。
-	plainOnly := e.kind != "syllable-lyrics" && !isTimedLRC(lrc)
+	plainOnly := e.kind != "syllable-lyrics" && !isTimedLRC(p.lrc)
 	log.Printf("applemusic local: hit via %s %q - %q (%s%s)", via,
 		e.song.Attributes.ArtistName, e.song.Attributes.Name, e.kind,
-		map[bool]string{true: " +译文", false: ""}[tr != ""])
-	r := applemusicResultFrom(e.song, lrc, yrc, tr, roma, plainOnly)
+		map[bool]string{true: " +译文", false: ""}[p.tr != ""])
+	r := applemusicResultFrom(e.song, p, plainOnly)
 	// 身份是 Music.app 自己认定的(id 命中)或它缓存里那一条(name 命中),不经 amp-api
 	// 搜索 —— 同源加权的准入条件。
 	r.fromLocalClient = true

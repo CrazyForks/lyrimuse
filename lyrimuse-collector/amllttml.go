@@ -46,18 +46,24 @@ import (
 const (
 	amllRawBase     = "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main"
 	amllHTTPTimeout = 8 * time.Second
-	// 背景人声(ttm:role="x-bg")跳过,不并进主歌词:它跟主歌词时间轴重叠,并进去会让
-	// 逐字填色同一时刻有两个词在亮。我们还没有"背景人声"这个显示概念,先如实丢掉。
+	// 背景人声(ttm:role="x-bg")单独成一轨(amllResult.bg),不并进主歌词:它跟主歌词时间轴重叠,
+	// 并进去会让逐字填色同一时刻有两个词在亮。
 	amllRoleBackground  = "x-bg"
 	amllRoleTranslation = "x-translation"
 	// amllRoleRoman:内嵌罗马音。它跟译文一样是整行附属内容,不能当成一个词并进正文。
 	amllRoleRoman = "x-roman"
+	// lyricsBGParserVersion:解析器开始产出背景人声轨的版本。条目的 LyricsBGChecked 低于它、胜出源又是
+	// amll / applemusic 时,播放到这首会重取一次那个源补背景人声(见 bgbackfill.go)。
+	lyricsBGParserVersion = 1
 )
 
 type amllResult struct {
 	lrc, yrc, tr string
 	// roma:内嵌罗马音拼成的逐行 LRC,跟 lrc 同一套时间戳。
 	roma string
+	// bg:背景人声轨,YRC 语法。每行的行头是它所属主句的起止(跟 yrc 里那一行的行头相同,App 靠它把
+	// 背景人声挂到主句下面),词带背景人声自己的时间。一行主句里的几段背景人声并成一行。
+	bg string
 	// platform:命中的是哪个平台目录(am-lyrics / spotify-lyrics / ncm-lyrics / qq-lyrics)。候选借封面用,
 	// 见 enrich.go 组装 amll 候选那段。
 	platform string
@@ -313,11 +319,11 @@ func amllSpeakerPrefixes(agents []ttmlAgent) map[string]string {
 	return out
 }
 
-// flattenTTMLLine 把一行的有序孩子拆成「逐字词」「译文」「罗马音」三摊。
-// 背景人声整枝跳过(见 amllRoleBackground);span 之间的字面文本(词间空白)挂到**前一个
-// 词**的尾巴上,见 ttmlWord 的注释。带角色的 span 一律不进逐字词:没认出的角色落进 default
-// 会被当成一个词拼进正文。
-func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation, roman *string) {
+// flattenTTMLLine 把一行的有序孩子拆成「逐字词」「译文」「罗马音」「背景人声词」四摊。
+// span 之间的字面文本(词间空白)挂到**前一个词**的尾巴上,见 ttmlWord 的注释。带角色的 span
+// 一律不进逐字词:没认出的角色落进 default 会被当成一个词拼进正文。bg 为 nil 时背景人声整枝丢掉
+// (背景人声内部再套的背景人声、译文、罗马音就是这样处理的)。
+func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation, roman *string, bg *[]ttmlWord) {
 	for _, k := range kids {
 		if k.Span == nil {
 			appendTTMLGap(words, k.Text)
@@ -326,7 +332,9 @@ func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation, roman *str
 		sp := k.Span
 		switch {
 		case sp.Role == amllRoleBackground:
-			continue
+			if bg != nil {
+				appendTTMLBackground(bg, sp)
+			}
 		case sp.Role == amllRoleTranslation:
 			if *translation == "" {
 				*translation = strings.TrimSpace(sp.text())
@@ -338,11 +346,31 @@ func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation, roman *str
 		case sp.Role != "":
 			continue
 		case sp.hasSpanKid():
-			flattenTTMLLine(sp.Kids, words, translation, roman)
+			flattenTTMLLine(sp.Kids, words, translation, roman, bg)
 		default:
 			*words = append(*words, ttmlWord{begin: sp.Begin, end: sp.End, text: sp.text()})
 		}
 	}
+}
+
+// appendTTMLBackground 把一段背景人声的词接到 bg 后面。同一行的第二段起先补一个空格隔开;没有逐字
+// 子 span 的整段按一个词收,用这段自己的起止。
+func appendTTMLBackground(bg *[]ttmlWord, sp *ttmlSpan) {
+	var ws []ttmlWord
+	var ignoredTr, ignoredRoman string
+	if sp.hasSpanKid() {
+		flattenTTMLLine(sp.Kids, &ws, &ignoredTr, &ignoredRoman, nil)
+	} else if t := strings.TrimSpace(sp.text()); t != "" {
+		ws = []ttmlWord{{begin: sp.Begin, end: sp.End, text: t}}
+	}
+	ws = trimTTMLWordEdges(ws)
+	if len(ws) == 0 {
+		return
+	}
+	if n := len(*bg); n > 0 && !strings.HasSuffix((*bg)[n-1].text, " ") {
+		(*bg)[n-1].text += " "
+	}
+	*bg = append(*bg, ws...)
 }
 
 // appendTTMLGap 把 span 之间那段字面文本并进前一个词。
@@ -405,7 +433,7 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 		return amllResult{}, false
 	}
 	prefixes := amllSpeakerPrefixes(doc.Agents)
-	var lrc, yrc, tr, roma strings.Builder
+	var lrc, yrc, tr, roma, bg strings.Builder
 	lines, distinctPersons := 0, map[string]bool{}
 	for _, div := range doc.Divs {
 		for _, ln := range div.Lines {
@@ -413,9 +441,9 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 			if start < 0 {
 				continue
 			}
-			var words []ttmlWord
+			var words, bgWords []ttmlWord
 			translation, roman := "", ""
-			flattenTTMLLine(ln.Kids, &words, &translation, &roman)
+			flattenTTMLLine(ln.Kids, &words, &translation, &roman, &bgWords)
 			words = trimTTMLWordEdges(words)
 
 			prefix := ""
@@ -446,6 +474,9 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 			if w := buildYRCLine(start, parseTTMLTime(ln.End), prefix, words); w != "" {
 				yrc.WriteString(w + "\n")
 			}
+			if w := buildYRCLine(start, parseTTMLTime(ln.End), "", trimTTMLWordEdges(bgWords)); w != "" {
+				bg.WriteString(w + "\n")
+			}
 		}
 	}
 	if lines == 0 {
@@ -456,6 +487,7 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 		yrc:     yrc.String(),
 		tr:      tr.String(),
 		roma:    roma.String(),
+		bg:      bg.String(),
 		hasDuet: len(distinctPersons) >= 2,
 	}, true
 }

@@ -72,9 +72,12 @@ func TestParseAMLLTTMLDuet(t *testing.T) {
 	if !strings.HasPrefix(lrc[2], "[02:18.71]合：眼看") {
 		t.Errorf("group 应写成「合」: %q", lrc[2])
 	}
-	// 背景人声(x-bg)整枝跳过,不能混进主歌词
-	if strings.Contains(r.lrc, "和声") {
-		t.Errorf("背景人声不该进主歌词: %q", r.lrc)
+	// 背景人声(x-bg)不能混进主歌词,单独成一轨,行头是所属主句的起止
+	if strings.Contains(r.lrc, "和声") || strings.Contains(r.yrc, "和声") {
+		t.Errorf("背景人声不该进主歌词: %q / %q", r.lrc, r.yrc)
+	}
+	if r.bg != "[138710,1290](139300,600,0)和声\n" {
+		t.Errorf("背景人声轨不对: %q", r.bg)
 	}
 	// 内嵌译文单独成一份
 	if !strings.Contains(r.tr, "[00:26.51]Gone") {
@@ -207,4 +210,37 @@ func joinYRCWords(line string) string {
 		}
 	}
 	return b.String()
+}
+
+// 用例照《Leave The Door Open》的真实 TTML 写(amll-ttml-db ncm-lyrics/1824927085.ttml):背景人声逐字、
+// 带括号、自己套着一份译文,而且在主句唱完之后才开口。
+func TestParseAMLLTTMLBackgroundVocals(t *testing.T) {
+	raw := `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">` +
+		`<head><metadata xmlns=""><ttm:agent type="person" xml:id="v1"/></metadata></head>` +
+		`<body><div xmlns="">` +
+		`<p begin="00:13.719" end="00:14.301" ttm:agent="v1"><span begin="00:13.719" end="00:13.863">What</span>` +
+		`<span begin="00:13.863" end="00:14.039"> you</span><span begin="00:14.039" end="00:14.301"> doing?</span>` +
+		`<span ttm:role="x-bg" begin="00:14.457" end="00:15.143"><span begin="00:14.457" end="00:14.675">(What</span>` +
+		`<span begin="00:14.675" end="00:14.880"> you</span><span begin="00:14.880" end="00:15.143"> doing?)</span>` +
+		`<span ttm:role="x-translation" xml:lang="zh-CN">你在做什么？</span></span>` +
+		`<span ttm:role="x-translation" xml:lang="zh-CN">你在做什么？</span></p>` +
+		`<p begin="00:16.000" end="00:17.000" ttm:agent="v1"><span begin="00:16.000" end="00:17.000">Solo</span>` +
+		`<span ttm:role="x-bg" begin="00:16.200" end="00:16.500">ooh</span>` +
+		`<span ttm:role="x-bg" begin="00:16.600" end="00:16.900"><span begin="00:16.600" end="00:16.900">(yeah)</span></span></p>` +
+		`</div></body></tt>`
+	r, ok := parseAMLLTTML(raw)
+	if !ok {
+		t.Fatal("解析失败")
+	}
+	if r.lrc != "[00:13.71]What you doing?\n[00:16.00]Solo\n" {
+		t.Errorf("主歌词不对: %q", r.lrc)
+	}
+	if r.tr != "[00:13.71]你在做什么？\n" {
+		t.Errorf("背景人声里套的译文不该顶掉主句的译文: %q", r.tr)
+	}
+	want := "[13719,582](14457,218,0)(What(14675,205,0) you(14880,263,0) doing?)\n" +
+		"[16000,1000](16200,300,0)ooh (16600,300,0)(yeah)\n"
+	if r.bg != want {
+		t.Errorf("背景人声轨不对:\n got %q\nwant %q", r.bg, want)
+	}
 }

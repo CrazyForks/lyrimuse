@@ -30,6 +30,19 @@ func runCacheKeyTests() {
         expectEqual(EnrichCacheSlim.bodyCRC(["lyrics": "[00:01.00]x"]), 2260255535, "精简条目: 只有主歌词的校验值跟 collector 一致")
         expectEqual(EnrichCacheSlim.bodyCRC(["cover_url": "x"]), 0, "精简条目: 没有正文校验值为 0")
 
+        // 背景人声只在非空时接在五段后面算(collector 用同一组输入钉着同一个值)。
+        var withBG = full
+        withBG["lyrics_bg"] = "[1000,500](1600,300,0)(oh)"
+        expectEqual(EnrichCacheSlim.bodyCRC(withBG), 2392567654, "精简条目: 带背景人声的校验值跟 collector 一致")
+        let bgSlim = EnrichCacheSlim.slim(withBG)
+        expectEqual(bgSlim["lyrics_bg"] == nil && EnrichCacheSlim.presentFields(bgSlim).contains(.bg), true,
+                    "精简条目: 背景人声跟别的正文一样去掉,位图记下")
+        let bgJSON = #"{"crc":2392567654,"lyrics":"[00:01.00]你好","lyrics_tr":"[00:01.00]hello","lyrics_roma":"[00:01.00]ni hao","lyrics_yrc":"[1000,500](1000,500,0)你好","plain_lyrics":"你好","lyrics_bg":"[1000,500](1600,300,0)(oh)"}"#
+        let bgBody = try! JSONDecoder().decode(EnrichCacheBody.self, from: Data(bgJSON.utf8))
+        expectEqual(EnrichCacheSlim.isSelfConsistent(bgBody), true, "精简条目: 带背景人声的小文件自洽")
+        expectEqual(EnrichCacheSlim.hydrate(bgSlim, body: bgBody).map { NSDictionary(dictionary: $0) },
+                    NSDictionary(dictionary: withBG), "精简条目: 背景人声从小文件补回")
+
         let slim = EnrichCacheSlim.slim(full)
         expectEqual(EnrichCacheSlim.isSlim(slim), true, "精简条目: slim 之后认得出来")
         expectEqual(EnrichCacheSlim.strippedFields.allSatisfy { slim[$0] == nil }, true, "精简条目: 四块正文去掉")

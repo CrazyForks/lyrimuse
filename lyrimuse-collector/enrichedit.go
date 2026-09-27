@@ -272,6 +272,10 @@ func applySaveEdit(e *enrichEntry, req enrichEditRequest) error {
 	if roma != "" && req.Lyrics != e.Lyrics && roma == e.LyricsRoma {
 		roma = ""
 	}
+	// 背景人声挂在旧正文的行头上,正文或逐字一换就清掉。采纳候选也不带它(候选接口没有这个字段)。
+	if req.Lyrics != e.Lyrics || (req.YRC != nil && *req.YRC != e.LyricsYRC) {
+		e.LyricsBG = ""
+	}
 	e.Lyrics, e.LyricsTr, e.LyricsRoma = req.Lyrics, req.Tr, roma
 	e.ManualLyrics = req.MarkManual
 	// nil = 不动;空串 = 显式清掉(交回算法自由选源)。

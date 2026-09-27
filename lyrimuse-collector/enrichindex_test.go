@@ -101,6 +101,11 @@ func TestEnrichBodyCRCMatchesApp(t *testing.T) {
 	if got := enrichBodyCRC(enrichEntry{Lyrics: "[00:01.00]x"}); got != 2260255535 {
 		t.Fatalf("crc(lyrics only) = %d", got)
 	}
+	withBG := full
+	withBG.LyricsBG = "[1000,500](1600,300,0)(oh)"
+	if got := enrichBodyCRC(withBG); got != 2392567654 {
+		t.Fatalf("crc(full + bg) = %d", got)
+	}
 	if got := enrichBodyFields(enrichEntry{Lyrics: "x", LyricsTr: "y"}); got != 128|2 {
 		t.Fatalf("fields = %d", got)
 	}

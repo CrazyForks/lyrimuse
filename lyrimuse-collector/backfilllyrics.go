@@ -18,6 +18,7 @@ func adoptBackfilledLyrics(e *enrichEntry, fresh enrichEntry) bool {
 	e.LyricsScoringVersion = fresh.LyricsScoringVersion
 	e.ResolvedDurationSecs = fresh.ResolvedDurationSecs
 	e.LyricsTr, e.LyricsRoma, e.LyricsYRC = fresh.LyricsTr, fresh.LyricsRoma, fresh.LyricsYRC
+	e.LyricsBG, e.LyricsBGChecked = fresh.LyricsBG, fresh.LyricsBGChecked
 	e.LyricsTrLang, e.LyricsTrSource = fresh.LyricsTrLang, fresh.LyricsTrSource
 	e.SongLanguage = fresh.SongLanguage
 	e.LyricsDecision = fresh.LyricsDecision

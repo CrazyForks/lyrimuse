@@ -55,6 +55,9 @@ public struct SyncedLyricLine: Equatable {
     /// **nil = 这首歌没有演唱者标记**(或还没到第一个标记),不是"靠左";各视图按自己的
     /// 默认排版兜底(歌词窗口 `?? .leading`、悬浮窗 `?? .center`)。
     public var side: LyricDuet.Side?
+    /// 挂在这一句下面的背景人声(和声 / 回声),逐字,词带自己的时间,常常唱到主句结束之后。
+    /// 只有 Apple Music / AMLL 的歌词有,没有时为 nil。
+    public let backgroundWords: [SyncedLyricWord]?
 
     // 不关心逐字填色进度、只要这一行的纯文本时用(比如状态栏显示)——mainText/words
     // 两种形态只会有一个非空,按判断顺序(有逐字数据优先逐字)取值。
@@ -67,13 +70,15 @@ public struct SyncedLyricLine: Equatable {
     /// 构造点都显式传预拼好的值,这个默认路径只服务少数手写构造(如 selftest,所以 public)。
     public init(romanization: String?, translation: String?, mainText: String?,
                 words: [SyncedLyricWord]?, wordGroups: [SyncedLyricWordGroup]?,
-                side: LyricDuet.Side?, plainText: String? = nil) {
+                side: LyricDuet.Side?, plainText: String? = nil,
+                backgroundWords: [SyncedLyricWord]? = nil) {
         self.romanization = romanization
         self.translation = translation
         self.mainText = mainText
         self.words = words
         self.wordGroups = wordGroups
         self.side = side
+        self.backgroundWords = backgroundWords
         // 显式传入的空串退回推导链:引擎对 words==[] 的行(对唱标记单独成词被整个删掉)
         // 预拼出来是 "",而旧计算属性对这种行返回 nil —— 灵动岛的 `plainText ?? "♪"`
         // 靠 nil 才能显示占位音符(对抗审查抓出的口径差)。
@@ -173,6 +178,8 @@ public final class LyricsSyncEngine {
     private var wordSides: [LyricDuet.Side?] = []
     private var romaLines: [LyricLine] = []
     private var trLines: [LyricLine] = []
+    /// 背景人声轨(collector `lyrics_bg`),每行的 timeMs 是它所属主句的行头,见 backgroundWords(forLineAt:)。
+    private var bgLines: [LyricLineWords] = []
     private var usingWords = false
 
     /// 内容匹配用的"歌词原文 → 译文/罗马音"字典。见 load() 里构建它
@@ -1455,7 +1462,7 @@ public final class LyricsSyncEngine {
     /// load 的 7 个入参的完整快照。它们是 load 输出的**全部**输入(load 不读引擎其它
     /// 状态),快照相等 到 解析/过滤/派生状态必然相等 到 可以整段跳过。
     private struct LoadFingerprint: Equatable {
-        let lyrics, lyricsTr, lyricsRoma, lyricsYRC: String
+        let lyrics, lyricsTr, lyricsRoma, lyricsYRC, lyricsBG: String
         let trackTitle, trackArtist: String
         let romanizationScripts: RomanizationScripts
         let songIsCantonese: Bool
@@ -1474,13 +1481,13 @@ public final class LyricsSyncEngine {
     /// 入参全等时**保住**全部缓存——输入相等则派生状态必然相等,比"清了也不会算错"更强。
     @discardableResult
     public func load(
-        lyrics: String, lyricsTr: String, lyricsRoma: String, lyricsYRC: String,
+        lyrics: String, lyricsTr: String, lyricsRoma: String, lyricsYRC: String, lyricsBG: String = "",
         trackTitle: String = "", trackArtist: String = "",
         romanizationScripts: RomanizationScripts = .default, songIsCantonese: Bool = false,
         songIsHokkien: Bool = false
     ) -> Bool {
         let fingerprint = LoadFingerprint(
-            lyrics: lyrics, lyricsTr: lyricsTr, lyricsRoma: lyricsRoma, lyricsYRC: lyricsYRC,
+            lyrics: lyrics, lyricsTr: lyricsTr, lyricsRoma: lyricsRoma, lyricsYRC: lyricsYRC, lyricsBG: lyricsBG,
             trackTitle: trackTitle, trackArtist: trackArtist,
             romanizationScripts: romanizationScripts, songIsCantonese: songIsCantonese,
             songIsHokkien: songIsHokkien)
@@ -1595,6 +1602,9 @@ public final class LyricsSyncEngine {
         // 有 86 处这种撞车(多数是 `[00:00.00]` 上抬头行和第一句挤在一起)。
         creditTimesMs.subtract(filteredBase.map(\.timeMs))
         creditTimesMs.subtract(candidateWords.map(\.timeMs))
+        // 背景人声不过时间轴归一化:那一步把词夹回行的起止之内,而背景人声本来就常常唱到主句结束之后。
+        // 署名行被删掉的那几行主句,它们的背景人声按行头挂不上任何一行,自然就不显示。
+        bgLines = YRCParser.parse(lyricsBG)
         romaLines = LRCParser.parse(lyricsRoma).filter { !creditTimesMs.contains($0.timeMs) }.map {
             LyricLine(timeMs: $0.timeMs, text: LyricDuet.strippingKnownLabel($0.text, speakers: allSpeakers))
         }
@@ -2191,7 +2201,8 @@ public final class LyricsSyncEngine {
                 words: words,
                 wordGroups: wordGroups(for: words, line: joined),
                 side: wordSides.indices.contains(idx) ? wordSides[idx] : nil,
-                plainText: joined
+                plainText: joined,
+                backgroundWords: backgroundWords(forLineAt: ln.timeMs)
             )
         } else {
             let ln = baseLines[idx]
@@ -2202,7 +2213,8 @@ public final class LyricsSyncEngine {
                 words: nil,
                 wordGroups: nil,
                 side: baseSides.indices.contains(idx) ? baseSides[idx] : nil,
-                plainText: ln.text
+                plainText: ln.text,
+                backgroundWords: backgroundWords(forLineAt: ln.timeMs)
             )
         }
         return line
@@ -2435,7 +2447,8 @@ public final class LyricsSyncEngine {
                     words: words,
                     wordGroups: wordGroups(for: words, line: joined),
                     side: self.wordSides.indices.contains(i) ? self.wordSides[i] : nil,
-                    plainText: joined
+                    plainText: joined,
+                    backgroundWords: self.backgroundWords(forLineAt: ln.timeMs)
                 )
                 return LyricsWindowLine(id: "\(idPrefix)#\(i)", timeMs: ln.timeMs, line: line)
             }
@@ -2448,7 +2461,8 @@ public final class LyricsSyncEngine {
                 words: nil,
                 wordGroups: nil,
                 side: self.baseSides.indices.contains(i) ? self.baseSides[i] : nil,
-                plainText: ln.text
+                plainText: ln.text,
+                backgroundWords: self.backgroundWords(forLineAt: ln.timeMs)
             )
             return LyricsWindowLine(id: "\(idPrefix)#\(i)", timeMs: ln.timeMs, line: line)
         }
@@ -2493,10 +2507,29 @@ public final class LyricsSyncEngine {
     }
 
     /// 这一行唱完的时间:逐字取最后一个词的结束;行级不可知,给 nil。
+    /// 背景人声唱到主句结束之后时,这一行要唱到背景人声唱完:换行(短间隙的滚动锚)和间奏点都从这里算,
+    /// 早了背景人声就落在已经滚走的非当前行上。
     private func gapLineEndMs(at index: Int) -> Int? {
         guard usingWords, wordLines.indices.contains(index),
               let last = wordLines[index].words.last else { return nil }
-        return last.startMs + last.durationMs
+        let end = last.startMs + last.durationMs
+        guard let bgLast = backgroundLine(forLineAt: wordLines[index].timeMs)?.words.last else { return end }
+        return max(end, bgLast.startMs + bgLast.durationMs)
+    }
+
+    /// 背景人声行头跟主句行头的最大差值。两者来自同一行的起点,逐字行完全相等;逐行 LRC 只有 10ms 精度。
+    static let backgroundLineToleranceMs = 30
+
+    /// 行头在 timeMs 这一句的背景人声行;没有是 nil。gapLineEndMs 每个 tick 都问,这里不分配。
+    private func backgroundLine(forLineAt timeMs: Int) -> LyricLineWords? {
+        guard !bgLines.isEmpty else { return nil }
+        return bgLines.first { abs($0.timeMs - timeMs) <= Self.backgroundLineToleranceMs && !$0.words.isEmpty }
+    }
+
+    private func backgroundWords(forLineAt timeMs: Int) -> [SyncedLyricWord]? {
+        backgroundLine(forLineAt: timeMs)?.words.map {
+            SyncedLyricWord(text: $0.text, startMs: $0.startMs, durationMs: $0.durationMs)
+        }
     }
 
     /// 第 index 行之后(index == -1 为前奏)的间奏活跃窗口。nil = 这里没有值得标记的间奏。

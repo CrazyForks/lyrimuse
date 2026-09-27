@@ -99,6 +99,7 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 			}
 		default:
 			e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics = b.Lyrics, b.LyricsTr, b.LyricsRoma, b.LyricsYRC, b.PlainLyrics
+			e.LyricsBG = b.LyricsBG
 			if b.CRC == want {
 				st.restored++
 			} else {
@@ -121,7 +122,7 @@ func readEnrichBody(path string) *enrichBody {
 		return nil
 	}
 	got := enrichBodyCRC(enrichEntry{Lyrics: b.Lyrics, LyricsTr: b.LyricsTr, LyricsRoma: b.LyricsRoma,
-		LyricsYRC: b.LyricsYRC, PlainLyrics: b.PlainLyrics})
+		LyricsYRC: b.LyricsYRC, PlainLyrics: b.PlainLyrics, LyricsBG: b.LyricsBG})
 	if got != b.CRC {
 		return nil
 	}
