@@ -49,6 +49,9 @@ import (
 //     Prince 又是邱胜翊的用户,这里一律不猜。
 //   - 跟本地标签自身相同的不算别名(它不提供任何新信息;retryArtistIdentities 的 add()
 //     也会去重,这里提前挡掉只是省事)。
+//   - 包含本地标签自身的也不算(「Taylor Swift」名下那首合作曲,源署的是「Taylor Swift、Ed Sheeran、Future」):
+//     那是本人加上合作者,不是本人的另一种写法,拿去查只会更窄。它还会让「唯一」判据在只有这一首合作曲
+//     署名不同时成立,学出一个错的别名。
 //   - 一致时返回原始写法里**字典序最小**的那个 —— Go 的 map 迭代顺序随机,不定序的话
 //     "Prince" 和 "PRINCE" 这种同一 normLoose 的两种写法会每次启动学到不同的一个,
 //     表现为"同一首歌有时搜得到有时搜不到"且复现不出来(09-07 在 siblingCoverLocked
@@ -80,7 +83,7 @@ func learnedSourceArtistAlias(artist string) string {
 			continue
 		}
 		name := winningCandidateArtist(e)
-		if name == "" || normLoose(name) == self {
+		if name == "" || strings.Contains(normLoose(name), self) {
 			continue
 		}
 		names = append(names, name)

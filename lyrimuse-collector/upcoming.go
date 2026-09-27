@@ -36,7 +36,7 @@ import (
 // prefetchUpcomingCount 是往前看几首。
 //
 // 取 5 而不是"整条队列":队列动辄几十上百首(实测网易云 552、酷狗 100),而这条路径本身
-// 就是"自己把自己打限流"最大的放大器(见 albumPrefetchStagger)。5 首足够覆盖"等真播到
+// 就是"自己把自己打限流"最大的放大器(见 albumprefetch.go 的 waitPrefetchResolved)。5 首足够覆盖"等真播到
 // 那首时已经解析好"这个目的 —— 按每首 3~4 分钟算,5 首是往前看二十分钟。
 const prefetchUpcomingCount = 5
 
@@ -167,9 +167,8 @@ func prefetchUpcoming(currentArtist, currentTitle, album, bundleID string, durat
 }
 
 // queueUpcomingEnrich 把这几首丢进后台解析,跟正常路径共用同一套 enrichCache/enrichInflight
-// 去重 —— 真播到那首时不会重复解析。错峰间隔沿用 albumPrefetchStagger,理由同那边:
-// 这条路径一次排一批,单首歌内部还会有好几轮重试,不错峰就会把"正在播的那首"自己的请求
-// 也一起堵在同一把节流锁后面。
+// 去重 —— 真播到那首时不会重复解析。一次只跑一首、上一首跑完才起下一首(waitPrefetchResolved),
+// 理由同 albumprefetch.go:这条路径一次排一批,几首叠在一起跑会跟"正在播的那首"抢同一批歌词源。
 // upcomingNeedsResolve:这首还没解析过、也没在解析中(只读判断,不占位)。判据与 queueUpcomingEnrich 同一套 ——
 // 精确键没命中再宽松找一次(理由见那边)。给「列表很大、只挑没解析过的补几首」的来源用(QQ 随机播放)。
 func upcomingNeedsResolve(t upcomingTrack) bool {
@@ -191,6 +190,7 @@ func upcomingNeedsResolve(t upcomingTrack) bool {
 
 func queueUpcomingEnrich(tracks []upcomingTrack) {
 	queued := 0
+	var prevKey string // 上一首起了解析的预取曲目,起下一首前等它跑完
 	for _, t := range tracks {
 		if t.title == "" {
 			continue
@@ -215,11 +215,12 @@ func queueUpcomingEnrich(tracks []upcomingTrack) {
 		if !eligible {
 			continue
 		}
-		if queued > 0 {
-			// 只在真要起下一个之前才等 —— 跳过的(已解析/在途)不占错峰配额。
-			time.Sleep(albumPrefetchStagger)
+		if prevKey != "" {
+			// 只在真要起下一个之前才等 —— 跳过的(已解析/在途)不用等。
+			waitPrefetchResolved(prevKey)
 		}
 		queued++
+		prevKey = key
 		// isNewTrack 传 false:这一刻的设备 Now Playing 数据对应的是**正在播的那首**,
 		// 不能拿来当这些曲目的封面(同 albumprefetch.go 的调用点)。
 		// 曲名先过 normEnrichTitle,跟 trackEnrichment 发起搜索用同一份查询词:key 里剥掉的尾括号

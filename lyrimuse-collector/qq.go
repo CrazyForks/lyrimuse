@@ -392,10 +392,21 @@ func qqSearchSongs(ctx context.Context, queries []string, title string) []qqSear
 			out = append(out, it)
 		}
 	}
-	for _, q := range queries {
-		if items, err := qqClientSearch(ctx, q); err == nil {
-			appendNew(items)
-		}
+	// 各标题变体并发搜,合并仍按 queries 的顺序,去重结果跟逐个搜时一样。
+	perQuery := make([][]qqSearchItem, len(queries))
+	var wg sync.WaitGroup
+	for i, q := range queries {
+		wg.Add(1)
+		go func(i int, q string) {
+			defer wg.Done()
+			if items, err := qqClientSearch(ctx, q); err == nil {
+				perQuery[i] = items
+			}
+		}(i, q)
+	}
+	wg.Wait()
+	for _, items := range perQuery {
+		appendNew(items)
 	}
 	if qqSearchNeedsSmartboxSupplement(out, title) {
 		for _, q := range queries {

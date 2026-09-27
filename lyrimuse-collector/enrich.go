@@ -2419,46 +2419,26 @@ func resolveTrackEnrichment(ctx context.Context, artist, title, album string, du
 	// 那条分支 —— 它存在的唯一理由是"歌词关着、但封面和跳转链接还得要"。
 	roundCtx, round := withLyricSourceRound(ctx)
 	roundCtx, queries := withLyricQueryLog(roundCtx)
+	// 首轮先上屏(见 provisionallyrics.go):首轮挑得出歌词、还要接着跑补查轮时,先把首轮的结果提交一份。
+	if onLyrics != nil {
+		roundCtx = withProvisionalLyrics(roundCtx, func(ne neteaseInfo, scored []scoredLyricCandidateResult) {
+			if p, picked := lyricsEntryFromScored(decisionPath, artist, title, album, durationSecs, ne, scored,
+				round.skippedSources(), queries.queries()); picked != nil {
+				onLyrics(p)
+			}
+		})
+	}
 	ne, scored = scoredLyricCandidates(roundCtx, artist, title, album, durationSecs)
 	// 封面/主色/平台跳转链接是基础展示信息,不做成可关闭的开关,以下逻辑无条件执行——
 	// 唯一的例外是上面说的:网易云作为歌词源被关掉时 ne 是空的,这里自然拿不到它的封面和链接。
-	e.CoverURL = ne.Cover
-	if e.CoverURL != "" {
-		e.CoverSource = "netease"
-		e.CoverAlbum = ne.Album
-	}
-	e.NeteaseURL = ne.SongURL
-	e.DurationSecs = durationSecs
-	// 不管选没选中,都记下这一轮到底有哪些源真的给出了可用候选 —— needsLyricsRetry
-	// 靠"有启用的源这轮没露面"来判断这次结果是不是在信息不全的情况下做的决定。
-	e.LyricsSourcesSeen = lyricSourcesWithCandidates(scored)
-	e.LyricsSourcesResponded = lyricSourcesResponded(scored)
-	e.LyricsSourcesSkipped = round.skippedSources()
-	picked := pickLyricCandidate(scored)
 	// 决策固化(见 decision.go):首次解析是最要紧的一份 —— 缓存永久保留,这一刻的运气
 	// 就是这首歌以后一直显示的东西,不记下来事后无从复盘。
-	e.LyricsDecision = buildLyricsDecision(
-		decisionPath, artist, title, album, durationSecs, scored, picked, picked != nil)
-	e.LyricsDecision.SourcesSkipped = e.LyricsSourcesSkipped
-	e.LyricsDecision.QueriesTried = queries.queries()
+	e, picked := lyricsEntryFromScored(decisionPath, artist, title, album, durationSecs, ne, scored,
+		round.skippedSources(), queries.queries())
 	// 首次解析这里拿不到 key(它由上层 trackEnrichment 用**未转简体**的原始标签拼),
 	// 用查询词拼一个等价形状 —— trace 是流水账,要的是"能对上是哪首歌",不参与任何查找。
 	traceLyricsDecision(artist+"|"+title+"|"+album, e.LyricsDecision)
-	if picked != nil {
-		// 选中了 → 这一轮就是当前歌词的出处(分槽语义见 LyricsDecisionApplied)。
-		e.LyricsDecisionApplied = e.LyricsDecision
-		e.Lyrics = picked.Lyrics
-		e.LyricsSource = picked.Source
-		e.LyricsScore = picked.Score
-		e.LyricsScoringVersion = lyricsScoringVersion
-		e.ResolvedDurationSecs = durationSecs
-		e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
-		e.SongLanguage = songLanguageFromScored(scored)
-		e.maybeGenerateRoma()
-		// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
-		// 来源(否则上一轮机翻留下的 "machine" 会让新来的社区译文被标成机翻)。
-		e.LyricsTrLang, e.LyricsTrSource = picked.LyricsTrLang, ""
-	} else {
+	if picked == nil {
 		// 没有任何源给出可用歌词——查一下有没有依据说这是纯音乐(scored 里搭车带着的
 		// 联网标记,或汽水客户端的本地队列缓存;见 instrumentalFromScored 与
 		// Instrumental 字段定义处的注释),命中就记下来,UI 侧才能把这种情况跟
@@ -2984,10 +2964,14 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 	// 缺着的源里剔掉"换名字也救不回来"的:传输层连不上的(sourcebreaker 的 transportFailureCodes)、
 	// 地区限制 / 直连被堵这类带具体原因的 —— 见 lyricSourcesWorthAliasRetry。
 	// 救急(一个能用的都没有)和缺罗马音信号这两种触发条件仍然全源重查;缺罗马音只驱动一轮。
+	// 救急时提前跑的标题反查(见 titlereverse.go);没用上的在返回时取消。
+	var titleSpec *titleReverseSpec
+	defer func() { titleSpec.stop() }()
 	rescue := !hasUsableLyricCandidate(results)
 	romaRetry := needsRomanizationRetry(results)
 	missing := lyricSourcesWorthAliasRetry(results)
 	if rescue || romaRetry || len(missing) > 0 {
+		notifyProvisionalLyrics(ctx, ne, results)
 		// Apple 目录锚点给的权威署名排在手工别名表/MusicBrainz **前面**:它是这首歌
 		// 自己的元数据(而不是"这位歌手一般叫什么"),证据强度更高,而且专辑署名恰好覆盖
 		// 手工表和 MB 都够不到的那一类——演唱会嘉宾/群星合辑/客串曲目。见
@@ -3006,19 +2990,37 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 		//
 		// 翻唱重入那一轮(coverPerformerOnly)只用 retryArtistIdentities:前三路都是按曲名 / 专辑反推「这首歌是谁唱的」,
 		// 对翻唱推出来的是原唱,换过去查到的就是原唱的词,不是这版翻唱。
+		//
+		// 商店署名、标题反查(iTunes)和 retryArtistIdentities(MusicBrainz 等)三路互不依赖,并发查;
+		// 排序只由下面 dedupeArtistIdentities 的参数顺序决定,跟谁先回来无关。
 		var catalogIdentities, storefrontIdentities, titleSearchIdentities []string
+		var identityWG sync.WaitGroup
 		if !coverPerformerOnly(ctx) {
 			catalogIdentities = appleCatalogSearchIdentities(artist, title, album)
-			storefrontIdentities = appleStorefrontArtistIdentities(ctx, artist, title, album, durationSecs, lyricSamplesForStorefront(results))
+			samples := lyricSamplesForStorefront(results)
+			identityWG.Add(1)
+			go func() {
+				defer identityWG.Done()
+				storefrontIdentities = appleStorefrontArtistIdentities(ctx, artist, title, album, durationSecs, samples)
+			}()
 			if rescue {
-				titleSearchIdentities = appleTitleSearchIdentities(ctx, artist, title, durationSecs)
+				identityWG.Add(1)
+				go func() {
+					defer identityWG.Done()
+					titleSearchIdentities = appleTitleSearchIdentities(ctx, artist, title, durationSecs)
+				}()
 			}
 		}
+		retryIdentities := retryArtistIdentities(ctx, artist)
+		identityWG.Wait()
 		altIdentities := dedupeArtistIdentities(
 			catalogIdentities,
 			storefrontIdentities,
 			titleSearchIdentities,
-			retryArtistIdentities(ctx, artist))
+			retryIdentities)
+		if rescue {
+			titleSpec = startTitleReverseSpec(ctx, artist, title, album, durationSecs, lyricSamplesForStorefront(results))
+		}
 		if len(altIdentities) > 0 {
 			switch {
 			case rescue:
@@ -3030,7 +3032,23 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 			}
 		}
 		romaTried := false
-		for _, alt := range altIdentities {
+		// 救急时接下来几位别名并发开查,采用仍按顺序(见 rescuefanout.go)。支线问的源跟串行救急一样按
+		// lyricSourcesWorthAliasRetry 剔掉换名字也救不回来的(连不上的、地区限制的……)。
+		fan := newAliasFanout(ctx)
+		rescueBase, rescueOnly := results, lyricSourcesWorthAliasRetry(results)
+		rescueBranch := func(bctx context.Context, j int) (neteaseInfo, []scoredLyricCandidateResult) {
+			bctx = withLyricQueryReason(withLyricSourceOnly(bctx, rescueOnly), lyricQueryReasonAliasRescue)
+			bNe, bRes := fetchScoredLyricCandidatesStreaming(bctx, altIdentities[j], title, album, durationSecs, nil)
+			if hasUsableLyricCandidate(bRes) {
+				notifyProvisionalLyrics(ctx, bNe, mergeLyricCandidateRounds(artist, title, album, durationSecs, rescueBase, bRes))
+			}
+			return bNe, bRes
+		}
+		for i, alt := range altIdentities {
+			// 只为补缺席的源跑的那几轮(首轮已经有可用候选、也不缺罗马音)有上限,见 lyricAliasMissingMaxTries。
+			if !rescue && !romaRetry && i >= lyricAliasMissingMaxTries {
+				break
+			}
 			// 这一位别名查哪些源:救急 / 缺罗马音 → 全部;否则只查还缺着的那几个。
 			var only []string
 			if !rescue && !romaRetry {
@@ -3057,7 +3075,23 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 			// 同一条时又重新出现。原名这轮的候选本来就已经展示给用户看了,不该被"正在试的下一个
 			// 身份、还没查完"的空/半状态覆盖掉。
 			aliasUpdate := mergedRoundUpdate(onUpdate, artist, title, album, durationSecs, results)
-			altNe, altResults := fetchScoredLyricCandidatesStreaming(altCtx, alt, title, album, durationSecs, aliasUpdate)
+			var altNe neteaseInfo
+			var altResults []scoredLyricCandidateResult
+			if rescue {
+				fan.ensure(i, len(altIdentities), rescueBranch)
+			}
+			if bNe, bRes, ok := fan.take(i); ok {
+				altNe, altResults = bNe, bRes
+				if !rescue && !romaRetry {
+					altResults = keepLyricSources(altResults, only)
+				}
+				if aliasUpdate != nil {
+					n := enabledLyricSourceCount()
+					aliasUpdate(altNe, altResults, n, n)
+				}
+			} else {
+				altNe, altResults = fetchScoredLyricCandidatesStreaming(altCtx, alt, title, album, durationSecs, aliasUpdate)
+			}
 			// 这里必须用 `mergeLyricCandidateRounds(results, altResults)` 的**只增不减**合并语义,
 			// 不能写成 `results = altResults` 整体覆盖(下面"首歌手变体轮"/"标题反查轮"两处同理)。
 			// 原名这一轮(比如 lrclib 的纯文本兜底,分数 -1 但确实是候选)已经查到、且已经通过流式
@@ -3096,6 +3130,7 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 				break
 			}
 		}
+		fan.stop()
 	}
 	// 首歌手变体轮(「wherever u r」案):本地标签是多人合credit("UMI & 金泰亨")时,
 	// LRCLIB 的结构化 artist_name 参数在服务端就查不到(404),网易云对不同歌手串还会选中
@@ -3112,6 +3147,7 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 		targetSources = n
 	}
 	if primary := lyricPrimaryQueryArtist(artist); primary != "" && usableLyricSourceCount(results) < targetSources {
+		notifyProvisionalLyrics(ctx, ne, results)
 		tryVariant := func(alt string) {
 			// onUpdate 包一层:变体轮期间把每次流式更新先与已有结果合并再上报。裸透传的话
 			// "搜索候选歌词"弹窗(整行替换列表,见 searchcli.go 顶注)会先缩水成变体轮自己
@@ -3170,6 +3206,7 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 	// 永远不会触发),放在最后是因为这是最贵的一道兜底(要多打两次网易云请求:搜专辑 +
 	// 浏览专辑全部曲目,见 retryTitleFromAlbum 的头注)。
 	if usableLyricSourceCount(results) < targetSources {
+		notifyProvisionalLyrics(ctx, ne, results)
 		// 反查专辑本身也吃"英文艺人名+双语专辑名混一起查"这个坑(跟歌曲搜索同一个毛病,
 		// 见 retryArtistIdentities 头注):"Khalil Fong 梦想家 The Dreamer" 网易云专辑搜索零条,
 		// 换成 "方大同 梦想家 The Dreamer" 才能搜到——所以搜专辑这一步也要用已知别名,不能
@@ -3186,73 +3223,31 @@ func scoredLyricCandidatesStreaming(ctx context.Context, artist, title, album st
 		//
 		// 结论:原串和别名哪个是网易云索引用的写法**不能预先假定**,只能都试、留误差更小的
 		// 那个。
-		titleArtists := []string{artist}
-		if aliases := retryArtistIdentities(ctx, artist); len(aliases) > 0 && normLoose(aliases[0]) != normLoose(artist) {
-			titleArtists = append(titleArtists, aliases[0])
-		}
-		// 两条反查都跑、比谁的时长误差更小 —— **不是**"哪个先成功就用哪个"。两条各自都有
-		// 例子证明"我更准、对方错":
-		//   ①「Love Love Love」= 方大同《爱爱爱》,本地专辑标"This Love"——retryTitleFromAlbum
-		//     在这张(名字对得上、收的却不是目标录音的)专辑里找到《春风吹 (Live)》,时长凑巧
-		//     也在容差内,却是完全不相干的另一首歌;retryTitleFromArtistSearch 反而在泛搜结果
-		//     第一条就搜到真正对的《爱爱爱》,时长分毫不差(0.266s)。
-		//   ②「Singer and Model」= 方大同《歌手与模特儿》——两个标题连一个字/一个音都不共享,
-		//     retryTitleFromArtistSearch 的泛搜排名前 30 里压根摸不到它(NetEase 的相关性排序
-		//     找不到任何文字关联),只有 retryTitleFromAlbum 直接浏览专辑全部曲目才找得到(时长
-		//     误差仅 0.0005s);而泛搜矬出一个时长凑巧接近的《Sorry》(误差 0.946s,明显更松),
-		//     字面上跟"Singer and Model"毫无关系。
-		// 谁先跑、谁的结果就被无条件采纳,必然在另一个案例上出错——只能都跑一遍,拿误差更小
-		// 的那个(diff 越小说明这次时长匹配的把握越大),两个都没找到才算这轮兜底失败。同一个
-		// 原则再多套一层:每种反查各自也拿原串/别名都试一遍,不预先假定哪个是网易云认的写法。
-		var albumTitle, searchTitle, albumWinArtist, searchWinArtist string
-		var albumDiff, searchDiff float64
-		var albumOK, albumTitleBacked, searchOK bool
-		for _, ta := range titleArtists {
-			// 近似标题命中(titleBacked)压过纯时长命中,同档再比 diff。
-			if t, d, backed, ok := retryTitleFromAlbumDetailed(ctx, ta, album, title, durationSecs); ok &&
-				(!albumOK || (backed && !albumTitleBacked) || (backed == albumTitleBacked && d < albumDiff)) {
-				albumTitle, albumDiff, albumOK, albumTitleBacked, albumWinArtist = t, d, true, backed, ta
-			}
-			if t, d, ok := retryTitleFromArtistSearchDetailed(ctx, ta, title, durationSecs); ok && (!searchOK || d < searchDiff) {
-				searchTitle, searchDiff, searchOK, searchWinArtist = t, d, true, ta
-			}
-		}
-		// 第三条路:Apple 原产地商店的规范曲名。上面两条**都拿本地标题当输入**
-		// (retryTitleFromAlbum 拿它核对时长、retryTitleFromArtistSearch 直接把它拼进搜索词),
-		// 本地标题本身就是罗马字时它们结构上够不到 —— 死结的完整说明见
-		// appleStorefrontCanonicalTitle 头注(Mrs. GREEN APPLE《クスシキ》那次)。
-		// 不额外打请求:别名轮那边 appleStorefrontArtistIdentities 本来就要遍历这些商店。
-		storefrontTitle := appleStorefrontCanonicalTitle(ctx, artist, title, album, durationSecs, lyricSamplesForStorefront(results))
-		storefrontOK := storefrontTitle != "" && normLoose(storefrontTitle) != normLoose(title)
-
+		// 反查那一步见 titleReverseLookup;救急时它已经跟别名轮同时提前跑过(titleSpec),样本没变就直接用。
+		samples := lyricSamplesForStorefront(results)
 		var correctedTitle, retryMethod, titleArtist string
-		switch {
-		// 跨文字系统的改写(罗马字 KUSUSHIKI → 假名「クスシキ」、US 的「情勝策略」→ JP 的
-		// 「ハッピーエンド」)排在最前:这正是另两条够不到的那个形状,而且它的证据是**专辑级**的
-		// ——先按专辑名精确定位到 collectionId、再在那张专辑的曲目表里按时长 + 跨文字系统对上
-		// 这一条录音(appleStorefrontTrackMatches),比网易云那两条模糊搜索出来的硬。
-		case storefrontOK && artistScriptDiffers(title, storefrontTitle):
-			correctedTitle, retryMethod, titleArtist = storefrontTitle, lyricQueryReasonTitleStorefront, artist
-		// 专辑曲目表里有跟本地标题近似的那首:文字证据压过泛搜的纯时长命中,不比 diff。
-		case albumOK && albumTitleBacked:
-			correctedTitle, retryMethod, titleArtist = albumTitle, "title-from-album", albumWinArtist
-		case albumOK && (!searchOK || albumDiff <= searchDiff):
-			correctedTitle, retryMethod, titleArtist = albumTitle, "title-from-album", albumWinArtist
-		case searchOK:
-			correctedTitle, retryMethod, titleArtist = searchTitle, "title-from-artist-search", searchWinArtist
-		// 同文字系统的改写(副标题/标点差异之类)只当兜底:这种形状上面两条本来就够得着,而它们
-		// 是按时长误差挑出来的、有 diff 可比,这条没有,不该越过它们。
-		case storefrontOK:
-			correctedTitle, retryMethod, titleArtist = storefrontTitle, lyricQueryReasonTitleStorefront, artist
+		spec := titleSpec.take(samples)
+		if spec != nil {
+			correctedTitle, retryMethod, titleArtist = spec.corrected, spec.method, spec.artist
+		} else {
+			correctedTitle, retryMethod, titleArtist = titleReverseLookup(ctx, artist, title, album, durationSecs, samples)
 		}
-		log.Printf("lyrics: title-reverse-lookup: titleArtists=%v albumTitle=%q albumDiff=%v albumOK=%v albumTitleBacked=%v albumWinArtist=%q searchTitle=%q searchDiff=%v searchOK=%v searchWinArtist=%q storefrontTitle=%q storefrontOK=%v -> corrected=%q method=%q titleArtist=%q",
-			titleArtists, albumTitle, albumDiff, albumOK, albumTitleBacked, albumWinArtist, searchTitle, searchDiff, searchOK, searchWinArtist, storefrontTitle, storefrontOK, correctedTitle, retryMethod, titleArtist)
 		if correctedTitle != "" && normLoose(correctedTitle) != normLoose(title) {
 			titleUpdate := mergedRoundUpdate(onUpdate, artist, title, album, durationSecs, results)
 			// retryMethod 的两个取值跟 lyricQueryReasonTitleAlbum / lyricQueryReasonTitleSearch
 			// 逐字相同(常量就是照它定的),直接当来路用。
 			titleCtx := withLyricQueryReason(ctx, retryMethod)
-			altNe, altResults := fetchScoredLyricCandidatesStreaming(titleCtx, titleArtist, correctedTitle, album, durationSecs, titleUpdate)
+			var altNe neteaseInfo
+			var altResults []scoredLyricCandidateResult
+			if spec != nil && spec.fetched {
+				altNe, altResults = spec.ne, spec.results
+				if titleUpdate != nil {
+					n := enabledLyricSourceCount()
+					titleUpdate(altNe, altResults, n, n)
+				}
+			} else {
+				altNe, altResults = fetchScoredLyricCandidatesStreaming(titleCtx, titleArtist, correctedTitle, album, durationSecs, titleUpdate)
+			}
 			// 打上"这一轮是改写标题之后搜的"的标记,好让决策存档事后能认出来(见
 			// scoredLyricCandidateResult.RetryMethod)。必须在 merge **之前**盖:merge 是按源
 			// 挑基础轮/反查轮里更好的那条,盖晚了就分不清最终留下的是哪一轮的了。
@@ -4173,16 +4168,32 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// 缓存,不要求哪边一定在前(两者共用同一份 qqURLCache,见 qq.go)。
 		match := qqMusicMatchCached(ctx, artist, title, album, durationSecs)
 		qqMid := qqMidFromURL(match.url)
+		// 曲目 ID 一到手就交给 amll,不等下面取词:amll 只要 ID,等取词就是白等。
+		qqIDCh <- qqMid
 		var lyr, yrc, tr, roma string
 		var qqDur float64
 		var qqInstrumental, qqNoLyrics bool
+		var qqCover string
 		if qqMid != "" {
-			qqLyr := qqLyric(ctx, qqMid)
-			lyr, qqInstrumental, qqNoLyrics = qqLyr.lrc, qqLyr.instrumental, qqLyr.trackFoundNoLyrics
-			// 逐字(QRC)是完全独立的一套接口/密钥,自己失败不影响上面整行歌词——
+			// 整行歌词与逐字(QRC)两套接口互不依赖,并发取。
+			var qqLyr qqLyricResult
+			lyricDone := make(chan struct{})
+			go func() {
+				defer close(lyricDone)
+				qqLyr = qqLyric(ctx, qqMid)
+			}()
+			// 逐字(QRC)是完全独立的一套接口/密钥,自己失败不影响整行歌词——
 			// 见 qq.go 顶部注释。同一份响应还带中文译文/罗马音两轨(见 qqQRCLyric 注释),
-			// 时间戳与上面 qqLyric 的整行歌词逐行一致。
+			// 时间戳与 qqLyric 的整行歌词逐行一致。
 			qrc := qqQRCLyric(ctx, qqMid, artist, title, album, durationSecs)
+			// qqCover:qqMid 这时已经是经过身份闸校验过的那首歌,不需要像 qqCoverFallback
+			// (resolveTrackEnrichment 那条独立的封面兜底路径)那样另外核对 singer,直接取
+			// cover 即可。查不到就留空(候选不拿别的封面兜底,见 rankLyricSourceResults)。
+			// 排在 QRC 之后、不跟它并发:两边都读同一份单曲详情(qqSongDetail),QRC 走通时详情已在缓存里,
+			// 并发的话两边同时没命中缓存,同一个详情请求会发两次。
+			qqCover, _ = qqSongCoverAndSinger(ctx, qqMid)
+			<-lyricDone
+			lyr, qqInstrumental, qqNoLyrics = qqLyr.lrc, qqLyr.instrumental, qqLyr.trackFoundNoLyrics
 			yrc, tr, roma = qrc.yrc, qrc.tr, qrc.roma
 			// QRC 正文里的 `[kana:…]` 假名标注行拼到整行歌词开头,App 侧 KanaAnnotation 才
 			// 读得到(跟酷狗 LRC 自带的那一行同格式,见 qqQRCResult.kana 注释)。
@@ -4196,17 +4207,9 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 				qqDur = qqSongMetaCachedOnly(qqMid).interval
 			}
 		}
-		qqIDCh <- qqMid
 		// language 跟 qqDur 同一个只读缓存、同一条"QRC 那步走通时这里是热的"理由,见上面
 		// qqDur 那行注释——不为它单独发请求。
 		qqLang := qqCanonicalLanguage(qqSongMetaCachedOnly(qqMid).language)
-		// qqCover:qqMid 这时已经是经过身份闸校验过的那首歌,不需要像 qqCoverFallback
-		// (resolveTrackEnrichment 那条独立的封面兜底路径)那样另外核对 singer,直接取
-		// cover 即可。查不到就留空(候选不拿别的封面兜底,见 rankLyricSourceResults)。
-		var qqCover string
-		if qqMid != "" {
-			qqCover, _ = qqSongCoverAndSinger(ctx, qqMid)
-		}
 		// trackFoundNoLyrics 还要再过一道 `yrc == ""`:整行接口空、逐字(QRC)接口却拿到了词
 		// 的话,平台**是有歌词的**,只是这两条接口不同步 —— 那时报"平台没有歌词"是错的。
 		// 两套接口完全独立(见 qq.go 顶部注释),不假设它们一定同进同出。

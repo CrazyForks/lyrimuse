@@ -1796,7 +1796,10 @@ func retryArtistIdentities(ctx context.Context, artist string) []string {
 	// "国际艺名 与 中文常用名反过来查"(方大同 与 Khalil Fong)跟中文与否无关,靠这条
 	// 通用查询兜底,不需要事先手工登记——见 musicBrainzArtistAliases 头注,里面详细
 	// 写了方大同这一例踩过的坑(搜到的"主名"字面上跟本地标签相同不代表没有别的候选)。
-	for _, alt := range musicBrainzArtistAliases(ctx, artist) {
+	//
+	// 顺序与取舍见 orderMBAliasesForRetry:主名打头,换了文字的写法在前、同文字的变体拼法在后,
+	// 歌词源认不得的文字系统不收。
+	for _, alt := range orderMBAliasesForRetry(musicBrainzArtistAliases(ctx, artist), artist) {
 		add(alt)
 	}
 	// 第三条:QQ 音乐自己的歌手搜索建议(cachedQQArtistCanonicalName,

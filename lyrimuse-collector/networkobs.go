@@ -52,7 +52,8 @@ var (
 // 域名用的基础设施调用,不是"联系了哪个外部服务");App 自动更新检查(Sparkle 框架,
 // 是 Swift 侧的事,而且请求整个发生在框架内部,拿不到这个函数需要的 method/URL/状态
 // 码/耗时)。
-func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) {
+// doHTTPTrackedOnce 是真正发一次请求的那部分;对外入口 doHTTPTracked 在它外面包了一层同 URL 合并(httpcoalesce.go)。
+func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, error) {
 	// 本地出站闸(hostguard.go):限速排队、429 窗口、歌词源冷却。拦下的请求没发出去,
 	// 不计数、不喂熔断、不进审计汇总。
 	if err := hostGuardShared.admit(req); err != nil {
@@ -79,8 +80,14 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 			traceMu.Unlock()
 		},
 	}))
+	// 歌词源的在途上限(lyricsourceinflight.go):排不上就等,拿到响应就还。
+	releaseSlot, slotErr := acquireLyricSourceSlot(req.Context(), guardHost(req.URL))
+	if slotErr != nil {
+		return nil, slotErr
+	}
 	start := time.Now()
 	resp, err := cli.Do(req)
+	releaseSlot()
 	elapsed := time.Since(start)
 	traceMu.Lock()
 	tr := trace

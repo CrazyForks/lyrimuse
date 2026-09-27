@@ -252,11 +252,19 @@ func resolveMusixmatchLyric(ctx context.Context, artist, title string, durationS
 	}
 	// hasRichsync==false 时**不发** track.richsync.get —— 跟上面 hasSubtitles 那道闸
 	// 同一个理由、同一份契约。实测 16 首里 4 首是 0(25%),全部 404。
+	//
+	// 逐字与译文互不依赖(译文只对齐整行 lrc),并发取。两者用的是上面搜索时已经换好的同一个 token,
+	// 不会触发并发换 token(见 musixmatchEnsureToken)。
 	var yrc string
-	if match.hasRichsync {
-		yrc = musixmatchRichsync(ctx, match.trackID)
-	}
+	richsyncDone := make(chan struct{})
+	go func() {
+		defer close(richsyncDone)
+		if match.hasRichsync {
+			yrc = musixmatchRichsync(ctx, match.trackID)
+		}
+	}()
 	tr := musixmatchTranslationLRC(ctx, match.trackID, lrc, trLang)
+	<-richsyncDone
 	return musixmatchResult{lrc: lrc, yrc: yrc, tr: tr, title: match.title, artist: match.artist, album: match.album, cover: match.cover, durationSecs: match.durationSecs}
 }
 

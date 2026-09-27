@@ -47,20 +47,31 @@ import (
 // 炸出几十个解析请求。
 const albumPrefetchMaxTracks = 30
 
-// albumPrefetchStagger:加——预取这条路径本身就是"自己把自己打限流"最大的
-// 放大器。neteaseThrottle(netease.go)那道 250ms 全局节流只挡住了"单个请求发得太快",
-// 挡不住"这一批请求总量太大":换到一张全新专辑时,原来的写法是给最多 30 首曲目**各自**
-// 立即起一个 goroutine 解析,越难匹配的歌触发的重试轮越多(实测《Can We Dance》一首在
-// "标题反查轮"里就打了 6 次网易云请求),二十来首曲目里只要有几首难搜,几秒内堆起几十次
-// 网易云请求毫不夸张——而且这些请求跟共享同一把 neteaseThrottle 锁,会把"正在播的这首"
-// 自己的封面/歌词请求也一起排在后面堵住。
+// 预取一次只跑一首:上一首解析跑完(waitPrefetchResolved)才起下一首。预取这条路径是「自己把自己打限流」
+// 最大的放大器 —— 一次排一整批,越难匹配的歌补查轮越多;几首叠在一起跑时,跟「正在播的那首」抢同一批
+// 歌词源的配额和服务端限流,正在播的那首首轮要多等好几秒。按固定间隔错峰挡不住:单首解析 5～20 秒,
+// 远长于间隔。顺序跑也让队列里排第一的那首(最可能下一首播到的)独占配额、最先解析完。见 09 章决策 102。
 //
-// 这里改成错峰:每起一个新曲目的解析 goroutine 前,让预取这条队列本身歇一段时间再起下一个
-// (不影响"正在播的那首"的正常首次解析路径——那条不经过这里,该多快还多快)。间隔选得
-// 比单首歌自己内部几轮重试加起来的耗时长一些,让前一首的网易云请求基本收尾了,下一首才
-// 接上,不叠加峰值。专辑里的歌反正是按顺序听、要等几分钟才轮到下一首,预取慢几十秒起步
-// 完全不影响"轮到时已经解析好"这个目的。
-const albumPrefetchStagger = 3 * time.Second
+// prefetchResolveMaxWait:等上一首最多等这么久,到点照样起下一首,一首卡住不堵死整批。
+var prefetchResolveMaxWait = 30 * time.Second // 变量只为单测能调短
+
+// prefetchResolvePoll:等上一首时多久看一次它还在不在 enrichInflight 里。
+const prefetchResolvePoll = 250 * time.Millisecond
+
+// waitPrefetchResolved 等 key 这一轮解析结束(resolveEnrichAsync 收尾时把它移出 enrichInflight),
+// 最多等 prefetchResolveMaxWait。
+func waitPrefetchResolved(key string) {
+	deadline := time.Now().Add(prefetchResolveMaxWait)
+	for time.Now().Before(deadline) {
+		enrichMu.Lock()
+		running := enrichInflight[key]
+		enrichMu.Unlock()
+		if !running {
+			return
+		}
+		time.Sleep(prefetchResolvePoll)
+	}
+}
 
 var (
 	prefetchMu     sync.Mutex
@@ -91,6 +102,7 @@ func prefetchAlbumSiblings(currentArtist, currentTitle, album, bundleID string) 
 			return
 		}
 		queued := 0
+		var prevKey string // 上一首起了解析的预取曲目,起下一首前等它跑完
 		// 当前正在播的这首的宽松键 —— 用来把它从预取名单里剔掉。
 		//
 		// 从"两个字段逐字节相等"改成这个:曲目表跟播放器对同一首歌的拼法
@@ -130,12 +142,13 @@ func prefetchAlbumSiblings(currentArtist, currentTitle, album, bundleID string) 
 			if !eligible {
 				continue // 已经解析过、或者已经有别的 goroutine 在解析,不重复起
 			}
-			if queued > 0 {
-				// 只在真正要起下一个解析前才等——跳过的曲目(已解析/在途)不占错峰配额,
+			if prevKey != "" {
+				// 只在真正要起下一个解析前才等——跳过的曲目(已解析/在途)不用等,
 				// 不然一张大半已经解析过的专辑,光是跳过那些曲目就会被拖慢一路。
-				time.Sleep(albumPrefetchStagger)
+				waitPrefetchResolved(prevKey)
 			}
 			queued++
+			prevKey = key
 			// 专辑预取没有对应的"停止"入口(不是首次搜索占位行,没有 UI 可以取消它),
 			// 见 backfillPeripheralFields 同款注释。
 			// isNewTrack 传 false:预取的是同专辑里**没在播**的其它曲目,这一刻的设备

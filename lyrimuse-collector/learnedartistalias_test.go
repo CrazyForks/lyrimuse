@@ -27,6 +27,17 @@ func TestLearnedSourceArtistAliasLearnsFromSiblingTracks(t *testing.T) {
 	}
 }
 
+// 合作曲的源侧署名是「本人加上合作者」,不是本人的另一种写法;只有它跟本地标签不同时也不能学成别名。
+func TestLearnedSourceArtistAliasIgnoresCollaborationCredit(t *testing.T) {
+	withEnrichCache(t, map[string]enrichEntry{
+		"Taylor Swift|Shake It Off|1989":   learnedEntry("kugou", "Taylor Swift"),
+		"Taylor Swift|End Game|reputation": learnedEntry("qq", "Taylor Swift、Ed Sheeran、Future"),
+	})
+	if got := learnedSourceArtistAlias("Taylor Swift"); got != "" {
+		t.Fatalf("合作署名不该学成别名,却学到了 %q", got)
+	}
+}
+
 // 同一个本地歌手名指向两个不同的人(「王子」既是 Prince 又是邱胜翊)→ 一律不猜。
 func TestLearnedSourceArtistAliasRefusesWhenAmbiguous(t *testing.T) {
 	withEnrichCache(t, map[string]enrichEntry{

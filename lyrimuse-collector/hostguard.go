@@ -99,6 +99,34 @@ func isBackgroundOutbound(ctx context.Context) bool {
 	return v
 }
 
+// outboundLane:出站请求的优先档。
+//   - laneForeground:正在播那首的首轮(以及一切不在歌词检索里的前台请求),可以透支排队,见 reserve。
+//   - laneSecondary:歌词检索里首轮之后的补查轮(别名 / 标题拆分 / 主唱变体 / 标题反查,ctx 上的查询原因不是首轮)。
+//     取令牌时给首轮留 secondaryReserve 个:救急别名并发(rescuefanout.go)打满时,换歌后新一首的首轮不排在它们后面。
+//   - laneBackground:批量路径(预取、补空、全量扫库),见 withBackgroundOutbound。
+type outboundLane int
+
+const (
+	laneForeground outboundLane = iota
+	laneSecondary
+	laneBackground
+)
+
+func outboundLaneOf(ctx context.Context) outboundLane {
+	switch {
+	case isBackgroundOutbound(ctx):
+		return laneBackground
+	case lyricQueryReasonFrom(ctx) != lyricQueryReasonPrimary:
+		return laneSecondary
+	}
+	return laneForeground
+}
+
+// secondaryReserve:补查档取令牌后桶里至少还剩几个(留给首轮)。比后台档少留一个:补查还是在为正在播的那首服务。
+func secondaryReserve(rate hostRate) float64 {
+	return max(rate.reserve-1, 1)
+}
+
 // hostGuardHeldLogEvery:同一个主机被拦下时多久最多记一行日志。
 const hostGuardHeldLogEvery = time.Minute
 
@@ -155,25 +183,29 @@ func newHostGuard(now func() time.Time) *hostGuard {
 	}
 }
 
-func sourceHoldKey(source string, background bool) string {
-	if background {
+// sourceHoldKey:拦源按档分开记 —— 补查档排不上队不该连累首轮,后台档同理。
+func sourceHoldKey(source string, lane outboundLane) string {
+	switch lane {
+	case laneBackground:
 		return source + "|bg"
+	case laneSecondary:
+		return source + "|2nd"
 	}
 	return source + "|fg"
 }
 
-// sourceHeldNow:这个源这一类请求此刻是不是在 hostGuardSourceHold 里。
-func (g *hostGuard) sourceHeldNow(source string, background bool) bool {
+// sourceHeldNow:这个源这一档请求此刻是不是在 hostGuardSourceHold 里。
+func (g *hostGuard) sourceHeldNow(source string, lane outboundLane) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	until, ok := g.sourceHeld[sourceHoldKey(source, background)]
+	until, ok := g.sourceHeld[sourceHoldKey(source, lane)]
 	return ok && g.now().Before(until)
 }
 
-func (g *hostGuard) holdSource(source string, background bool) {
+func (g *hostGuard) holdSource(source string, lane outboundLane) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.sourceHeld[sourceHoldKey(source, background)] = g.now().Add(hostGuardSourceHold)
+	g.sourceHeld[sourceHoldKey(source, lane)] = g.now().Add(hostGuardSourceHold)
 }
 
 var hostGuardShared = newHostGuard(time.Now)
@@ -245,8 +277,8 @@ func (g *hostGuard) admit(req *http.Request) error {
 		}
 	}
 
-	background := isBackgroundOutbound(ctx)
-	if source != "" && g.sourceHeldNow(source, background) {
+	lane := outboundLaneOf(ctx)
+	if source != "" && g.sourceHeldNow(source, lane) {
 		if round != nil {
 			round.markSkipped(source)
 		}
@@ -256,7 +288,7 @@ func (g *hostGuard) admit(req *http.Request) error {
 		if errors.Is(err, errHostRateLimited) {
 			g.logHeld(host, "local rate limit queue is full")
 			if source != "" {
-				g.holdSource(source, background)
+				g.holdSource(source, lane)
 				if round != nil {
 					round.markSkipped(source)
 				}
@@ -304,10 +336,15 @@ func (g *hostGuard) bucketLocked(host string, now time.Time) (*hostBucket, hostR
 // tryTakeBackground 给后台请求取一个令牌,取完桶里至少还剩 reserve 个;取不到返回还要等多久
 // (等的是桶涨回 reserve+1,期间前台照样可以取)。
 func (g *hostGuard) tryTakeBackground(host string) (time.Duration, bool) {
+	return g.tryTakeAbove(host, func(r hostRate) float64 { return r.reserve })
+}
+
+// tryTakeAbove:桶里取完一个之后至少还剩 keep(rate) 个才取;取不到时返回大约还要等多久。
+func (g *hostGuard) tryTakeAbove(host string, keep func(hostRate) float64) (time.Duration, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	b, rate := g.bucketLocked(host, g.now())
-	need := rate.reserve + 1
+	need := keep(rate) + 1
 	if b.tokens >= need {
 		b.tokens--
 		return 0, true
@@ -316,12 +353,21 @@ func (g *hostGuard) tryTakeBackground(host string) (time.Duration, bool) {
 }
 
 func (g *hostGuard) acquireBackground(ctx context.Context, host string) error {
-	limitAt := time.Now().Add(g.backgroundMaxWait)
+	return g.acquireAbove(ctx, host, func(r hostRate) float64 { return r.reserve }, g.backgroundMaxWait)
+}
+
+// acquireSecondary:补查档,给首轮留 secondaryReserve 个,排队上限同前台(hostGuardMaxWait)。
+func (g *hostGuard) acquireSecondary(ctx context.Context, host string) error {
+	return g.acquireAbove(ctx, host, secondaryReserve, g.maxWait)
+}
+
+func (g *hostGuard) acquireAbove(ctx context.Context, host string, keep func(hostRate) float64, maxWait time.Duration) error {
+	limitAt := time.Now().Add(maxWait)
 	if deadline, ok := ctx.Deadline(); ok && deadline.Before(limitAt) {
 		limitAt = deadline
 	}
 	for {
-		wait, ok := g.tryTakeBackground(host)
+		wait, ok := g.tryTakeAbove(host, keep)
 		if ok {
 			return nil
 		}
@@ -374,8 +420,11 @@ func (g *hostGuard) release(host string) {
 }
 
 func (g *hostGuard) acquire(ctx context.Context, host string) error {
-	if isBackgroundOutbound(ctx) {
+	switch outboundLaneOf(ctx) {
+	case laneBackground:
 		return g.acquireBackground(ctx, host)
+	case laneSecondary:
+		return g.acquireSecondary(ctx, host)
 	}
 	deadline, _ := ctx.Deadline()
 	wait, ok := g.reserve(host, deadline)
