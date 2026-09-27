@@ -37410,6 +37410,29 @@
           }
         }
       }
+    },
+    "点这里到设置里重新连接" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Click to reconnect in Settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点这里到设置里重新连接"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點這裡到設定裡重新連接"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

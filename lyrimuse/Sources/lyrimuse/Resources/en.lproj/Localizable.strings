@@ -1213,6 +1213,7 @@
 "点击打开更新窗口" = "Click to open the update window";
 "点击拷贝版本信息，反馈问题时贴上" = "Click to copy the version info, handy when reporting a problem";
 "点它打开设置和歌词窗口" = "Click it for Settings and the lyrics window";
+"点这里到设置里重新连接" = "Click to reconnect in Settings";
 "版本 %@" = "Version %@";
 "版本不符" = "Version mismatch";
 "版本尾缀写法" = "Version suffix style";

@@ -337,6 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UnknownPlayerNotifier.shared.start()
         // 补搜 / 全量扫库跑完时弹一条结果通知。delegate 由上面 registerCategory 设好(点通知的分流在那边)。
         LyricsSweepNotifier.shared.start()
+        // Last.fm 授权失效(打卡停了)时弹一条系统通知,点它打开 Last.fm 设置页。
+        LastfmMirrorNotifier.shared.start()
         // 捕获 openSettings/openWindow 这两个环境 action 的隐藏锚点窗口。原来这件事挂在
         // MenuBarExtra 的 label 上,随 MenuBarExtra 一起没了 —— 见该文件注释。
         MenuBarSceneActions.install()

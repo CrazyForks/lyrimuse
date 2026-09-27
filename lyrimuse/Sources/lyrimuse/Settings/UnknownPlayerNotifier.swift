@@ -316,6 +316,18 @@ extension UnknownPlayerNotifier: UNUserNotificationCenterDelegate {
             }
             return
         }
+        // Last.fm 授权失效的通知:点正文打开设置里的 Last.fm 账号页(重新连接在那里)。先 requestSettings 再
+        // openSettings,理由同下面「播放器」那一支。
+        if response.notification.request.content.categoryIdentifier == LastfmMirrorNotifier.categoryID {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                await MainActor.run {
+                    AppActions.shared.requestSettings(.account(.lastfm))
+                    NSApp.activate(ignoringOtherApps: true)
+                    AppActions.shared.openSettings?()
+                }
+            }
+            return
+        }
         let info = response.notification.request.content.userInfo
         guard let bundleID = info[Self.bundleIDKey] as? String, !bundleID.isEmpty else { return }
         switch response.actionIdentifier {

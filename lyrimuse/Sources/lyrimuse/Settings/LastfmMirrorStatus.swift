@@ -56,7 +56,7 @@ enum LastfmMirrorStatus {
 ///
 /// 每 5 秒重读一次(LastfmMirrorStatus.current 按 mtime 缓存,常态代价是一次 stat),
 /// 值真变了才发布 —— 订阅的视图只在红标该出现/消失的那一刻各重算一次,其余时间
-/// objectWillChange 完全安静。lazy 单例:第一次有视图订阅(打开设置)才开始跳。
+/// objectWillChange 完全安静。App 启动时由 `LastfmMirrorNotifier` 订阅,从那一刻起就在跳(熔断要弹系统通知)。
 final class LastfmMirrorStatusWatcher: ObservableObject {
     static let shared = LastfmMirrorStatusWatcher()
 
