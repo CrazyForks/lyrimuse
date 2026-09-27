@@ -3948,7 +3948,7 @@ func runSourceContractTests() {
             .appendingPathComponent("LyrimuseCore/Local/MusicCatalogSearch.swift").path, encoding: .utf8)) ?? ""
         expectEqual(catalog.components(separatedBy: "for store in storefronts(primary: storefront) {").count - 1, 2,
                     "Apple 目录搜索: 封面兜底和跳转两个入口都按店面依次问")
-        expectEqual(stats.contains("chartLimit: ChartVisibleRows.fetchLimit)")
+        expectEqual(stats.contains("chartLimit: ChartVisibleRows.fetchLimit,")
                     && stats.contains("snap.chartLimit != ChartVisibleRows.fetchLimit { continue }"), true,
                     "Last.fm 榜单: 快照记下条数,条数口径变了不带回新鲜戳(打开就按新条数重取)")
         let section = code("LastfmStatsSection.swift")
@@ -3963,8 +3963,9 @@ func runSourceContractTests() {
                     "Last.fm 歌手展开: 看榜时预取第 1 页,点开一行才取全部")
         expectEqual(section.contains("chartList(Array(entries.prefix(chartVisibleRows))"), true,
                     "Last.fm 榜单: 只画露出的那几行")
-        expectEqual(section.contains("@State private var chartVisibleRows = ChartVisibleRows.initial"), true,
-                    "Last.fm 榜单: 显示更多的行数不持久化,每次从 10 行开始")
+        expectEqual(section.contains("@AppStorage(\"np:lastfmChartRows\") private var chartRowsRaw = ChartVisibleRows.initial")
+                    && section.contains("ChartVisibleRows.clamped(chartRowsRaw)"), true,
+                    "Last.fm 榜单: 标题旁 Top N 的档位记住,读回时按档位收口")
         // 今天 / 近 7 天:feed 派生的「今天」只收精确值;日桶靠页面主刷新和过零点补增量,增量至少重扫 14 天。
         expectEqual(stats.contains("mergeOverview(total: feed.total, today: today.count, week: nil)"), false,
                     "Last.fm 今天: 不精确的下界不拿去盖界面上的数字")

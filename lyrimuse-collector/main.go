@@ -292,6 +292,7 @@ func main() {
 	// 歌手身份缓存(mbid+中文名),给 Top 歌手榜归并当第三合并信号——见 musicbrainz.go
 	// mbArtistIdentity 注释。与 top-artists CLI 共用同一份文件。
 	loadArtistIdentityCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-artist-identity-cache.json"))
+	loadPlatformPagesCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-platform-pages-cache.json"))
 	// 启动期存量迁移的「已完成水位」(startupmigration.go)。必须在下面那串迁移之前载入。
 	loadMigrationState(filepath.Join(filepath.Dir(*cfgPath), clientName+"-migrations.json"))
 	// 歌词部分(lyrics/lyrics_tr/lyrics_roma/lyrics_yrc/lyrics_source/manual_lyrics)以

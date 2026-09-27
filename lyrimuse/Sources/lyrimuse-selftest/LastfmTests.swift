@@ -450,18 +450,10 @@ func runLastfmTests() {
     // ---- ChartVisibleRows / ArtistTopTracks:「听得最多」显示更多与歌手展开行 ----
     do {
         typealias R = ChartVisibleRows
-        expectEqual(R.nextTarget(current: 10, total: 50), 25, "显示更多: 10 → 25")
-        expectEqual(R.nextTarget(current: 25, total: 50), 50, "显示更多: 25 → 50")
-        expectEqual(R.nextTarget(current: 50, total: 50), nil, "显示更多: 全部露出后是收起")
-        expectEqual(R.next(after: 50, total: 50), 10, "显示更多: 收起回到 10 行")
-        expectEqual(R.nextTarget(current: 10, total: 30), 25, "显示更多: 不足 50 条时照常先到 25")
-        expectEqual(R.nextTarget(current: 25, total: 30), 30, "显示更多: 下一档超过条数就到条数为止")
-        expectEqual(R.nextTarget(current: 30, total: 30), nil, "显示更多: 30 条全露出后是收起")
-        expectEqual(R.nextTarget(current: 10, total: 18), 18, "显示更多: 18 条一步到底")
-        expectEqual(R.nextTarget(current: 25, total: 80), 50, "显示更多: 最多 50 行")
-        expectEqual(R.nextTarget(current: 50, total: 80), nil, "显示更多: 多于 50 条时到 50 行就是收起")
-        expectEqual(R.hasMore(total: 10), false, "显示更多: 只有 10 条时不给按钮")
-        expectEqual(R.hasMore(total: 11), true, "显示更多: 多于 10 条才给按钮")
+        expectEqual(R.choices, [10, 25, 50], "榜单条数: 档位 Top 10 / 25 / 50")
+        expectEqual(R.choices.max(), R.fetchLimit, "榜单条数: 最大一档等于一次取的条数")
+        expectEqual(R.clamped(25), 25, "榜单条数: 档位内的值原样用")
+        expectEqual(R.clamped(30), 10, "榜单条数: 不在档位里的偏好值退回 10")
 
         typealias A = ArtistTopTracks
         expectEqual(A.isCollaboration("Prince & The Revolution"), true, "歌手展开: 合唱署名要标出来")
@@ -501,6 +493,77 @@ func runLastfmTests() {
         _ = q2.submit(.init(period: "12month", full: false, force: false))
         expectEqual(q2.queued?.full, true, "歌手展开排队: 同时段排着的全部分页要求不被后来的预取冲掉")
         expectEqual(q2.finish()?.full, true, "歌手展开排队: 交出的仍是全部分页")
+    }
+
+    // ---- ChartLinkIndex / ChartSummary:「听得最多」右键进 App 打开与卡底概况 ----
+    do {
+        let idx = ChartLinkIndex.build([
+            .init(key: "Prince|I Wanna Be Your Lover|Prince",
+                  appleMusicURL: "https://music.apple.com/us/album/prince/1234?i=5678",
+                  spotifyTrackID: "6jYG3Ys8OUrB3S7m1LcPo6", kkboxURL: nil),
+            .init(key: "Prince|Sexy Dancer|Prince", appleMusicURL: nil, spotifyTrackID: nil, kkboxURL: nil),
+            .init(key: "方大同/薛凯琪|复刻回忆|复刻回忆",
+                  appleMusicURL: "https://music.apple.com/cn/album/x/42?i=43", spotifyTrackID: nil, kkboxURL: nil),
+            .init(key: "Prince|Kiss|Parade", appleMusicURL: nil, spotifyTrackID: "bad-id", kkboxURL: nil),
+        ])
+        let track = idx.links(kind: .track, artist: "Prince", name: "I Wanna Be Your Lover")
+        expectEqual(track?.appleMusic?.absoluteString, "music://music.apple.com/us/album/prince/1234?i=5678",
+                    "榜单进 App: 歌曲的 Apple Music 链接改写成 music://")
+        expectEqual(track?.spotify?.absoluteString, "spotify:track:6jYG3Ys8OUrB3S7m1LcPo6", "榜单进 App: Spotify 曲目深链")
+        expectEqual(idx.links(kind: .track, artist: "prince", name: "i wanna be your lover") == track, true,
+                    "榜单进 App: 歌手 / 歌名大小写不计")
+        expectEqual(idx.links(kind: .track, artist: "Prince", name: "Sexy Dancer") == nil, true,
+                    "榜单进 App: 没有任何进 App 链接的歌不给菜单项")
+        expectEqual(idx.links(kind: .track, artist: "Prince", name: "Kiss") == nil, true,
+                    "榜单进 App: 不是合法 Spotify 曲目 ID 的不收")
+        expectEqual(idx.links(kind: .album, artist: "Prince", name: "Prince")?.appleMusic?.absoluteString,
+                    "music://music.apple.com/us/album/x/1234", "榜单进 App: 专辑页由曲目链接里的专辑 ID 换算")
+        expectEqual(idx.links(kind: .artist, artist: "Prince", name: "")?.artistAlbum,
+                    AlbumEditorialNotes.AlbumRef(id: 1234, storefront: "us"), "榜单进 App: 歌手取一张 Apple Music 专辑")
+        expectEqual(idx.links(kind: .track, artist: "方大同", name: "复刻回忆")?.appleMusic != nil, true,
+                    "榜单进 App: 合唱署名按主歌手也能查到")
+        expectEqual(idx.links(kind: .artist, artist: "陶喆", name: "") == nil, true, "榜单进 App: 缓存里没有的歌手不给")
+
+        expectEqual(ChartSummary.topShare(counts: [50, 30, 20], total: 400), 25, "榜单概况: 前 N 名占比四舍五入")
+        expectEqual(ChartSummary.topShare(counts: [10], total: nil), nil, "榜单概况: 总次数没取到不显示占比")
+        expectEqual(ChartSummary.topShare(counts: [10], total: 0), nil, "榜单概况: 总次数为 0 不显示占比")
+        expectEqual(ChartSummary.topShare(counts: [120], total: 100), 100, "榜单概况: 两个接口的数对不齐时封顶 100")
+
+        typealias P = ArtistPlatformPages
+        let mb = #"{"relations":[{"url":{"resource":"https://open.spotify.com/album/1C2h7mLntPSeVYciMRTF4a"}},{"url":{"resource":"https://open.spotify.com/artist/3fMbdgg4jU18AjLCKBhRSm"}},{"url":{"resource":"https://music.apple.com/us/artist/michael-jackson/32940"}},{"url":{"resource":"https://www.deezer.com/artist/259"}}]}"#
+        let pages = P.parse(Data(mb.utf8))
+        expectEqual(pages.spotify?.absoluteString, "spotify:artist:3fMbdgg4jU18AjLCKBhRSm", "歌手平台页: 取 Spotify 歌手页、跳过专辑链接")
+        expectEqual(pages.appleMusic?.absoluteString, "music://music.apple.com/us/artist/michael-jackson/32940",
+                    "歌手平台页: Apple Music 歌手页改写成 music://")
+        let bad = #"{"relations":[{"url":{"resource":"https://open.spotify.com/artist/short"}},{"url":{"resource":"https://music.apple.com/us/album/x/1"}}]}"#
+        expectEqual(P.parse(Data(bad.utf8)), P.Pages(), "歌手平台页: 不合法的 Spotify ID、Apple 专辑页都不收")
+        expectEqual(P.parse(Data("not json".utf8)), P.Pages(), "歌手平台页: 返回不是 JSON 时什么都不给")
+        expectEqual(P.lookupURL(mbid: "F27EC8DB-af05-4f36-916e-3d57f91ecf5e")?.absoluteString,
+                    "https://musicbrainz.org/ws/2/artist/f27ec8db-af05-4f36-916e-3d57f91ecf5e?inc=url-rels&fmt=json",
+                    "歌手平台页: 查询地址带 url-rels")
+        expectEqual(P.lookupURL(mbid: "../x") == nil, true, "歌手平台页: 不是 mbid 形状的不拼地址")
+        let ids = ["周杰倫": "a1", "Prince": "b2"]
+        expectEqual(P.mbid(for: "周杰倫", in: ids), "a1", "歌手平台页: 按行名原样查 mbid")
+        expectEqual(P.mbid(for: "prince ", in: ids), "b2", "歌手平台页: 忽略大小写与首尾空白")
+        expectEqual(P.mbid(for: "陶喆", in: ids) == nil, true, "歌手平台页: 身份缓存里没有的歌手不给")
+
+        typealias C = PlatformPagesCache
+        expectEqual(C.albumKey(artist: " Michael Jackson ", album: "Xscape (Deluxe)"), "michael jackson|xscape (deluxe)",
+                    "平台页缓存: 专辑键跟 collector platformAlbumKey 同一个算法")
+        let file = #"{"updated":1,"artists":{"mb-mj":{"spotify":"3fMbdgg4jU18AjLCKBhRSm","apple":"https://music.apple.com/us/artist/michael-jackson/32940","checked":1},"mb-none":{"checked":1}},"albums":{"michael jackson|dangerous":{"spotify":"0oX4SealMgNXrvRDhqqOKg","checked":1},"方大同|15":{"checked":1}},"tracks":{"prince|sexy dancer":{"spotify":"3KgByVmDzMkOXwtbqbqjBn","checked":1},"prince|nowhere":{"checked":1}}}"#
+        let cache = C.parse(Data(file.utf8))
+        expectEqual(cache.artistPages(mbid: "mb-mj")?.spotify?.absoluteString, "spotify:artist:3fMbdgg4jU18AjLCKBhRSm",
+                    "平台页缓存: 歌手 Spotify 深链")
+        expectEqual(cache.artistPages(mbid: "mb-mj")?.appleMusic?.absoluteString,
+                    "music://music.apple.com/us/artist/michael-jackson/32940", "平台页缓存: 歌手 Apple Music 页改写成 music://")
+        expectEqual(cache.artistPages(mbid: "mb-none") == nil, true, "平台页缓存: 查过但没登记的歌手不给")
+        expectEqual(cache.albumSpotify(artist: "Michael Jackson", album: "Dangerous")?.absoluteString,
+                    "spotify:album:0oX4SealMgNXrvRDhqqOKg", "平台页缓存: 专辑按大小写不计的键查到 Spotify 专辑深链")
+        expectEqual(cache.albumSpotify(artist: "方大同", album: "15") == nil, true, "平台页缓存: 没登记 Spotify 的专辑不给")
+        expectEqual(cache.trackSpotify(artist: "Prince", title: "Sexy Dancer")?.absoluteString,
+                    "spotify:track:3KgByVmDzMkOXwtbqbqjBn", "平台页缓存: 歌曲按同一套键查到 Spotify 曲目深链")
+        expectEqual(cache.trackSpotify(artist: "Prince", title: "Nowhere") == nil, true, "平台页缓存: 查过没对上的歌不给")
+        expectEqual(C.parse(Data("oops".utf8)).albumSpotify(artist: "a", album: "b") == nil, true, "平台页缓存: 文件坏了当空表")
     }
 
     // ---- PlayCountVariants:「第 N 次听」的写法孪生族(括号风格分裂实测) ----

@@ -84,6 +84,7 @@ func (p *poller) runDigests(now time.Time, env digestEnv) {
 	p.monthlyDigest(now, env)
 	p.yearlyDigest(now, env)
 	p.topArtistsDigest(now, env)
+	p.platformPagesDigest(now, env)
 }
 
 // resolveDigestSource 判定"这次检查该用哪个数据源"：preference 非空且明确指定就用它；

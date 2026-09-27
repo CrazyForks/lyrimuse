@@ -1,28 +1,15 @@
 import Foundation
 
-/// Last.fm 统计页「听得最多」卡片的「显示更多」档位:10 → 25 → 50,全部露出后按钮变「收起」、回到 10 行。
-/// 榜单一次取 `fetchLimit` 条;展开的行数不记住,每次打开设置页都从 10 行开始。
+/// Last.fm 统计页「听得最多」卡片露出几行:标题旁的「Top 10 / Top 25 / Top 50」,选了就记住。
+/// 榜单一次取 `fetchLimit` 条,档位只决定画几行。
 public enum ChartVisibleRows {
     public static let initial = 10
     public static let fetchLimit = 50
-    static let steps = [10, 25, 50]
+    public static let choices = [10, 25, 50]
 
-    /// 按钮点了之后要露出的行数。nil = 已经全部露出,按钮是「收起」。
-    public static func nextTarget(current: Int, total: Int) -> Int? {
-        let cap = min(fetchLimit, total)
-        guard current < cap else { return nil }
-        let step = steps.first { $0 > current } ?? fetchLimit
-        return min(step, cap)
-    }
-
-    /// 点一次按钮之后露出几行:下一档,或者全部露出时收回 `initial`。
-    public static func next(after current: Int, total: Int) -> Int {
-        nextTarget(current: current, total: total) ?? initial
-    }
-
-    /// 要不要显示这个按钮:条数不超过 10 行时没有可展开的。
-    public static func hasMore(total: Int) -> Bool {
-        total > initial
+    /// 存下来的值不在档位里(手改过偏好)时退回 `initial`。
+    public static func clamped(_ raw: Int) -> Int {
+        choices.contains(raw) ? raw : initial
     }
 }
 

@@ -39,7 +39,7 @@ enum SpotifyReveal {
     /// `activates = true` 与 openResolvedPlayerApp 同款 —— accessory App 请求把别的 App 带到前台,
     /// LaunchServices 这条是系统认可的路(NSRunningApplication.activate 会被协作式激活静默拒绝)。
     @MainActor
-    private static func open(_ link: URL) {
+    static func open(_ link: URL) {
         let bundleID = PlaybackPlayer.spotify.bundleIdentifier
         let appURL = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.bundleURL
             ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)

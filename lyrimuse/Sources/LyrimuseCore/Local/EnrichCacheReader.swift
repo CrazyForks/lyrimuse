@@ -718,6 +718,25 @@ public enum EnrichCacheReader {
         return hit.flatMap(URL.init(string:))
     }
 
+    /// 「听得最多」榜单一行能直接进 App 打开的目标(见 ChartAppLinks)。零网络;索引跟着已解码的缓存版本走,
+    /// 版本变了下次调用时重建。缓存还没加载好时返回 nil。
+    public static func chartAppLinks(kind: ChartLinkKind, artist: String, name: String) -> ChartAppLinks? {
+        guard let all = loadEntries() else { return nil }
+        let index: ChartLinkIndex
+        if let cached = cachedChartLinkIndex, cached.mtime == cachedMTime, cached.fromIndex == cachedFromIndex {
+            index = cached.index
+        } else {
+            index = ChartLinkIndex.build(all.map { key, entry in
+                ChartLinkIndex.Row(key: key, appleMusicURL: entry.appleMusicURL,
+                                   spotifyTrackID: entry.spotifyTrackID, kkboxURL: entry.kkboxURL)
+            })
+            cachedChartLinkIndex = (cachedMTime, cachedFromIndex, index)
+        }
+        return index.links(kind: kind, artist: artist, name: name)
+    }
+
+    private static var cachedChartLinkIndex: (mtime: Date?, fromIndex: Bool, index: ChartLinkIndex)?
+
     public nonisolated static func albumCoverKey(artist: String, album: String) -> String {
         EnrichCacheKeys.looseKey(artist) + "|" + EnrichCacheKeys.looseKey(album)
     }

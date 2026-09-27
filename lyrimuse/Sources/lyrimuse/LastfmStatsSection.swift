@@ -65,8 +65,9 @@ struct LastfmStatsSection: View {
     /// 热力图卡当前画的年份。0 = 还没选过,读的时候折成"最近一个有数据的年份"
     /// (见 heatmapYearBinding)—— 有哪几年要等日桶同步落地才知道,定不到初始值上。
     @State private var heatmapYear = 0
-    /// 「听得最多」露出几行:10 → 25 → 50(ChartVisibleRows)。不持久化,切种类 / 时段、收起卡片都回到 10 行。
-    @State private var chartVisibleRows = ChartVisibleRows.initial
+    /// 「听得最多」露出几行:标题旁「Top N」选的档位(ChartVisibleRows.choices),记住。
+    @AppStorage("np:lastfmChartRows") private var chartRowsRaw = ChartVisibleRows.initial
+    private var chartVisibleRows: Int { ChartVisibleRows.clamped(chartRowsRaw) }
     /// 歌手榜展开的那一行(歌手名),同一时间只展开一行。
     @State private var expandedArtist: String?
     /// 展开区点过「显示 10 首」的歌手。
@@ -247,7 +248,8 @@ struct LastfmStatsSection: View {
     private var chartCard: some View {
         SettingsCard {
             collapsibleHeader(icon: "chart.bar", title: L10n.t("听得最多"),
-                              collapsed: $chartCollapsed) {
+                              collapsed: $chartCollapsed,
+                              accessory: chartCollapsed ? nil : AnyView(chartRowsPicker)) {
                 // 收起后分段/时段选择器既看不到内容也改不了什么,藏起来
                 if !chartCollapsed {
                 HStack(spacing: 10) {
@@ -288,7 +290,9 @@ struct LastfmStatsSection: View {
                 } else {
                     let window = stats.chartWindow(kind, period)
                     chartList(Array(entries.prefix(chartVisibleRows)), showMovement: (window?.listens ?? 0) > 0)
-                    if ChartVisibleRows.hasMore(total: entries.count) { chartMoreButton(entries) }
+                    if let summary = chartSummaryText(entries) {
+                        chartFootnote(summary).padding(.bottom, window == nil ? 8 : 2)
+                    }
                     if let window { chartWindowCaption(window) }
                 }
             } else if stats.chartFailed(kind, period) {
@@ -311,12 +315,10 @@ struct LastfmStatsSection: View {
             if nowCollapsed { resetChartExpansion() }
             if !nowCollapsed { stats.refreshChart(kind: kind, period: period) }
         }
-        // 已经展开到 25 / 50 行时榜单到点刷新、换进来新名字:给露出的行补头像 / 封面(已经查过的不会重查)
-        .onChange(of: stats.chart(kind, period)?.map(\.name) ?? []) { _, _ in
-            if chartVisibleRows > ChartVisibleRows.initial {
-                stats.ensureChartImages(kind: kind, period: period, from: ChartVisibleRows.initial, rows: chartVisibleRows)
-            }
-        }
+        // 选了 Top 25 / 50 时,榜单到手只补了前 10 行的头像 / 封面:打开卡片、切种类 / 时段、榜单到点刷新换进来新名字,
+        // 都给露出的其余行补上(已经查过的不会重查)
+        .onChange(of: stats.chart(kind, period)?.map(\.name) ?? []) { _, _ in fillVisibleChartImages() }
+        .onAppear { fillVisibleChartImages() }
         .task(id: artistTracksPrefetchID) {
             if artistTracksPrefetchID != nil { stats.loadArtistTracks(period: period, full: false) }
         }
@@ -330,31 +332,38 @@ struct LastfmStatsSection: View {
         return "\(period.rawValue)|\(n)"
     }
 
+    private func fillVisibleChartImages() {
+        if chartVisibleRows > ChartVisibleRows.initial {
+            stats.ensureChartImages(kind: kind, period: period, from: ChartVisibleRows.initial, rows: chartVisibleRows)
+        }
+    }
+
     private func resetChartExpansion() {
-        chartVisibleRows = ChartVisibleRows.initial
         expandedArtist = nil
         artistShowsTen = []
     }
 
-    /// 卡底「显示更多（前 N 名）」/「收起」。露出新的行时补这些行的头像 / 封面;收起时展开的那一行
-    /// 如果不在前 10 名里,一并收起。
-    private func chartMoreButton(_ entries: [LastfmStatsService.ChartEntry]) -> some View {
-        let target = ChartVisibleRows.nextTarget(current: chartVisibleRows, total: entries.count)
-        return Button {
-            let previous = chartVisibleRows
-            let next = ChartVisibleRows.next(after: previous, total: entries.count)
-            if let name = expandedArtist, let rank = entries.first(where: { $0.name == name })?.rank, rank > next {
-                expandedArtist = nil
+    /// 标题旁的「Top 10 / 25 / 50」。调大时补新露出那几行的头像 / 封面;调小时展开的那一行如果不在范围里,一并收起。
+    private var chartRowsPicker: some View {
+        Picker("", selection: Binding(
+            get: { chartVisibleRows },
+            set: { next in
+                let previous = chartVisibleRows
+                if let name = expandedArtist,
+                   let rank = stats.chart(kind, period)?.first(where: { $0.name == name })?.rank, rank > next {
+                    expandedArtist = nil
+                }
+                chartRowsRaw = next
+                if next > previous { stats.ensureChartImages(kind: kind, period: period, from: previous, rows: next) }
             }
-            chartVisibleRows = next
-            if target != nil { stats.ensureChartImages(kind: kind, period: period, from: previous, rows: next) }
-        } label: {
-            Text(target.map { String(format: L10n.t("显示更多（前 %d 名）"), $0) } ?? L10n.t("收起"))
-                .font(.system(size: 12))
+        )) {
+            ForEach(ChartVisibleRows.choices, id: \.self) { n in
+                Text("Top \(n)").tag(n)
+            }
         }
-        .buttonStyle(.link)
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 8)
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
     }
 
     /// 歌手榜某一行展开后的内容:这段时间听这位歌手最多的 5 首(可以再露出到 10 首),底部是共几首和
@@ -405,10 +414,6 @@ struct LastfmStatsSection: View {
                     .padding(.leading, indent + 24).padding(.vertical, 4)
             }
             HStack(spacing: 10) {
-                if let top, batch?.partial == false {
-                    Text(String(format: L10n.t(batch?.complete == false ? "至少 %d 首" : "共 %d 首"), top.trackCount))
-                        .foregroundStyle(.secondary)
-                }
                 if let top, limit < 10, top.tracks.count > limit {
                     Button(L10n.t("显示 10 首")) { artistShowsTen.insert(e.name) }.buttonStyle(.link)
                 }
@@ -522,6 +527,7 @@ struct LastfmStatsSection: View {
                 .buttonStyle(.plain)
                 .disabled(!interactive)
                 .rowHoverHighlight(enabled: interactive)
+                .modifier(ChartRowContextMenu(enabled: interactive && chartRowHasMenu(e)) { chartRowMenu(e) })
                 if expanded {
                     // 缩进对齐到缩略图那一列:名次 16 + 间距 10(有升降列再加 34 + 10)
                     artistTracksPanel(e, indent: showMovement ? 70 : 26)
@@ -529,6 +535,119 @@ struct LastfmStatsSection: View {
             }
         }
         .padding(.vertical, 5)
+    }
+
+    /// 榜单行的右键菜单:只放能直接进 App 打开的(Apple Music / Spotify / KKBOX,链接来自本机歌词缓存,
+    /// 没装的播放器不列)。落到浏览器的平台页不放;一项都没有的行不弹菜单。
+    @ViewBuilder
+    private func chartRowMenu(_ e: LastfmStatsService.ChartEntry) -> some View {
+        let links = stats.appLinks(kind: kind, entry: e)
+        if let url = links?.appleMusic {
+            Button(L10n.t("在 Apple Music 中打开")) { Self.openInMusic(url) }
+        } else if let url = links?.artistPages?.appleMusic {
+            Button(L10n.t("在 Apple Music 中打开")) { Self.openInMusic(url) }
+        } else if let links, links.artistMBID != nil || links.artistAlbum != nil {
+            Button(L10n.t("在 Apple Music 中打开")) {
+                Self.openArtistInMusic(name: e.name, mbid: links.artistMBID, album: links.artistAlbum)
+            }
+        }
+        if let url = links?.spotify ?? links?.artistPages?.spotify, Self.isInstalled(.spotify) {
+            Button(String(format: L10n.t("在 %@ 中显示"), "Spotify")) { SpotifyReveal.open(url) }
+        } else if let mbid = links?.artistMBID, Self.isInstalled(.spotify) {
+            Button(String(format: L10n.t("在 %@ 中显示"), "Spotify")) { Self.openArtistInSpotify(mbid: mbid) }
+        }
+        if let url = links?.kkbox, Self.isInstalled(.kkbox) {
+            Button(L10n.t("在 KKBOX 中显示")) { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    private func chartRowHasMenu(_ e: LastfmStatsService.ChartEntry) -> Bool {
+        guard let links = stats.appLinks(kind: kind, entry: e) else { return false }
+        return links.appleMusic != nil || links.artistAlbum != nil || links.artistMBID != nil
+            || links.artistPages?.appleMusic != nil
+            || ((links.spotify ?? links.artistPages?.spotify) != nil && Self.isInstalled(.spotify))
+            || (links.kkbox != nil && Self.isInstalled(.kkbox))
+    }
+
+    private static func isInstalled(_ player: PlaybackPlayer) -> Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: player.bundleIdentifier) != nil
+    }
+
+    /// music:// 深链交给 Music.app。Music 没在跑时直接 open 会被冷启动吞掉、停在上次的页面,先把它拉起来。
+    private static func openInMusic(_ url: URL) {
+        Task {
+            await MusicAutomationPermission.ensureMusicAppRunning()
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Apple Music 歌手页:先用 MusicBrainz 上登记的歌手页;没有再取缓存里这位歌手一张专辑的 Apple Music 页面,
+    /// 从署名里挑出歌手 ID。两条都只连 musicbrainz.org / music.apple.com,不依赖 iTunes Search(见 12 章)。取不到就响一声。
+    private static func openArtistInMusic(name: String, mbid: String?, album: AlbumEditorialNotes.AlbumRef?) {
+        Task.detached(priority: .userInitiated) {
+            var url: URL?
+            if let mbid { url = await ArtistPageCache.pages(mbid: mbid)?.appleMusic }
+            if url == nil, let album {
+                let storefronts = AlbumEditorialNotes.storefronts(region: Locale.current.region?.identifier,
+                                                                  linkStorefront: album.storefront)
+                if case .found(let page, let storefront) = await AlbumEditorialNotes.fetchAlbumPage(
+                    albumID: album.id, storefronts: storefronts),
+                   let artist = AlbumEditorialNotes.pickArtist(page.artists, localArtist: name) {
+                    url = MusicCatalogSearch.musicSchemeURL(
+                        AlbumEditorialNotes.artistPageURL(artistID: artist.id, storefront: storefront)?.absoluteString)
+                }
+            }
+            guard let url else {
+                await MainActor.run { NSSound.beep() }
+                return
+            }
+            await MusicAutomationPermission.ensureMusicAppRunning()
+            await MainActor.run { _ = NSWorkspace.shared.open(url) }
+        }
+    }
+
+    /// Spotify 歌手页:MusicBrainz 上登记的 Spotify 歌手 ID,经 SpotifyReveal.open 交给 Spotify 客户端。取不到就响一声。
+    private static func openArtistInSpotify(mbid: String) {
+        Task {
+            if let url = await ArtistPageCache.pages(mbid: mbid)?.spotify {
+                SpotifyReveal.open(url)
+            } else {
+                NSSound.beep()
+            }
+        }
+    }
+
+    /// 卡底概况:这段时间共多少次、专辑 / 歌曲榜共多少条、前 N 名占多少。总次数还没取到时不显示。
+    /// 歌手榜不写条目数:Last.fm 的原始条目数把繁简 / 中英写法各算一位,跟合并过的榜单对不上。
+    private func chartSummaryText(_ entries: [LastfmStatsService.ChartEntry]) -> String? {
+        guard let total = stats.listens(period), total > 0 else { return nil }
+        var parts = [String(format: L10n.t("%1$@ %2$@ 次"), period.displayName, total.formatted())]
+        if let n = stats.chartItemTotal(kind, period) {
+            switch kind {
+            case .albums: parts.append(String(format: L10n.t("%@ 张专辑"), n.formatted()))
+            case .tracks: parts.append(String(format: L10n.t("%@ 首歌"), n.formatted()))
+            case .artists: break
+            }
+        }
+        let top = min(chartVisibleRows, entries.count)
+        if let share = ChartSummary.topShare(counts: entries.prefix(top).map(\.playcount), total: total) {
+            let format: String
+            switch kind {
+            case .artists: format = L10n.t("前 %1$d 位占 %2$d%%")
+            case .albums: format = L10n.t("前 %1$d 张占 %2$d%%")
+            case .tracks: format = L10n.t("前 %1$d 首占 %2$d%%")
+            }
+            parts.append(String(format: format, top, share))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func chartFootnote(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
     }
 
     /// 名次升降:▲n 前进、▼n 后退、「新」上一期没进榜、– 没变。名次差超过 99 显示 99+(见 ChartMovement)。
@@ -569,12 +688,7 @@ struct LastfmStatsSection: View {
         let text = window.listens > 0
             ? String(format: L10n.t("对比 %@ – %@"), from, to)
             : String(format: L10n.t("上一期（%@ – %@）没有收听记录，不显示升降"), from, to)
-        return Text(text)
-            .font(.system(size: 10.5))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 8)
+        return chartFootnote(text).padding(.bottom, 8)
     }
 
     /// Last.fm 的实体页地址。路径段里的 "/" 必须转义 —— 专辑名里带斜杠(The Hits/The
@@ -948,6 +1062,7 @@ struct LastfmStatsSection: View {
         icon: String, title: String, subtitle: String? = nil,
         help: String? = nil,
         collapsed: Binding<Bool>,
+        accessory: AnyView? = nil,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         HStack(alignment: .top, spacing: help == nil ? 12 : 5) {
@@ -975,12 +1090,17 @@ struct LastfmStatsSection: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if help == nil { Spacer(minLength: 12) }
+                    if help == nil && accessory == nil { Spacer(minLength: 12) }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(collapsed.wrappedValue ? L10n.t("展开") : L10n.t("收起"))
+            // 紧跟标题的控件(榜单的「Top N」):放在折叠按钮外面,空白处就不再是折叠的点击区
+            if let accessory {
+                accessory.settingsGlassButtons()
+                Spacer(minLength: 12)
+            }
             if let help {
                 // 用 QuickHelpLabel 而不是 .help():后者落到 NSView.toolTip,延迟由系统全局
                 // 控制、又只认悬停,正是现象是过"出得太慢、想点一下就出"的那两点。
@@ -1758,5 +1878,51 @@ private let recentLoveColumnWidth: CGFloat = 16
 extension View {
     func rowHoverHighlight(enabled: Bool = true) -> some View {
         modifier(RowHoverHighlight(enabled: enabled))
+    }
+}
+
+/// 榜单行的右键菜单:没有可放的项时整个不挂,右键不弹一个空菜单。
+private struct ChartRowContextMenu<Menu: View>: ViewModifier {
+    let enabled: Bool
+    @ViewBuilder let menu: () -> Menu
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contextMenu { menu() }
+        } else {
+            content
+        }
+    }
+}
+
+/// 歌手在 MusicBrainz 上登记的平台主页,按 mbid 记在内存里:同一位歌手在这次运行里只查一次。
+/// 查询失败不记,下次点还会再查。
+@MainActor
+private enum ArtistPageCache {
+    private static var pages: [String: ArtistPlatformPages.Pages] = [:]
+
+    static func pages(mbid: String) async -> ArtistPlatformPages.Pages? {
+        if let hit = pages[mbid] { return hit }
+        guard let url = ArtistPlatformPages.lookupURL(mbid: mbid) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        // MusicBrainz 要求调用方在 User-Agent 里标明应用名、版本和联系方式,跟 collector 同一个写法。
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+        request.setValue("lyrimuse/\(version) (+https://github.com/Yudaotor/lyrimuse)", forHTTPHeaderField: "User-Agent")
+        let start = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode
+            NetworkAuditLog.record(service: "musicbrainz", operation: "artist.url-rels", host: url.host ?? "musicbrainz.org",
+                                   statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
+            guard status == 200 else { return nil }
+            let parsed = ArtistPlatformPages.parse(data)
+            pages[mbid] = parsed
+            return parsed
+        } catch {
+            NetworkAuditLog.record(service: "musicbrainz", operation: "artist.url-rels", host: url.host ?? "musicbrainz.org",
+                                   statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
+            return nil
+        }
     }
 }

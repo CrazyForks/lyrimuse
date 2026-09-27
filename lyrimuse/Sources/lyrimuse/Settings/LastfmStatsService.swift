@@ -634,6 +634,15 @@ final class LastfmStatsService: ObservableObject {
     @Published private(set) var chartLocalCovers: [String: URL] = [:]
     /// 上一次算 chartLocalCovers 用的输入(要查的行 + 本机缓存版本),没变就不重算。
     private var chartLocalCoversInputs: (keys: [String], cacheVersion: Date?)?
+    /// 榜单每一行能直接进 App 打开的目标(右键菜单用),键同 chartLocalCovers。从本机歌词缓存现算,不进快照,
+    /// 见 refreshChartAppLinks。
+    @Published private(set) var chartAppLinks: [String: ChartAppLinks] = [:]
+    private var chartAppLinksInputs: (keys: [String], cacheVersion: Date?, pagesVersion: Date?)?
+    /// 各时段的收听总次数(榜单卡底概况用),键是时段 rawValue。「全部」不在这里,直接用 overview.total。
+    @Published private(set) var periodListens: [String: Int] = [:]
+    /// 专辑 / 歌曲榜在 Last.fm 那边的总条目数(榜单接口返回的 @attr.total),键同 charts。歌手榜不记:界面上的
+    /// 歌手榜是合并过的,Last.fm 的原始条目数会把繁简 / 中英写法各算一位,跟榜单对不上。
+    @Published private(set) var chartItemTotals: [String: Int] = [:]
     @Published private(set) var artistTracksLoading: Set<String> = []
     @Published private(set) var artistTracksFailed: Set<String> = []
     /// 每个时段上次取完的时间、当时传给 collector 的名字(榜上换了人要重取)、是不是取了全部分页。
@@ -847,6 +856,20 @@ final class LastfmStatsService: ObservableObject {
         chartLocalCovers[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)]
     }
 
+    /// 榜单一行能直接进 App 打开的目标,见 refreshChartAppLinks。
+    func appLinks(kind: ChartKind, entry e: ChartEntry) -> ChartAppLinks? {
+        chartAppLinks[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)]
+    }
+
+    /// 一个时段的收听总次数;还没取到时 nil。
+    func listens(_ period: Period) -> Int? {
+        period == .overall ? overview?.total : periodListens[period.rawValue]
+    }
+
+    func chartItemTotal(_ kind: ChartKind, _ period: Period) -> Int? {
+        chartItemTotals["\(kind.rawValue)|\(period.rawValue)"]
+    }
+
     private static func chartLocalCoverKey(kind: ChartKind, artist: String, name: String) -> String {
         "\(kind.rawValue)|\(artist)|\(name)"
     }
@@ -903,6 +926,10 @@ final class LastfmStatsService: ObservableObject {
         bootstrapState = .notStarted
         charts = [:]
         chartWindows = [:]
+        chartAppLinks = [:]
+        chartAppLinksInputs = nil
+        periodListens = [:]
+        chartItemTotals = [:]
         artistTracksGen += 1
         artistTracks = [:]
         artistTracksLoading = []
@@ -2363,6 +2390,9 @@ final class LastfmStatsService: ObservableObject {
         /// 存盘时每档榜单取几条(ChartVisibleRows.fetchLimit)。跟现在的不一样(含老快照没有这个字段)时,
         /// 榜单照常端上桌,但不带回它们的新鲜戳:打开就按现在的条数重取,不然「显示更多」要等 15 分钟才出现。
         var chartLimit: Int?
+        /// 榜单卡底概况的两个数(老快照没有,解码为 nil)。
+        var periodListens: [String: Int]?
+        var chartItemTotals: [String: Int]?
     }
 
     /// 快照里允许持久化的 `fetchedAt` 键。榜单键是 `"\(kind)|\(period)"`,跟 `refreshChart`
@@ -2394,7 +2424,10 @@ final class LastfmStatsService: ObservableObject {
         recentTotalPages = snap.recentTotalPages ?? 1
         charts = snap.charts
         chartWindows = snap.chartWindows ?? [:]
+        periodListens = snap.periodListens ?? [:]
+        chartItemTotals = snap.chartItemTotals ?? [:]
         refreshChartLocalCovers()
+        refreshChartAppLinks()
         artistAvatars = snap.artistAvatars
         trackCovers = snap.trackCovers
         // 旧口径的次数不端上桌 —— 见 mergedCountsVersion 字段注释。 改动合并口径必须
@@ -2502,7 +2535,9 @@ final class LastfmStatsService: ObservableObject {
                 onThisDayUpdatedAt: onThisDayOutcome == .loaded ? onThisDayUpdatedAt : nil,
                 fetchedAt: fetchedAt.filter { Self.persistedFetchedAtKeys.contains($0.key) },
                 chartWindows: chartWindows,
-                chartLimit: ChartVisibleRows.fetchLimit)
+                chartLimit: ChartVisibleRows.fetchLimit,
+                periodListens: periodListens,
+                chartItemTotals: chartItemTotals)
             // 编码 + 落盘挪出主线程:这个类是 @MainActor,Task{} 会继承它的隔离,原来
             // JSONEncoder 和同步的 atomic 写(临时文件 + rename)全压在主线程上。
             let url = Self.snapshotURL
@@ -2758,6 +2793,8 @@ final class LastfmStatsService: ObservableObject {
     /// 就是唯一的推进者),再按已解码版本判变化。
     func refreshLocalCoversIfCacheChanged() {
         EnrichCacheReader.refreshIfNeeded()
+        // 右键链接另外还跟着 collector 的平台主页缓存走,放在下面那道判断前面(它自己按输入早退)
+        refreshChartAppLinks()
         let stamp = EnrichCacheReader.decodedContentVersion
         guard stamp != localCoversStamp else { return }
         localCoversStamp = stamp
@@ -2836,6 +2873,74 @@ final class LastfmStatsService: ObservableObject {
             if let url { out[w.key] = url }
         }
         if out != chartLocalCovers { chartLocalCovers = out }
+    }
+
+    /// 给所有榜单行算一遍能直接进 App 打开的目标(本机歌词缓存里存的链接、歌手的 MusicBrainz mbid、collector
+    /// 预取的平台主页,零网络)。行没变、两份缓存版本都没变就不重算;
+    /// 缓存还没加载好时这一轮什么都查不到,等缓存版本推进(refreshLocalCoversIfCacheChanged)再算。
+    private func refreshChartAppLinks() {
+        var rows: [String: (kind: ChartKind, artist: String, name: String)] = [:]
+        for (chartKey, entries) in charts {
+            guard let kind = ChartKind(rawValue: String(chartKey.prefix { $0 != "|" })) else { continue }
+            for e in entries {
+                rows[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)] = (kind, e.detail, e.name)
+            }
+        }
+        let keys = rows.keys.sorted()
+        let cacheVersion = EnrichCacheReader.decodedContentVersion
+        let pagesURL = LyrimusePaths.configFile(PlatformPagesCache.fileName)
+        let pagesVersion = (try? FileManager.default.attributesOfItem(atPath: pagesURL.path))?[.modificationDate] as? Date
+        if let last = chartAppLinksInputs, last.keys == keys, last.cacheVersion == cacheVersion,
+           last.pagesVersion == pagesVersion { return }
+        chartAppLinksInputs = (keys, cacheVersion, pagesVersion)
+        let mbids = ArtistPlatformPages.loadMBIDs()
+        let pages = PlatformPagesCache.load()
+        var out: [String: ChartAppLinks] = [:]
+        for key in keys {
+            guard let row = rows[key] else { continue }
+            let links: ChartAppLinks?
+            switch row.kind {
+            case .artists:
+                var artist = EnrichCacheReader.chartAppLinks(kind: .artist, artist: row.name, name: "") ?? ChartAppLinks()
+                artist.artistMBID = ArtistPlatformPages.mbid(for: row.name, in: mbids)
+                artist.artistPages = artist.artistMBID.flatMap { pages.artistPages(mbid: $0) }
+                links = artist.isEmpty ? nil : artist
+            case .albums:
+                var album = EnrichCacheReader.chartAppLinks(kind: .album, artist: row.artist, name: row.name) ?? ChartAppLinks()
+                album.spotify = pages.albumSpotify(artist: row.artist, album: row.name)
+                links = album.isEmpty ? nil : album
+            case .tracks:
+                var track = EnrichCacheReader.chartAppLinks(kind: .track, artist: row.artist, name: row.name) ?? ChartAppLinks()
+                if track.spotify == nil { track.spotify = pages.trackSpotify(artist: row.artist, title: row.name) }
+                links = track.isEmpty ? nil : track
+            }
+            if let links { out[key] = links }
+        }
+        if out != chartAppLinks { chartAppLinks = out }
+    }
+
+    /// 取一个时段的收听总次数(榜单卡底概况):`user.getrecenttracks` 带起止时间、只要 1 条,读 @attr.total。
+    /// 窗口跟榜单同一组长度(ChartComparison.span),15 分钟内不重取;「全部」直接用 overview.total,不发请求。
+    private func refreshPeriodListens(_ period: Period) {
+        guard let span = ChartComparison.span(forPeriod: period.rawValue) else { return }
+        let key = "listens|\(period.rawValue)"
+        guard fresh(key) == false, let cred = credentials else { return }
+        fetchedAt[key] = Date()
+        let gen = baselineGen
+        Task {
+            let now = Date()
+            let json = await request(method: "user.getrecenttracks", cred: cred,
+                                     extra: ["from": String(Int(now.addingTimeInterval(-span).timeIntervalSince1970)),
+                                             "to": String(Int(now.timeIntervalSince1970)),
+                                             "limit": "1"])
+            guard gen == baselineGen else { return }
+            guard let json, let s = dig(json, "recenttracks", "@attr", "total") as? String, let total = Int(s) else {
+                fetchedAt[key] = nil
+                return
+            }
+            if periodListens[period.rawValue] != total { periodListens[period.rawValue] = total }
+            scheduleSnapshotSave()
+        }
     }
 
     /// 「正在记录」那一行要复用的封面:列表里**这首歌 / 这张专辑**的历史行此刻正在显示的
@@ -3620,6 +3725,7 @@ final class LastfmStatsService: ObservableObject {
 
     func refreshChart(kind: ChartKind, period: Period) {
         let key = "\(kind.rawValue)|\(period.rawValue)"
+        refreshPeriodListens(period)
         // 切到一档还新鲜的歌手榜也要补头像:合并榜一次拉回四档,当时只补了正在看的那一档,
         // 这里不补的话,只在别的时段出现过的名字要等到榜单过期重拉、而且恰好正看着它才有头像。
         if kind == .artists, let entries = charts[key] {
@@ -3683,7 +3789,11 @@ final class LastfmStatsService: ObservableObject {
             for i in entries.indices { entries[i].previousRank = ranks[i] }
         }
         charts[key] = entries
+        if kind != .artists, let s = dig(json, outer, "@attr", "total") as? String, let n = Int(s) {
+            chartItemTotals[key] = n
+        }
         refreshChartLocalCovers()
+        refreshChartAppLinks()
         if let window, let previous {
             chartWindows[key] = ChartWindow(from: window.from, to: window.to, listens: previous.listens)
         } else {
@@ -3839,6 +3949,7 @@ final class LastfmStatsService: ObservableObject {
                     svc.chartWindows[key] = filledWindows[key]
                     svc.fetchedAt[key] = now // 四档全部盖到 TTL,切时段不再各自重拉
                 }
+                svc.refreshChartAppLinks()
                 // 用户正看的时段可能不在返回里(单时段失败被 Go 侧跳过):按失败态给重试入口
                 if filled[cacheKey] == nil {
                     svc.chartFailedKeys.insert(cacheKey)

@@ -35784,23 +35784,6 @@
         }
       }
     },
-    "显示更多（前 %d 名）" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Show more (top %d)"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "顯示更多（前 %d 名）"
-          }
-        }
-      }
-    },
     "显示 10 首" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -35814,40 +35797,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示 10 首"
-          }
-        }
-      }
-    },
-    "共 %d 首" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%d songs in total"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "共 %d 首"
-          }
-        }
-      }
-    },
-    "至少 %d 首" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "At least %d songs"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "至少 %d 首"
           }
         }
       }
@@ -36066,6 +36015,121 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "含帳號憑證，請勿分享給他人；需要連同外觀與快速鍵整體遷移時，請使用「備份與遷移」"
+          }
+        }
+      }
+    },
+    "%1$@ %2$@ 次" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@ plays"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 次"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 次"
+          }
+        }
+      }
+    },
+    "%@ 张专辑" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ albums"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 张专辑"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 張專輯"
+          }
+        }
+      }
+    },
+    "前 %1$d 位占 %2$d%%" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Top %1$d: %2$d%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 位占 %2$d%%"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 位佔 %2$d%%"
+          }
+        }
+      }
+    },
+    "前 %1$d 张占 %2$d%%" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Top %1$d: %2$d%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 张占 %2$d%%"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 張佔 %2$d%%"
+          }
+        }
+      }
+    },
+    "前 %1$d 首占 %2$d%%" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Top %1$d: %2$d%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 首占 %2$d%%"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前 %1$d 首佔 %2$d%%"
           }
         }
       }
