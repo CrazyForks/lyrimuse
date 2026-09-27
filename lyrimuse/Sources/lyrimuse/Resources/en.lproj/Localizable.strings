@@ -468,6 +468,7 @@
 "回到当前播放" = "Jump to Now Playing";
 "因网络不通已停下" = "Stopped: no connection";
 "固定" = "Fixed";
+"在 %@ 中打开" = "Open in %@";
 "在 %@ 中显示" = "Show in %@";
 "在 %@ 播放任意歌曲，歌词会自动出现" = "Play something in %@ and lyrics will appear here";
 "在 Apple Music 中打开" = "Open in Apple Music";

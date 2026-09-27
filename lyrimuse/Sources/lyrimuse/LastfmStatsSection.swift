@@ -552,12 +552,12 @@ struct LastfmStatsSection: View {
             }
         }
         if let url = links?.spotify ?? links?.artistPages?.spotify, Self.isInstalled(.spotify) {
-            Button(String(format: L10n.t("在 %@ 中显示"), "Spotify")) { SpotifyReveal.open(url) }
+            Button(String(format: L10n.t("在 %@ 中打开"), "Spotify")) { SpotifyReveal.open(url) }
         } else if let mbid = links?.artistMBID, Self.isInstalled(.spotify) {
-            Button(String(format: L10n.t("在 %@ 中显示"), "Spotify")) { Self.openArtistInSpotify(mbid: mbid) }
+            Button(String(format: L10n.t("在 %@ 中打开"), "Spotify")) { Self.openArtistInSpotify(mbid: mbid) }
         }
         if let url = links?.kkbox, Self.isInstalled(.kkbox) {
-            Button(L10n.t("在 KKBOX 中显示")) { NSWorkspace.shared.open(url) }
+            Button(String(format: L10n.t("在 %@ 中打开"), "KKBOX")) { NSWorkspace.shared.open(url) }
         }
     }
 

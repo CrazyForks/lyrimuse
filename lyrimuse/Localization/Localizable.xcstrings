@@ -7573,6 +7573,29 @@
         }
       }
     },
+    "在 %@ 中打开" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open in %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 中打开"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 中打開"
+          }
+        }
+      }
+    },
     "在 %@ 中显示" : {
       "extractionState" : "manual",
       "localizations" : {
