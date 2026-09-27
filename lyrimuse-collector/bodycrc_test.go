@@ -1,0 +1,49 @@
+package main
+
+import (
+	"hash/crc32"
+	"strings"
+	"testing"
+)
+
+// 旧写法原样留在这里当对照:落盘文件里的 crc 必须跟以前算的逐位一致,否则存量正文小文件全被判成
+// 「跟主缓存对不上」。
+func enrichBodyCRCReference(e enrichEntry) uint32 {
+	if e.Lyrics == "" && e.LyricsTr == "" && e.LyricsRoma == "" && e.LyricsYRC == "" && e.PlainLyrics == "" {
+		return 0
+	}
+	h := crc32.NewIEEE()
+	for _, s := range []string{e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics} {
+		h.Write([]byte(s))
+		h.Write([]byte{0})
+	}
+	if c := h.Sum32(); c != 0 {
+		return c
+	}
+	return 1
+}
+
+func TestEnrichBodyCRCMatchesReference(t *testing.T) {
+	long := strings.Repeat("[00:01.00]一句很长的歌词 some words\n", 5000)
+	for _, e := range []enrichEntry{
+		{},
+		{Lyrics: "a"},
+		{Lyrics: "a", LyricsTr: "bc"},
+		{Lyrics: "ab", LyricsTr: "c"},
+		{PlainLyrics: "only plain"},
+		{Lyrics: long, LyricsTr: long, LyricsRoma: "r", LyricsYRC: long, PlainLyrics: "p"},
+		{LyricsYRC: "\x00\x00"},
+	} {
+		if got, want := enrichBodyCRC(e), enrichBodyCRCReference(e); got != want {
+			t.Errorf("crc %08x, want %08x for %+v", got, want, e.PlainLyrics)
+		}
+	}
+}
+
+func TestEnrichBodyCRCDoesNotAllocate(t *testing.T) {
+	e := enrichEntry{Lyrics: strings.Repeat("[00:01.00]歌词\n", 2000), LyricsTr: strings.Repeat("译", 3000)}
+	enrichBodyCRC(e) // 预热缓冲区
+	if n := testing.AllocsPerRun(50, func() { enrichBodyCRC(e) }); n > 0.5 {
+		t.Errorf("每次分配 %.1f 次,缓冲区没复用上", n)
+	}
+}

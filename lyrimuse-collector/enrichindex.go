@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -79,20 +80,30 @@ func enrichBodiesDirFor(cachePath string) string {
 
 // enrichBodyCRC 五个正文字段的校验值;全空为 0(没有正文就不写文件)。字段之间用 0x00 隔开,
 // 免得「a|bc」和「ab|c」撞成同一个值。
+//
+// 每次整份落盘都要给全部条目算一遍(几千条、上百 MB 正文),所以正文拷进池里复用的缓冲区再算,
+// 别写成 hash.Write([]byte(s)):经接口调用的转换每次都在堆上复制一整份正文,实测一次落盘因此多分配
+// 一百多 MB。见 09 章决策 112。
 func enrichBodyCRC(e enrichEntry) uint32 {
 	if e.Lyrics == "" && e.LyricsTr == "" && e.LyricsRoma == "" && e.LyricsYRC == "" && e.PlainLyrics == "" {
 		return 0
 	}
-	h := crc32.NewIEEE()
-	for _, s := range []string{e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics} {
-		h.Write([]byte(s))
-		h.Write([]byte{0})
+	bp := enrichBodyCRCBufs.Get().(*[]byte)
+	var c uint32
+	for _, s := range [...]string{e.Lyrics, e.LyricsTr, e.LyricsRoma, e.LyricsYRC, e.PlainLyrics} {
+		b := append(append((*bp)[:0], s...), 0)
+		c = crc32.Update(c, crc32.IEEETable, b)
+		*bp = b
 	}
-	if c := h.Sum32(); c != 0 {
+	enrichBodyCRCBufs.Put(bp)
+	if c != 0 {
 		return c
 	}
 	return 1 // 极小概率算出 0,跟「没有正文」区分开
 }
+
+// enrichBodyCRCBufs:enrichBodyCRC 的拷贝缓冲区。加载时正文小文件是并发校验的,不能共用一块。
+var enrichBodyCRCBufs = sync.Pool{New: func() any { b := make([]byte, 0, 64<<10); return &b }}
 
 // enrichBody 是正文小文件的形状(App 侧 `EnrichCacheReader` 按同样的键读)。
 type enrichBody struct {
