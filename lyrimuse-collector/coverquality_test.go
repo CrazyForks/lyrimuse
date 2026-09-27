@@ -83,6 +83,7 @@ func TestCoverURLIntendedEdge(t *testing.T) {
 		{"https://p1.music.126.net/abc==/123.jpg?param=64y64", 64},
 		{"https://p1.music.126.net/abc==/123.jpg?param=300x300", 300},
 		{"https://p1.music.126.net/abc==/123.jpg?param=800y800&foo=1", 800},
+		{"https://p1.music.126.net/abc==/123.jpg" + neteaseCoverQuery, 3000},
 		// Apple mzstatic
 		{"https://is1-ssl.mzstatic.com/image/thumb/abc/600x600bb.jpg", 600},
 		// QQ:尺寸档在路径里

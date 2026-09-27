@@ -3434,7 +3434,7 @@ func kanaRatio(s string) float64 {
 //     覆盖原文过半(机翻兜底/残缺译文不算);目标语言是中文时,原文本身就是中文的歌
 //     不需要中文译文(cjkRatio>0.5 不给分)。
 //   - 罗马音:本身带时间轴,且原文歌词是日文形态(kanaRatio>0.05)——给英文歌配的
-//     "罗马音"没有增值。
+//     "罗马音"没有增值。只管打分;写进结果的判定更宽,见 usableRomaForResult。
 func usableValueAdd(lyrics, tr, trLang, roma, targetLang string) (usableTr, usableRoma bool) {
 	// 语言比对只看主语言子标签(zh-hans / zh-Hant / zh 视为同一种):网易云的社区译文
 	// 固定记 "zh",用户的目标语言却可能配成 "zh-hans",单向 HasPrefix 会把它判成语言
@@ -3460,6 +3460,63 @@ func usableValueAdd(lyrics, tr, trLang, roma, targetLang string) (usableTr, usab
 		usableRoma = true
 	}
 	return
+}
+
+// usableRomaForResult:胜出候选自带的罗马音能不能写进结果。比打分那道宽:日文 / 韩文 / 中文原文都收
+// (中文拼音在界面上默认关,由用户的语言开关决定显不显示),但罗马音本身的主要文字必须是拉丁字母 ——
+// 挡掉把谐音字或原文当罗马音的轨。打分仍只认日文(usableValueAdd),别把这里放宽进打分:中文歌的
+// 源大多带拼音,那样会给一个默认看不见的东西加分、改掉大批中文歌的选源。
+func usableRomaForResult(lyrics, roma string) bool {
+	return roma != "" && isTimedLRC(roma) && romaWorthyLyrics(lyrics) &&
+		dominantScript(lrcTimestampRe.ReplaceAllString(roma, "")) == scriptLatin
+}
+
+// romaWorthyLyrics:这份原文值得配罗马音 —— 日文 / 韩文 / 中文(romaScriptOf 判得出来)。
+func romaWorthyLyrics(lyrics string) bool {
+	return romaScriptOf(lyrics) != scriptNone
+}
+
+// romaScriptLineShare:含谚文 / 汉字的行占到这个比例,就算这首歌要罗马音。按行算、不按字数算:
+// 韩文歌常夹大段英文,一个谚文音节是一个字、一个英文词是好几个字母,按字数会把韩文压下去。
+const romaScriptLineShare = 0.2
+
+// romaScriptOf:这首歌该配哪种罗马音 —— scriptKana(日文,假名占比过 0.05)、scriptHangul、scriptHan,
+// 都不是时 scriptNone。
+func romaScriptOf(lyrics string) lyricScript {
+	if kanaRatio(lyrics) > 0.05 {
+		return scriptKana
+	}
+	lines, hangul, han := 0, 0, 0
+	for _, line := range strings.Split(lrcTimestampRe.ReplaceAllString(lyrics, ""), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines++
+		hasHangul, hasHan := false, false
+		for _, r := range line {
+			switch {
+			case unicode.Is(unicode.Hangul, r):
+				hasHangul = true
+			case unicode.Is(unicode.Han, r):
+				hasHan = true
+			}
+		}
+		if hasHangul {
+			hangul++
+		} else if hasHan {
+			han++
+		}
+	}
+	if lines == 0 {
+		return scriptNone
+	}
+	switch {
+	case float64(hangul) >= float64(lines)*romaScriptLineShare:
+		return scriptHangul
+	case float64(han) >= float64(lines)*romaScriptLineShare:
+		return scriptHan
+	}
+	return scriptNone
 }
 
 // bilingualTitleEqual 判两个 normLoose 之后的标题是不是「同名的中英双语写法」:

@@ -118,7 +118,7 @@ func TestSodaCoverURL(t *testing.T) {
 	// 接口实抓的 url_cover 形态:不带 `~模板-处理参数` 的地址回 400。
 	got := sodaCoverURL("tos-cn-v-2774c002/o84FFAQDnBofxEsFEAAq6CEhtB8yfcWggZEUBF",
 		[]string{"https://p3-luna.douyinpic.com/img/", "https://p6-luna.douyinpic.com/img/"}, "tplv-b829550vbb")
-	want := "https://p3-luna.douyinpic.com/img/tos-cn-v-2774c002/o84FFAQDnBofxEsFEAAq6CEhtB8yfcWggZEUBF~tplv-b829550vbb-resize:800:800.jpg"
+	want := "https://p3-luna.douyinpic.com/img/tos-cn-v-2774c002/o84FFAQDnBofxEsFEAAq6CEhtB8yfcWggZEUBF~tplv-b829550vbb-resize:0:0.jpg"
 	if got != want {
 		t.Errorf("cover = %q, want %q", got, want)
 	}

@@ -510,7 +510,7 @@ func pickKugouSearchCandidate(songs []kugouSong, artist, title, album string, du
 // kugouAlbumCoverURL 按专辑 ID 查 album/info 接口拿封面。响应的
 // imgurl 字段是个带 "{size}" 占位符的模板(如
 // "http://imge.kugou.com/stdmusic/{size}/…/….jpg"),换成具体像素数才是能直接访问的
-// URL——400/480/800 实测都能 200,这里用 480,跟 qqCoverMaxEdge 取的档位量级一致。
+// URL。尺寸填 0 拿原图(实测 1477 / 2048);填具体像素数会按要求缩放,比原图大时是放大出来的。
 // albumID 为空(有些搜索结果确实没有)或请求失败都返回空串,调用方(enrich.go 的
 // coverOrFallback)会自然退到 Apple 封面,不是致命错误。
 func kugouAlbumCoverURL(ctx context.Context, albumID string) string {
@@ -526,7 +526,7 @@ func kugouAlbumCoverURL(ctx context.Context, albumID string) string {
 	if err := kugouGet(ctx, u, &out); err != nil || out.Data.ImgURL == "" {
 		return ""
 	}
-	cover := strings.ReplaceAll(out.Data.ImgURL, "{size}", "480")
+	cover := strings.ReplaceAll(out.Data.ImgURL, "{size}", "0")
 	// 现象是"酷狗的没有返回封面"(截图里酷狗那条候选是空白占位图,
 	// netease 那条却有缩略图):酷我/acg 的这个接口原样返回的是 "http://" 前缀,collector
 	// 这边发请求不受影响(没有 ATS 限制),但这个 URL 之后会原样进 lyricCandidate.cover、

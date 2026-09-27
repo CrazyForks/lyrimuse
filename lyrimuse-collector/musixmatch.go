@@ -61,6 +61,8 @@ type musixmatchResult struct {
 	lrc string
 	yrc string // 归一化成 YRCParser 语法后的逐字数据,没有则空串
 	tr  string // 译文(逐行 LRC),语言取决于调用时传入的 features().LyricsTranslationLanguage,没有则空串
+	// roma:社区罗马音(逐行 LRC),按正文文字取日文罗马音 / 韩文罗马字 / 中文拼音,见 musixmatchRomaLanguage。
+	roma string
 	// title/artist/album/cover 是 Musixmatch 曲库里这首歌实际匹配到的信息——纯粹给
 	// "搜索候选歌词"弹窗展示用,不参与任何匹配/打分逻辑,取自 track.search 响应本身
 	// (本来就已经查到,只是原来没往外传)。cover 用 500x500 这档,跟网易云封面挑的
@@ -262,19 +264,53 @@ func resolveMusixmatchLyric(ctx context.Context, artist, title string, durationS
 	// hasRichsync==false 时**不发** track.richsync.get —— 跟上面 hasSubtitles 那道闸
 	// 同一个理由、同一份契约。实测 16 首里 4 首是 0(25%),全部 404。
 	//
-	// 逐字与译文互不依赖(译文只对齐整行 lrc),并发取。两者用的是上面搜索时已经换好的同一个 token,
-	// 不会触发并发换 token(见 musixmatchEnsureToken)。
-	var yrc string
-	richsyncDone := make(chan struct{})
+	// 逐字、译文、罗马音互不依赖(后两者只对齐整行 lrc),并发取。都用上面搜索时已经换好的同一个
+	// token,不会触发并发换 token(见 musixmatchEnsureToken)。
+	var yrc, roma string
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		defer close(richsyncDone)
+		defer wg.Done()
 		if match.hasRichsync {
 			yrc = musixmatchRichsync(ctx, match.trackID)
 		}
 	}()
+	go func() {
+		defer wg.Done()
+		roma = musixmatchRomanizationLRC(ctx, match.trackID, lrc)
+	}()
 	tr := musixmatchTranslationLRC(ctx, match.trackID, lrc, trLang)
-	<-richsyncDone
-	return musixmatchResult{lrc: lrc, yrc: yrc, tr: tr, title: match.title, artist: match.artist, album: match.album, cover: match.cover, durationSecs: match.durationSecs}
+	wg.Wait()
+	return musixmatchResult{lrc: lrc, yrc: yrc, tr: tr, roma: roma, title: match.title, artist: match.artist, album: match.album, cover: match.cover, durationSecs: match.durationSecs}
+}
+
+// musixmatchRomaLanguage 按正文的文字系统选社区罗马音的语言代码:日文 rj、韩文 rk、中文 rz
+// (拼音)。这三个代码走的是跟译文同一个 crowd.track.translations.get;别的文字不需要罗马音,
+// 返回空串。注意 ro 是罗马尼亚语,不是罗马音。
+func musixmatchRomaLanguage(lyrics string) string {
+	switch romaScriptOf(lyrics) {
+	case scriptKana:
+		return "rj"
+	case scriptHangul:
+		return "rk"
+	case scriptHan:
+		return "rz"
+	}
+	return ""
+}
+
+// musixmatchRomanizationLRC 取社区罗马音,按行贴回 lrc 的时间戳。结果的主要文字不是拉丁字母时
+// 整份不要(社区条目偶有把原文原样贴回来的)。
+func musixmatchRomanizationLRC(ctx context.Context, trackID int64, lrc string) string {
+	lang := musixmatchRomaLanguage(lrc)
+	if lang == "" {
+		return ""
+	}
+	roma := musixmatchTranslationLRC(ctx, trackID, lrc, lang)
+	if roma == "" || dominantScript(lrcTimestampRe.ReplaceAllString(roma, "")) != scriptLatin {
+		return ""
+	}
+	return roma
 }
 
 // musixmatchEnsureToken 返回一个可用的 usertoken——已缓存且未过期直接复用,否则重新
@@ -602,6 +638,7 @@ type musixmatchTrackRow struct {
 	ArtistName           string `json:"artist_name"`
 	AlbumName            string `json:"album_name"`
 	AlbumCoverart500x500 string `json:"album_coverart_500x500"`
+	AlbumCoverart800x800 string `json:"album_coverart_800x800"`
 	HasSubtitles         int    `json:"has_subtitles"`
 	// HasLyrics:有没有词(跟 HasSubtitles 是**两个独立字段**)。才开始读——
 	// 在此之前只认 HasSubtitles==1,于是"有词但没做时间轴"的歌在搜索这一步就被跳过,
@@ -671,7 +708,7 @@ func musixmatchMatchFromRow(r musixmatchTrackRow) musixmatchTrackMatch {
 		title:        r.TrackName,
 		artist:       r.ArtistName,
 		album:        r.AlbumName,
-		cover:        r.AlbumCoverart500x500,
+		cover:        musixmatchLargestCover(r),
 		durationSecs: float64(r.TrackLength),
 		hasSubtitles: r.HasSubtitles == 1,
 		hasRichsync:  r.HasRichsync == 1,
@@ -1125,4 +1162,17 @@ func buildTranslatedLRC(originalLRC string, items []musixmatchTranslationItem) s
 		}
 	}
 	return b.String()
+}
+
+// musixmatchLargestCover:封面取最大的一档。800 字段常为空,而图床上同一张图的 _800_800 地址照样能取
+// (实测;1000 回 403),所以 500 的地址按形状换成 800。
+func musixmatchLargestCover(r musixmatchTrackRow) string {
+	if u := strings.TrimSpace(r.AlbumCoverart800x800); u != "" {
+		return u
+	}
+	u := strings.TrimSpace(r.AlbumCoverart500x500)
+	if strings.Contains(u, "mxmcdn.net/") && strings.HasSuffix(u, "_500_500.jpg") {
+		return strings.TrimSuffix(u, "_500_500.jpg") + "_800_800.jpg"
+	}
+	return u
 }

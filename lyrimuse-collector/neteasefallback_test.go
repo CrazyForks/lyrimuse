@@ -191,7 +191,7 @@ func TestResolveNeteaseInfoFallsBackForDetailAndLyric(t *testing.T) {
 		return http.StatusNotFound, ""
 	})
 	info := resolveNeteaseInfo(qqRoundCtx(), "陈奕迅", "浮夸", "U87", 283.5)
-	if info.Cover != "http://p1.music.126.net/x.jpg?param=800y800" {
+	if info.Cover != "http://p1.music.126.net/x.jpg"+neteaseCoverQuery {
 		t.Errorf("封面该从 v3 详情拿到: %q", info.Cover)
 	}
 	if !strings.HasPrefix(info.Lyrics, "[00:28.948]") || strings.Contains(info.Lyrics, `{"t"`) {

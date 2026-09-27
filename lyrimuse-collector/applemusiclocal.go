@@ -290,7 +290,7 @@ done:
 	if !ok {
 		return applemusicResult{}, false
 	}
-	lrc, yrc, tr, parsed := applemusicParseTTML(e.ttml)
+	lrc, yrc, tr, roma, parsed := applemusicParseTTML(e.ttml)
 	if !parsed || lrc == "" {
 		return applemusicResult{}, false
 	}
@@ -300,7 +300,7 @@ done:
 	log.Printf("applemusic local: hit via %s %q - %q (%s%s)", via,
 		e.song.Attributes.ArtistName, e.song.Attributes.Name, e.kind,
 		map[bool]string{true: " +译文", false: ""}[tr != ""])
-	r := applemusicResultFrom(e.song, lrc, yrc, tr, plainOnly)
+	r := applemusicResultFrom(e.song, lrc, yrc, tr, roma, plainOnly)
 	// 身份是 Music.app 自己认定的(id 命中)或它缓存里那一条(name 命中),不经 amp-api
 	// 搜索 —— 同源加权的准入条件。
 	r.fromLocalClient = true

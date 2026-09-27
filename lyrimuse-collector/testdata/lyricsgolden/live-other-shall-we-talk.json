@@ -9,6 +9,7 @@
     "source_duration_delta_pct": 0.00042299203022845685,
     "lyrics_end_secs": 214.77,
     "coverage_pct": 91.314161760197,
+    "ending_corroborated": false,
     "album_score": 3,
     "live_mismatch": false,
     "cache_agreement": "exact"
@@ -143,7 +144,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "kugou",
@@ -178,7 +180,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "qq",
@@ -213,7 +216,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "lrclib",

@@ -406,6 +406,7 @@ func ytmusicParseSearchItem(item ytmusicSearchItem) (ytmusicParsedSearchItem, bo
 			cover = t.URL
 		}
 	}
+	cover = ytmusicOriginalThumbnail(cover)
 	return ytmusicParsedSearchItem{
 		videoID:      videoID,
 		title:        title,
@@ -781,4 +782,16 @@ func resolveYTMusicLyric(ctx context.Context, artist, title, album string, durat
 // 纯函数,便于单测;大小写不敏感只是防御性写法,实测两个取值大小写固定,没见过变体。
 func ytmusicIsLyricFindSource(source string) bool {
 	return strings.Contains(strings.ToLower(source), "lyricfind")
+}
+
+// ytmusicOriginalThumbnail:搜索结果的缩略图是 googleusercontent 地址,末尾 `=w120-h120-l90-rj` 这段是
+// 缩放参数,换成 `=s0` 拿原图(实测 2400;更大的请求也封顶在原图)。不是这个图床的地址原样返回。
+func ytmusicOriginalThumbnail(u string) string {
+	if !strings.Contains(u, ".googleusercontent.com/") {
+		return u
+	}
+	if i := strings.LastIndex(u, "="); i > strings.LastIndex(u, "/") {
+		return u[:i] + "=s0"
+	}
+	return u
 }

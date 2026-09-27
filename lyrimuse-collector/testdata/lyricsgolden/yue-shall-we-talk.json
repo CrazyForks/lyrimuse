@@ -9,6 +9,7 @@
     "source_duration_delta_pct": 0.12187770869907066,
     "lyrics_end_secs": 206.82,
     "coverage_pct": 90.99908921712273,
+    "ending_corroborated": false,
     "album_score": 0,
     "live_mismatch": false,
     "cache_agreement": "exact"
@@ -163,7 +164,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "lrclib",
@@ -207,7 +209,8 @@
             "kind": "titleMatch",
             "points": 120
           }
-        ]
+        ],
+        "has_romanization": true
       }
     ],
     "winner_fingerprint": "c12e57937619a81c"

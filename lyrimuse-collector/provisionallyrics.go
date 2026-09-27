@@ -83,6 +83,7 @@ func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSe
 	e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
 	e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 	e.dropHokkienRoma()
+	e.dropMandarinRomaForCantonese()
 	// 这里只做粤拼(纯查表)。helper 那一步要起子进程,排在出词之后由 resolveTrackEnrichment 补。
 	e.maybeGenerateJyutpingRoma()
 	// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),

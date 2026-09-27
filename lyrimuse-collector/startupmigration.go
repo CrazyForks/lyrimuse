@@ -70,6 +70,10 @@ const (
 	// 改了 lyricsLookHokkien 的判据就 +1。
 	migrationHokkienSongLanguage        = "hokkien_song_language"
 	migrationHokkienSongLanguageVersion = 2
+	// migrationNeteaseCoverURLs:存量网易云封面 `?param=WxH` 换成 neteaseCoverQuery(netease.go)。
+	// 改 neteaseCoverQuery 的写法就 +1。
+	migrationNeteaseCoverURLs        = "netease_cover_urls"
+	migrationNeteaseCoverURLsVersion = 1
 )
 
 // loadMigrationState 读水位文件。文件不存在 / 解不出来都当作"一道都没跑过",照常全量跑 ——

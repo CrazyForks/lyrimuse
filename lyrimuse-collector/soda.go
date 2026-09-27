@@ -56,8 +56,9 @@ const (
 	// 图片地址是「前缀 + uri + ~模板-处理参数.格式」,缺了 `~模板-...` 那段图片服务回 400。
 	sodaImageBase     = "https://p3-luna.douyinpic.com/img/"
 	sodaImageTemplate = "tplv-b829550vbb"
-	// sodaCoverTransform:跟网易云 800y800、QQ 800x800 同尺寸。
-	sodaCoverTransform = "resize:800:800.jpg"
+	// sodaCoverTransform:resize:0:0 取原图(实测 1500,跟 ~noop.image 同一张);填具体尺寸会按要求缩放,
+	// 比原图大时是放大出来的。
+	sodaCoverTransform = "resize:0:0.jpg"
 	// sodaLyricTimeout 跟别的逐字源同量级。这一路只有一次请求、没有搜索轮。
 	sodaLyricTimeout = 8 * time.Second
 	// sodaUserAgent:SEO 端点按普通网页请求对待,给一个常见桌面 UA 即可,不伪装客户端。
@@ -69,6 +70,8 @@ const (
 // 返回空串,自然落到 empty()。
 type sodaResult struct {
 	lyrics, yrc, title, artist, album, cover string
+	// tr:平台自带的中文译文(lyric.translations.cn,逐行 LRC,时间戳是原文的行首),没有时为空。
+	tr string
 	// durationSecs:汽水自报的曲长(秒),透传给打分的 sourceReportedDurationSecs。
 	durationSecs float64
 	// fromLocalClient:这条曲目的 id 取自汽水客户端的播放队列缓存(sodaLocalTrackID),
@@ -85,6 +88,8 @@ func (r sodaResult) empty() bool { return r.lyrics == "" && r.yrc == "" }
 type sodaSeoTrackResponse struct {
 	Lyric struct {
 		Content string `json:"content"`
+		// Translations:语言代码 → 逐行 LRC,实测只见过 "cn"(外语歌才有)。
+		Translations map[string]string `json:"translations"`
 	} `json:"lyric"`
 	SeoTrack struct {
 		Track struct {
@@ -303,9 +308,14 @@ func sodaParseSeoTrack(body sodaSeoTrackResponse) (res sodaResult, trackFoundNoL
 			names = append(names, n)
 		}
 	}
+	tr := strings.TrimSpace(body.Lyric.Translations["cn"])
+	if !isTimedLRC(tr) {
+		tr = ""
+	}
 	return sodaResult{
 		lyrics:       lrc,
 		yrc:          krcToYRC(content),
+		tr:           tr,
 		title:        strings.TrimSpace(t.Name),
 		artist:       strings.Join(names, "/"),
 		album:        strings.TrimSpace(t.Album.Name),

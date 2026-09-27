@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,98 @@ func TestDeezerTrackCover(t *testing.T) {
 	none := deezerTrackFromJSON(t, `{"album":{}}`)
 	if got := none.cover(); got != "" {
 		t.Fatalf("都没有时应当留空,得到 %q", got)
+	}
+}
+
+func TestDeezerBuildYRC(t *testing.T) {
+	lines := []deezerWordLine{
+		{Start: 12175, End: 13675, Words: []deezerWord{{12175, 12250, "So"}, {12337, 12387, "the"}, {12500, 12587, "bar"}}},
+		{Start: 14000, End: 13000, Words: []deezerWord{{14000, 14100, "bad"}}}, // 行时间倒挂
+		{Start: 15000, End: 16000, Words: []deezerWord{{15000, 15100, "  "}}},  // 没有字
+	}
+	want := "[12175,1500](12175,75,0)So (12337,50,0)the (12500,87,0)bar"
+	if got := deezerBuildYRC(lines); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func deezerWordLineForTest(start int, text string) deezerWordLine {
+	var words []deezerWord
+	for i, w := range strings.Fields(text) {
+		words = append(words, deezerWord{Start: start + i*100, End: start + i*100 + 90, Word: w})
+	}
+	return deezerWordLine{Start: start, End: start + 1000, Words: words}
+}
+
+func TestDeezerWordTrackAgrees(t *testing.T) {
+	lines := []deezerSyncLine{
+		{Milliseconds: 10000, Line: "Look at the stars"},
+		{Milliseconds: 15000, Line: "Look how they shine for you, yeah"},
+		{Milliseconds: 20000, Line: "And everything you do"},
+		{Milliseconds: 25000, Line: "Yeah, they were all yellow"},
+		{Milliseconds: 30000, Line: ""},
+	}
+	good := []deezerWordLine{
+		deezerWordLineForTest(10300, "Look at the stars"),
+		deezerWordLineForTest(14600, "Look how they shine for you"),
+		deezerWordLineForTest(20400, "And everything you do"),
+		deezerWordLineForTest(25200, "Yeah they were all yellow"),
+	}
+	if !deezerWordTrackAgrees(good, lines) {
+		t.Fatal("track a few hundred ms off with matching text must be accepted")
+	}
+	// 行序和文字都对、时刻整份错位:要拒。
+	shifted := []deezerWordLine{
+		deezerWordLineForTest(4975, "Look at the stars"),
+		deezerWordLineForTest(91125, "Look how they shine for you"),
+		deezerWordLineForTest(96800, "And everything you do"),
+		deezerWordLineForTest(102500, "Yeah they were all yellow"),
+	}
+	if deezerWordTrackAgrees(shifted, lines) {
+		t.Fatal("misplaced word track must be rejected")
+	}
+	if deezerWordTrackAgrees(nil, lines) {
+		t.Fatal("empty word track must be rejected")
+	}
+}
+
+func TestDeezerBuildTranslation(t *testing.T) {
+	lines := []deezerSyncLine{
+		{LRCTimestamp: "[00:10.00]", Line: "Aya Nakamura, oh yeah", LineTranslated: "Aya Nakamura, oh yeah"},
+		{LRCTimestamp: "[00:12.00]", Line: "Pero no hay boda", LineTranslated: "但没有婚礼"},
+		{LRCTimestamp: "[00:14.00]", Line: "Muchas novia'", LineTranslated: "很多女朋友"},
+		{LRCTimestamp: "[00:16.00]", Line: "", LineTranslated: "间奏"},
+	}
+	want := "[00:12.00]但没有婚礼\n[00:14.00]很多女朋友\n"
+	if got := deezerBuildTranslation(lines, nil, "zh"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// 目标是中文、Deezer 退回英文:整份不要。
+	english := []deezerSyncLine{
+		{LRCTimestamp: "[00:10.00]", Line: "完璧で嘘つきな君は", LineTranslated: "Complete and perfect, all you say is a bunch of lies"},
+		{LRCTimestamp: "[00:12.00]", Line: "無敵の笑顔で荒らすメディア", LineTranslated: "Couldn't beat her smile"},
+	}
+	if got := deezerBuildTranslation(english, nil, "zh"); got != "" {
+		t.Fatalf("English fallback for a Chinese target must be dropped, got %q", got)
+	}
+	if got := deezerBuildTranslation(english, nil, "en"); got == "" {
+		t.Fatal("English translation for an English target must be kept")
+	}
+}
+
+func TestDeezerBuildTranslationFollowsWordTrack(t *testing.T) {
+	lines := []deezerSyncLine{
+		{LRCTimestamp: "[00:09.63]", Milliseconds: 9630, Line: "Ey, Tití me preguntó si tengo muchas novia'", LineTranslated: "嘿，蒂蒂问我是不是有很多女朋友"},
+		{LRCTimestamp: "[00:14.23]", Milliseconds: 14230, Line: "Muchas novia'", LineTranslated: "很多女朋友"},
+	}
+	// 逐字轨把第一句拆成两行、整体晚 0.4~0.6 秒:译文挂到对应逐字行起点,拆开的那句只挂一次。
+	words := []deezerWordLine{
+		deezerWordLineForTest(10225, "Ey, Tití me preguntó"),
+		deezerWordLineForTest(11925, "Si tengo muchas novia'"),
+		deezerWordLineForTest(14687, "Muchas novia'"),
+	}
+	want := formatLRCTime(10225) + "嘿，蒂蒂问我是不是有很多女朋友\n" + formatLRCTime(14687) + "很多女朋友\n"
+	if got := deezerBuildTranslation(lines, words, "zh"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

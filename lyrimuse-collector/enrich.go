@@ -84,6 +84,15 @@ func (e *enrichEntry) maybeGenerateJyutpingRoma() {
 	}
 }
 
+// dropMandarinRomaForCantonese:粤语歌的罗马音只要粤拼。源自带的罗马音是普通话拼音(looksMandarinPinyin)
+// 时清掉,交给粤拼补上;源给的粤拼(网易云的不带声调数字)照留。用户手改过的不动。必须排在
+// maybeGenerateJyutpingRoma / applyPregeneratedRoma 之前 —— 那两处只在罗马音为空时才填。
+func (e *enrichEntry) dropMandarinRomaForCantonese() {
+	if e.SongLanguage == songLanguageCantonese && !e.ManualLyrics && e.LyricsRoma != "" && looksMandarinPinyin(e.LyricsRoma) {
+		e.LyricsRoma = ""
+	}
+}
+
 type enrichEntry struct {
 	CoverURL string `json:"cover_url,omitempty"`
 	// MotionCoverURL:这张专辑的 Apple Music 动态封面(motion artwork)master m3u8,由
@@ -1581,6 +1590,7 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 		e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
 		e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 		e.dropHokkienRoma()
+		e.dropMandarinRomaForCantonese()
 		e.applyPregeneratedRoma(preparedRoma)
 		lyricsChanged = true
 		// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
@@ -1828,7 +1838,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	if decidable {
 		e.LyricsDecision = buildLyricsDecision(
 			lyricsDecisionPathRescore, artist, title, album, durationSecs, scored, picked,
-			picked != nil && picked.Lyrics != e.Lyrics)
+			picked != nil && (picked.Lyrics != e.Lyrics || gainsWordTiming(e, picked)))
 		e.LyricsDecision.SourcesSkipped = e.LyricsSourcesSkipped
 		e.LyricsDecision.QueriesTried = queries.queries()
 		traceLyricsDecision(key, e.LyricsDecision)
@@ -1856,11 +1866,17 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 			e.LyricsTr, e.LyricsRoma, e.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
 			e.SongLanguage = entrySongLanguage(picked.Lyrics, scored)
 			e.dropHokkienRoma()
+			e.dropMandarinRomaForCantonese()
 			e.applyPregeneratedRoma(preparedRoma)
 			lyricsChanged = true
 			// 译文换人了,描述译文的两个字段必须跟着换:语言(否则拿旧语言判新译文),
 			// 来源(否则上一轮机翻留下的 "machine" 会让新来的社区译文被标成机翻)。
 			e.LyricsTrLang, e.LyricsTrSource = picked.LyricsTrLang, ""
+		}
+		if picked.Lyrics == e.Lyrics && gainsWordTiming(e, picked) {
+			log.Printf("lyrics rescore: %s  %s gained word timing", key, picked.Source)
+			e.LyricsYRC = picked.LyricsYRC
+			lyricsChanged = true
 		}
 		if picked.Source != e.LyricsSource {
 			// 正文一样但冠军换了源:导出的 .lrc 里 [source:] 头也得跟着重写。lyrics/ 文件夹是
@@ -1875,6 +1891,13 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	}
 	enrichCache[key] = e
 	enrichDirty = true
+}
+
+// gainsWordTiming:正文不变时唯一要补写的情况 —— 缓存里没有逐字、这一轮的胜者带了逐字。
+// 只补 LyricsYRC,译文/罗马音保持原样(正文没变,它们没有理由跟着换)。rescoreLyrics 和
+// resync-lyrics 两处共用这一条判定。
+func gainsWordTiming(e enrichEntry, picked *scoredLyricCandidateResult) bool {
+	return e.LyricsYRC == "" && picked.LyricsYRC != ""
 }
 
 // resolveEnrichAsync 首次解析一首歌的完整信息(封面/主色/链接/歌词),写入并永久保留,
@@ -3727,21 +3750,21 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	lrclibLyr, lrclibTitle, lrclibArtist, lrclibAlbum, lrclibDur := lrclib.lyr, lrclib.matchTitle, lrclib.matchArtist, lrclib.matchAlbum, lrclib.srcDur
 	lrclibInstrumental := lrclib.instrumental
 	lrclibPlainOnly := lrclib.plainOnly
-	mxLyr, mxYRC, mxTr, mxTitle, mxArtist, mxAlbum, mxCover, mxDur := mx.lyr, mx.yrc, mx.tr, mx.matchTitle, mx.matchArtist, mx.matchAlbum, mx.matchCover, mx.srcDur
+	mxLyr, mxYRC, mxTr, mxRoma, mxTitle, mxArtist, mxAlbum, mxCover, mxDur := mx.lyr, mx.yrc, mx.tr, mx.roma, mx.matchTitle, mx.matchArtist, mx.matchAlbum, mx.matchCover, mx.srcDur
 	mxPlainOnly := mx.plainOnly
 	mxInstrumental := mx.instrumental
 	lfLyr, lfTitle, lfArtist, lfAlbum, lfCover, lfDur := lf.lyr, lf.matchTitle, lf.matchArtist, lf.matchAlbum, lf.matchCover, lf.srcDur
-	kuwoLyr, kuwoTitle, kuwoArtist, kuwoAlbum, kuwoCover, kuwoDur := kuwo.lyr, kuwo.matchTitle, kuwo.matchArtist, kuwo.matchAlbum, kuwo.matchCover, kuwo.srcDur
+	kuwoLyr, kuwoYRC, kuwoTitle, kuwoArtist, kuwoAlbum, kuwoCover, kuwoDur := kuwo.lyr, kuwo.yrc, kuwo.matchTitle, kuwo.matchArtist, kuwo.matchAlbum, kuwo.matchCover, kuwo.srcDur
 	migu := raw["migu"]
-	miguLyr, miguTr, miguTitle, miguArtist, miguAlbum, miguCover := migu.lyr, migu.tr, migu.matchTitle, migu.matchArtist, migu.matchAlbum, migu.matchCover
+	miguLyr, miguYRC, miguTr, miguTitle, miguArtist, miguAlbum, miguCover := migu.lyr, migu.yrc, migu.tr, migu.matchTitle, migu.matchArtist, migu.matchAlbum, migu.matchCover
 	dz := raw["deezer"]
-	dzLyr, dzTitle, dzArtist, dzAlbum, dzCover, dzDur, dzPlainOnly := dz.lyr, dz.matchTitle, dz.matchArtist, dz.matchAlbum, dz.matchCover, dz.srcDur, dz.plainOnly
+	dzLyr, dzYRC, dzTr, dzTitle, dzArtist, dzAlbum, dzCover, dzDur, dzPlainOnly := dz.lyr, dz.yrc, dz.tr, dz.matchTitle, dz.matchArtist, dz.matchAlbum, dz.matchCover, dz.srcDur, dz.plainOnly
 	am := raw["applemusic"]
-	amLyr, amYRC, amTr, amTitle, amArtist, amAlbum, amCover, amDur, amPlainOnly := am.lyr, am.yrc, am.tr, am.matchTitle, am.matchArtist, am.matchAlbum, am.matchCover, am.srcDur, am.plainOnly
+	amLyr, amYRC, amTr, amRoma, amTitle, amArtist, amAlbum, amCover, amDur, amPlainOnly := am.lyr, am.yrc, am.tr, am.roma, am.matchTitle, am.matchArtist, am.matchAlbum, am.matchCover, am.srcDur, am.plainOnly
 	soda := raw["soda"]
 	kk := raw[kkboxLocalLyricsSource]
-	sodaLyr, sodaYRC, sodaTitle, sodaArtist, sodaAlbum, sodaCover, sodaDur := soda.lyr, soda.yrc, soda.matchTitle, soda.matchArtist, soda.matchAlbum, soda.matchCover, soda.srcDur
 	spl := raw[spotifyLocalLyricsSource]
+	sodaLyr, sodaYRC, sodaTr, sodaTitle, sodaArtist, sodaAlbum, sodaCover, sodaDur := soda.lyr, soda.yrc, soda.tr, soda.matchTitle, soda.matchArtist, soda.matchAlbum, soda.matchCover, soda.srcDur
 	amll := raw["amll"].amll
 	// 候选的封面只用它自己那个源给的,没有就空着(「搜索候选歌词」弹窗显示占位图,「解析决策」全空时整列不出现)。
 	// 别拿按本地歌名搜来的 Apple 封面给它兜底:那是"本地这首"的封面、不是这条候选的出处,候选缩略图本来是帮人
@@ -3759,6 +3782,8 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	lfLyr, _, _, bakedLines["lyricfind"] = adoptBakedTranslation(lfLyr, "", "", foreignSong, false)
 	// 酷我对外文歌**系统性**地把中文译文烘在正文里(金标 ko-fallen-angel / latin-purple-rain 里的酷我候选
 	// 128→67 行、71→37 行),摘出来的译文照 qq/kugou 的口径接到译文轨(中文)。
+	// 逐字轨**不**传进去:它在 kuwolrcx.go 转换时已去掉译文行,而酷我的译文行跟下一句原文同一个时间戳,
+	// 交给这里按时间删会把原文那行一起删掉。
 	var kuwoTr string
 	kuwoLyr, kuwoTr, _, bakedLines["kuwo"] = adoptBakedTranslation(kuwoLyr, "", "", foreignSong, true)
 	amll.lrc, _, amll.yrc, bakedLines["amll"] = adoptBakedTranslation(amll.lrc, "", amll.yrc, foreignSong, false)
@@ -3784,8 +3809,8 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 		candidates = append(candidates, lyricCandidate{source: "kugou", lyrics: kugouLyr, wordTimingYRC: usableYRC(kugouLyr, kugouYRC), hasWordTiming: usableWordTiming(kugouLyr, kugouYRC), hasUsableTranslation: kugouUsableTr, hasUsableRomanization: kugouUsableRoma, sourceReportedDurationSecs: kugouDur, title: kugouTitle, artist: kugouArtist, album: kugouAlbum, cover: kugouCover, language: kugouLang, identityFromLocalClient: kugou.identityFromLocalClient})
 	}
 	if mxLyr != "" {
-		mxUsableTr, _ := usableValueAdd(mxLyr, mxTr, features().LyricsTranslationLanguage, "", features().LyricsTranslationLanguage)
-		candidates = append(candidates, lyricCandidate{source: "musixmatch", lyrics: mxLyr, wordTimingYRC: usableYRC(mxLyr, mxYRC), hasWordTiming: usableWordTiming(mxLyr, mxYRC), hasUsableTranslation: mxUsableTr, sourceReportedDurationSecs: mxDur, title: mxTitle, artist: mxArtist, album: mxAlbum, cover: mxCover, plainTextOnly: mxPlainOnly})
+		mxUsableTr, mxUsableRoma := usableValueAdd(mxLyr, mxTr, features().LyricsTranslationLanguage, mxRoma, features().LyricsTranslationLanguage)
+		candidates = append(candidates, lyricCandidate{source: "musixmatch", lyrics: mxLyr, wordTimingYRC: usableYRC(mxLyr, mxYRC), hasWordTiming: usableWordTiming(mxLyr, mxYRC), hasUsableTranslation: mxUsableTr, hasUsableRomanization: mxUsableRoma, sourceReportedDurationSecs: mxDur, title: mxTitle, artist: mxArtist, album: mxAlbum, cover: mxCover, plainTextOnly: mxPlainOnly})
 	}
 	if lrclibLyr != "" {
 		candidates = append(candidates, lyricCandidate{source: "lrclib", lyrics: lrclibLyr, sourceReportedDurationSecs: lrclibDur, title: lrclibTitle, artist: lrclibArtist, album: lrclibAlbum, cover: "", plainTextOnly: lrclibPlainOnly})
@@ -3795,23 +3820,26 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 		candidates = append(candidates, lyricCandidate{source: "lyricfind", lyrics: lfLyr, sourceReportedDurationSecs: lfDur, title: lfTitle, artist: lfArtist, album: lfAlbum, cover: lfCover})
 	}
 	if kuwoLyr != "" {
-		// 只有逐行,没有逐字/译文/罗马音,也没有自己的封面——跟 lyricfind 同一个形状
-		// (见 kuwo.go 头注)。
+		// 逐行正文 + 可选的逐字轨(kuwolrcx.go),译文只有从正文摘出来的烘入译文,没有罗马音
+		// (见 kuwo.go 头注)。逐字的可用性判定同网易云/QQ/酷狗(usableYRC / usableWordTiming)。
 		kuwoUsableTr, _ := usableValueAdd(kuwoLyr, kuwoTr, "zh", "", features().LyricsTranslationLanguage)
-		candidates = append(candidates, lyricCandidate{source: "kuwo", lyrics: kuwoLyr, hasUsableTranslation: kuwoUsableTr, sourceReportedDurationSecs: kuwoDur, title: kuwoTitle, artist: kuwoArtist, album: kuwoAlbum, cover: kuwoCover})
+		candidates = append(candidates, lyricCandidate{source: "kuwo", lyrics: kuwoLyr, wordTimingYRC: usableYRC(kuwoLyr, kuwoYRC), hasWordTiming: usableWordTiming(kuwoLyr, kuwoYRC), hasUsableTranslation: kuwoUsableTr, sourceReportedDurationSecs: kuwoDur, title: kuwoTitle, artist: kuwoArtist, album: kuwoAlbum, cover: kuwoCover})
 	}
 	if miguLyr != "" {
-		// 逐行 LRC + 可选的中文译文(trcUrl,外语歌才有),没有逐字/罗马音;封面用搜索结果自带的
-		// imgItems(见 migu.go 头注)。译文固定中文、标 "zh",可用性同网易云/QQ/酷狗走 usableValueAdd。
+		// 逐行 LRC + 可选的逐字轨(MRC,migumrc.go)+ 可选的中文译文(trcUrl,外语歌才有),没有罗马音;
+		// 封面用搜索结果自带的 imgItems(见 migu.go 头注)。译文固定中文、标 "zh",可用性同网易云/QQ/酷狗
+		// 走 usableValueAdd,逐字同样走 usableYRC / usableWordTiming。
 		// 没有时长字段,sourceReportedDurationSecs 留 0(= 该项不参与打分,同 amll)。
 		miguUsableTr, _ := usableValueAdd(miguLyr, miguTr, "zh", "", features().LyricsTranslationLanguage)
-		candidates = append(candidates, lyricCandidate{source: "migu", lyrics: miguLyr, hasUsableTranslation: miguUsableTr, title: miguTitle, artist: miguArtist, album: miguAlbum, cover: miguCover})
+		candidates = append(candidates, lyricCandidate{source: "migu", lyrics: miguLyr, wordTimingYRC: usableYRC(miguLyr, miguYRC), hasWordTiming: usableWordTiming(miguLyr, miguYRC), hasUsableTranslation: miguUsableTr, title: miguTitle, artist: miguArtist, album: miguAlbum, cover: miguCover})
 	}
 	if dzLyr != "" {
-		// 只有逐行,没有逐字/译文/罗马音;封面用搜索结果自带的 album.cover_xl,时长用
-		// Deezer 自报的 duration(见 deezer.go 头注)。plainOnly 直通打分层那道恒 -1 的闸
-		// (match.go 的 scoreRejectPlainTextOnly),口径与 lrclib/musixmatch 的纯文本回退一致。
-		candidates = append(candidates, lyricCandidate{source: "deezer", lyrics: dzLyr, sourceReportedDurationSecs: dzDur, title: dzTitle, artist: dzArtist, album: dzAlbum, cover: dzCover, plainTextOnly: dzPlainOnly})
+		// 逐行正文 + 可选的逐字轨 + 可选的译文(语言跟译文语言设置走),没有罗马音;封面用搜索
+		// 结果自带的 album.cover_xl,时长用 Deezer 自报的 duration(见 deezer.go 头注)。逐字走
+		// usableYRC / usableWordTiming,译文走 usableValueAdd,口径同别的源。plainOnly 直通打分层
+		// 那道恒 -1 的闸(match.go 的 scoreRejectPlainTextOnly),口径与 lrclib/musixmatch 的纯文本回退一致。
+		dzUsableTr, _ := usableValueAdd(dzLyr, dzTr, features().LyricsTranslationLanguage, "", features().LyricsTranslationLanguage)
+		candidates = append(candidates, lyricCandidate{source: "deezer", lyrics: dzLyr, wordTimingYRC: usableYRC(dzLyr, dzYRC), hasWordTiming: usableWordTiming(dzLyr, dzYRC), hasUsableTranslation: dzUsableTr, sourceReportedDurationSecs: dzDur, title: dzTitle, artist: dzArtist, album: dzAlbum, cover: dzCover, plainTextOnly: dzPlainOnly})
 	}
 	if amLyr != "" {
 		// 全部源里唯一的**官方逐字**来源:逐行 LRC + 逐字 YRC(itunes:timing="Word")+
@@ -3819,11 +3847,12 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 		// durationInMillis(见 applemusic.go 头注)。逐字的可用性判定走跟 amll 完全一样的
 		// usableYRC/usableWordTiming —— 两边都是同一套 TTML 解析出来的,没理由用两套判据。
 		// plainOnly 直通打分层那道恒 -1 的闸,口径同 deezer/lrclib 的纯文本回退。
-		amUsableTr, _ := usableValueAdd(amLyr, amTr, features().LyricsTranslationLanguage, "", features().LyricsTranslationLanguage)
+		amUsableTr, amUsableRoma := usableValueAdd(amLyr, amTr, features().LyricsTranslationLanguage, amRoma, features().LyricsTranslationLanguage)
 		candidates = append(candidates, lyricCandidate{
 			source: "applemusic", lyrics: amLyr,
 			wordTimingYRC: usableYRC(amLyr, amYRC), hasWordTiming: usableWordTiming(amLyr, amYRC),
 			hasUsableTranslation:       amUsableTr,
+			hasUsableRomanization:      amUsableRoma,
 			sourceReportedDurationSecs: amDur,
 			title:                      amTitle, artist: amArtist, album: amAlbum,
 			cover: amCover, plainTextOnly: amPlainOnly,
@@ -3831,12 +3860,14 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 		})
 	}
 	if sodaLyr != "" {
-		// 官方逐字(格式与酷狗 KRC 同构,归一化见 soda.go)。没有译文/罗马音这两路:
-		// seo_track 只下发一份正文。没有 plainTextOnly —— 拿不到计时行时 krcToLRC 返回
-		// 空串,这里根本进不来。
+		// 官方逐字(格式与酷狗 KRC 同构,归一化见 soda.go)+ 平台自带的中文译文(外语歌才有),
+		// 没有罗马音。译文固定中文、标 "zh",可用性同网易云/QQ/酷狗走 usableValueAdd。没有
+		// plainTextOnly —— 拿不到计时行时 krcToLRC 返回空串,这里根本进不来。
+		sodaUsableTr, _ := usableValueAdd(sodaLyr, sodaTr, "zh", "", features().LyricsTranslationLanguage)
 		candidates = append(candidates, lyricCandidate{
 			source: "soda", lyrics: sodaLyr,
 			wordTimingYRC: usableYRC(sodaLyr, sodaYRC), hasWordTiming: usableWordTiming(sodaLyr, sodaYRC),
+			hasUsableTranslation:       sodaUsableTr,
 			sourceReportedDurationSecs: sodaDur,
 			title:                      sodaTitle, artist: sodaArtist, album: sodaAlbum,
 			cover:                   sodaCover,
@@ -3867,12 +3898,22 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 		// 身份是确定的 —— 这份 TTML 是按网易云/QQ 的音乐 ID 直接取回来的,不是搜出来的,
 		// 所以 title/artist/album 直接沿用本地曲目信息,不会在标题/歌手/专辑那几项上
 		// 被扣分。它没有自报时长,sourceReportedDurationSecs 留 0(= 该项不参与打分)。
-		amllTr, _ := usableValueAdd(amll.lrc, amll.tr, features().LyricsTranslationLanguage, "", features().LyricsTranslationLanguage)
+		// 它自己没有封面:按网易云 / QQ 的 ID 命中时,借那一家同一首歌的封面(ID 就是那一路递过来的);
+		// 按 Apple / Spotify 的 ID 命中时不借 —— 手上那两家的封面是搜出来的,未必是同一条录音。
+		amllCover := ""
+		switch amll.platform {
+		case "ncm-lyrics":
+			amllCover = ne.Cover
+		case "qq-lyrics":
+			amllCover = qqCover
+		}
+		amllTr, amllRoma := usableValueAdd(amll.lrc, amll.tr, features().LyricsTranslationLanguage, amll.roma, features().LyricsTranslationLanguage)
 		candidates = append(candidates, lyricCandidate{
 			source: "amll", lyrics: amll.lrc,
 			wordTimingYRC: usableYRC(amll.lrc, amll.yrc), hasWordTiming: usableWordTiming(amll.lrc, amll.yrc),
-			hasUsableTranslation: amllTr,
-			title:                title, artist: artist, album: album, cover: "",
+			hasUsableTranslation:  amllTr,
+			hasUsableRomanization: amllRoma,
+			title:                 title, artist: artist, album: album, cover: amllCover,
 		})
 	}
 	// 时间轴自洽修复:候选自带的行级 LRC 与逐字轴打架时,以逐字轴为准重挂行时间戳
@@ -3951,9 +3992,9 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			// 补回,见下面 case "qq")。"固定中文"这件事必须记下来:目标语言不是中文时,这份译文
 			// 用不上,得让机翻接手(见 needsTranslationBackfill)。
 			//
-			// 赋值前必须过 c.hasUsableTranslation / hasUsableRomanization 这道闸。这两个"能不能
-			// 用"的判定(usableValueAdd,已经算过"原文本来就是目标语言,同语言不同文字不算翻译"
-			// 这类情况)如果只用来加 +50/+30 的打分、不管赋值,candidates 里那份不可用的翻译内容
+			// 译文赋值前必须过 c.hasUsableTranslation 这道闸(罗马音走更宽的 usableRomaForResult,
+			// 见那边注释)。"能不能用"的判定(usableValueAdd,已经算过"原文本来就是目标语言,同语言
+			// 不同文字不算翻译"这类情况)如果只用来加 +50 的打分、不管赋值,candidates 里那份不可用的翻译内容
 			// 就会原样抄进 r.LyricsTr,分数赢了就带着这份没有意义的"翻译"一起进缓存(繁体原文配
 			// 一份只是转成简体的"翻译"就是这么来的)。判定为不可用时干脆不赋值,行为跟"这个源
 			// 没有可用译文"一致。
@@ -3961,7 +4002,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 				r.LyricsTr = ne.Trans
 				r.LyricsTrLang = "zh"
 			}
-			if c.hasUsableRomanization {
+			if usableRomaForResult(c.lyrics, ne.Roma) {
 				r.LyricsRoma = ne.Roma
 			}
 		case "musixmatch":
@@ -3976,6 +4017,9 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 				// 抓取时用的就是当时设置里的语言。之后用户改了设置,这里记下的旧语言
 				// 就会跟新目标对不上 —— 那正是要的:对不上就重翻。
 				r.LyricsTrLang = features().LyricsTranslationLanguage
+			}
+			if usableRomaForResult(c.lyrics, mxRoma) {
+				r.LyricsRoma = mxRoma
 			}
 		case "amll":
 			// amll 这条 case 不能漏。amll.tr 早就在 candidates 构造那一步被读出来过(见上面
@@ -3993,6 +4037,25 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 				r.LyricsTr = amll.tr
 				r.LyricsTrLang = features().LyricsTranslationLanguage
 			}
+			if usableRomaForResult(c.lyrics, amll.roma) {
+				r.LyricsRoma = amll.roma
+			}
+		case "applemusic":
+			// 官方译文(<translations type="subtitle">)与官方音译(<transliterations>),语言标注口径同
+			// amll:判定"能不能用"时 trLang 传的就是目标语言本身。
+			if c.hasUsableTranslation {
+				r.LyricsTr = amTr
+				r.LyricsTrLang = features().LyricsTranslationLanguage
+			}
+			if usableRomaForResult(c.lyrics, amRoma) {
+				r.LyricsRoma = amRoma
+			}
+		case "soda":
+			// 汽水 lyric.translations.cn 固定中文,口径同 migu。
+			if c.hasUsableTranslation {
+				r.LyricsTr = sodaTr
+				r.LyricsTrLang = "zh"
+			}
 		case "qq":
 			// QQ GetPlayLyricInfo 的 trans/roma 两轨(见 qq.go qqQRCLyric / qqAuxiliaryLRC):
 			// 译文跟网易云一样固定中文,标 "zh";两轨都由候选构造时算好的 usableValueAdd 结果
@@ -4002,7 +4065,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 				r.LyricsTr = qqTr
 				r.LyricsTrLang = "zh"
 			}
-			if c.hasUsableRomanization {
+			if usableRomaForResult(c.lyrics, qqRoma) {
 				r.LyricsRoma = qqRoma
 			}
 		case "kuwo":
@@ -4019,7 +4082,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 				r.LyricsTr = kugouTr
 				r.LyricsTrLang = "zh"
 			}
-			if c.hasUsableRomanization {
+			if usableRomaForResult(c.lyrics, kugouRoma) {
 				r.LyricsRoma = kugouRoma
 			}
 		case "migu":
@@ -4029,6 +4092,13 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			if c.hasUsableTranslation {
 				r.LyricsTr = miguTr
 				r.LyricsTrLang = "zh"
+			}
+		case "deezer":
+			// Deezer 的译文按请求时的译文语言设置取(deezer.go deezerAcceptLanguage),标同一个语言;
+			// 文字系统对不上目标语言的已在 deezerBuildTranslation 丢掉。
+			if c.hasUsableTranslation {
+				r.LyricsTr = dzTr
+				r.LyricsTrLang = features().LyricsTranslationLanguage
 			}
 		}
 		// 正文时间轴被重挂过就把附属歌词一起搬过去。放在 switch **之后** —— 各源的
@@ -4333,7 +4403,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// isrc 同 deezer 那路:有值时走 track.get?track_isrc= 直取,绕开这个源最松的那套
 		// 名称搜索(见 musixmatch.go)。
 		r := musixmatchLyric(ctx, artist, title, durationSecs, features().LyricsTranslationLanguage, playbackISRC(artist, title, album))
-		resultsCh <- lyricSourceResult{source: "musixmatch", lyr: r.lrc, yrc: r.yrc, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, instrumental: r.instrumental}
+		resultsCh <- lyricSourceResult{source: "musixmatch", lyr: r.lrc, yrc: r.yrc, tr: r.tr, roma: r.roma, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, instrumental: r.instrumental}
 	}()
 	go func() {
 		if skipSource("lyricfind") {
@@ -4351,7 +4421,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 			return
 		}
 		r := kuwoLyric(ctx, artist, title, album, durationSecs)
-		resultsCh <- lyricSourceResult{source: "kuwo", lyr: r.lyrics, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs}
+		resultsCh <- lyricSourceResult{source: "kuwo", lyr: r.lyrics, yrc: r.yrc, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs}
 	}()
 	go func() {
 		if skipSource("migu") {
@@ -4360,7 +4430,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		}
 		// 独立检索(不等任何其它源的 ID),同 kuwo;tr 是 trcUrl 拉回来的中文译文,多数曲目为空。
 		r := miguLyric(ctx, artist, title, album, durationSecs)
-		resultsCh <- lyricSourceResult{source: "migu", lyr: r.lyrics, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover}
+		resultsCh <- lyricSourceResult{source: "migu", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover}
 	}()
 	go func() {
 		if skipSource("deezer") {
@@ -4373,7 +4443,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// isrc 有值时(Spotify 原生客户端在播、且它缓存里记了这条录音,见 spotifyisrc.go)
 		// 走 /track/isrc: 直取,跳过搜索与名称打分——那是录音级身份,比名字硬。
 		r := deezerLyric(ctx, artist, title, album, durationSecs, playbackISRC(artist, title, album))
-		resultsCh <- lyricSourceResult{source: "deezer", lyr: r.lyrics, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly}
+		resultsCh <- lyricSourceResult{source: "deezer", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly}
 	}()
 	go func() {
 		if skipSource("applemusic") {
@@ -4387,7 +4457,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// Music.app 自己的歌词缓存,拿到官方逐字 + 官方译文,见 applemusiclocal.go。
 		appleID, _ := playbackTrackIDsFor(artist, title, album)
 		r := applemusicLyric(ctx, artist, title, album, durationSecs, appleID)
-		resultsCh <- lyricSourceResult{source: "applemusic", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, identityFromLocalClient: r.fromLocalClient}
+		resultsCh <- lyricSourceResult{source: "applemusic", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, roma: r.roma, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, plainOnly: r.plainOnly, identityFromLocalClient: r.fromLocalClient}
 	}()
 	go func() {
 		if skipSource("soda") {
@@ -4396,7 +4466,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		}
 		// 曲目 id 先取汽水客户端的播放队列缓存,拿不到再按歌手 + 歌名搜索(见 soda.go 头注)。取词走无签名的 seo_track。
 		r, noLyrics := sodaLyric(ctx, artist, title, album, durationSecs)
-		resultsCh <- lyricSourceResult{source: "soda", lyr: r.lyrics, yrc: r.yrc, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, trackFoundNoLyrics: noLyrics, identityFromLocalClient: r.fromLocalClient}
+		resultsCh <- lyricSourceResult{source: "soda", lyr: r.lyrics, yrc: r.yrc, tr: r.tr, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album, matchCover: r.cover, srcDur: r.durationSecs, trackFoundNoLyrics: noLyrics, identityFromLocalClient: r.fromLocalClient}
 	}()
 
 	// raw:目前为止到手的各源原始应答,按源名存。打分/排序全部下放给

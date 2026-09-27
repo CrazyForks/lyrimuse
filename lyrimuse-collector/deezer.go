@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // deezerLyric 是歌词第十个候选来源(Deezer)。跟 lyricfind(ytmusic.go)
@@ -34,7 +35,9 @@ import (
 //	   换来的**匿名 JWT**(不需要账号、不需要 ARL、不碰用户登录态)。JWT 自带 exp,
 //	   实测有效期约 8 小时,进程级缓存 + 单飞锁(同 musixmatch token / ytmusic visitor id)。
 //	   响应 data.track.lyrics 里 synchronizedLines[] 是逐行(lrcTimestamp 形如
-//	   "[00:01.41]" + line),text 是整份纯文本。
+//	   "[00:01.41]" + line,lineTranslated 是这一行的译文),synchronizedWordByWordLines[]
+//	   是逐字({start,end,words:[{start,end,word}]},毫秒),text 是整份纯文本。
+//	   译文语言跟请求头 Accept-Language 走(deezerAcceptLanguage)。
 //
 // **别再走 gw-light.php 的 song.getLyrics —— 那条路已经废了**。它对**任何**歌都回
 // `{"DATA_ERROR":"No lyrics id for <id> and country XX"}`,错误文案里的国家极具误导性
@@ -59,7 +62,10 @@ import (
 // 后果有两个:两条管道互相印证各拿一份加分、第三方误以为有两家印证拿 +250。这条纪律
 // ytmusic.go 顶部早就写下了,接这个源时从另一个方向又踩了一次。
 //
-// 只有逐行,没有逐字/译文/罗马音。搜索排序可信(原版排第一、acoustic 版排第二,实测),
+// 逐字轨与逐行轨是两份独立的时间轴,逐字轨偶尔整份错位,只在它跟逐行轨对得上时才用
+// (deezerWordTrackAgrees)。译文只在文字系统跟目标语言对得上时才用
+// (deezerTranslationFitsLanguage):Deezer 没有目标语言的译文时会退回英文。没有罗马音。
+// 逐字只覆盖拉丁字母写的歌词,中日韩歌词的逐字轨是空的。搜索排序可信(原版排第一、acoustic 版排第二,实测),
 // 所以跟 migu 一样不重排,只套跟别的源完全一致的身份闸;但 Deezer 的搜索结果**自带时长**,
 // 比 migu 多一道时长闸和时长加分(口径与 kuwo 一致,容差 0.25)。
 //
@@ -68,7 +74,11 @@ import (
 // 不是新引入一种风险类别。全程匿名,不碰用户账号、不需要登录。
 type deezerResult struct {
 	lyrics, title, artist, album string
-	// cover:album.cover_xl(1000x1000),搜索结果自带,不用多发请求。拿不到就留空,
+	// yrc:逐字轨转成的 YRC,没有或没过 deezerWordTrackAgrees 时为空。
+	yrc string
+	// tr:目标语言的逐行译文(LRC,跟 lyrics 同一套时间戳),没有时为空。
+	tr string
+	// cover:album.cover_xl 换成原图档(见 deezerTrack.cover),搜索结果自带,不用多发请求。拿不到就留空,
 	// 交给 enrich.go 的 coverOrFallback 退到 Apple 封面。
 	cover string
 	// durationSecs:Deezer 自报的曲长(秒),透传给打分的 sourceReportedDurationSecs。
@@ -99,8 +109,8 @@ const (
 	deezerJWTRenewMargin = 5 * time.Minute
 )
 
-// deezerLyricsQuery 是取词用的 GraphQL 查询。只要这一路真正用得上的字段:逐行
-// (synchronizedLines)和整份纯文本(text)。不取 writers/copyright —— 那是署名信息,
+// deezerLyricsQuery 是取词用的 GraphQL 查询。只要这一路真正用得上的字段:逐行与译文
+// (synchronizedLines)、逐字(synchronizedWordByWordLines)和整份纯文本(text)。不取 writers/copyright —— 那是署名信息,
 // 这个项目的下游不消费,多取一份只是白传。
 const deezerLyricsQuery = `query SynchronizedTrackLyrics($trackId: String!) {
   track(trackId: $trackId) {
@@ -110,7 +120,18 @@ const deezerLyricsQuery = `query SynchronizedTrackLyrics($trackId: String!) {
       text
       synchronizedLines {
         lrcTimestamp
+        milliseconds
         line
+        lineTranslated
+      }
+      synchronizedWordByWordLines {
+        start
+        end
+        words {
+          start
+          end
+          word
+        }
       }
     }
   }
@@ -157,7 +178,7 @@ func deezerLyric(ctx context.Context, artist, title, album string, durationSecs 
 	// isrc 必须进缓存键。首播那一拍 ISRC 索引往往还没建好(它是后台异步建的),
 	// 那次拿到的是"按名字搜"的结果;不区分的话这条缓存会把后面所有次都挡住,
 	// ISRC 这条路永远轮不到。
-	key := artist + "|" + title + "|" + album + "|" + isrc
+	key := artist + "|" + title + "|" + album + "|" + isrc + "|" + deezerAcceptLanguage()
 	deezerMu.Lock()
 	if v, ok := deezerCache[key]; ok {
 		deezerMu.Unlock()
@@ -190,8 +211,13 @@ type deezerTrack struct {
 	} `json:"album"`
 }
 
+// cover:cover_xl 是 1000x1000,地址里的尺寸段换成 1800x1800 拿原图 —— 请求比原图大时按原图给(实测
+// 原图 1200 的两张都返回 1200),2000 起回 403。
 func (t deezerTrack) cover() string {
 	if u := strings.TrimSpace(t.Album.CoverXL); u != "" {
+		if strings.Contains(u, "dzcdn.net/images/cover/") {
+			return strings.Replace(u, "/1000x1000-", "/1800x1800-", 1)
+		}
 		return u
 	}
 	return strings.TrimSpace(t.Album.CoverBg)
@@ -405,8 +431,190 @@ func deezerFetchJWT(ctx context.Context) string {
 
 // deezerSyncLine 是 synchronizedLines 的一个元素(实测形状)。
 type deezerSyncLine struct {
-	LRCTimestamp string `json:"lrcTimestamp"` // "[00:01.41]"
-	Line         string `json:"line"`
+	LRCTimestamp   string `json:"lrcTimestamp"` // "[00:01.41]"
+	Milliseconds   int    `json:"milliseconds"`
+	Line           string `json:"line"`
+	LineTranslated string `json:"lineTranslated"`
+}
+
+// deezerWordLine 是 synchronizedWordByWordLines 的一个元素,时间都是毫秒、绝对时刻。
+type deezerWordLine struct {
+	Start int          `json:"start"`
+	End   int          `json:"end"`
+	Words []deezerWord `json:"words"`
+}
+
+type deezerWord struct {
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Word  string `json:"word"`
+}
+
+// deezerLyricsPayload 是一次取词解析出来的全部内容,各项都可能为空。
+type deezerLyricsPayload struct {
+	lrc, plain, yrc, tr string
+}
+
+const (
+	// deezerWordTrackMaxOffsetMs / deezerWordTrackMinAgreement:逐字轨的一行在这么多毫秒内
+	// 能找到文字相近的逐行,算它俩对得上;对得上的行要占到这个比例才用逐字轨。
+	deezerWordTrackMaxOffsetMs  = 1500
+	deezerWordTrackMinAgreement = 0.8
+)
+
+// deezerAcceptLanguage 取词请求的 Accept-Language,决定 lineTranslated 用什么语言。
+func deezerAcceptLanguage() string {
+	return myMemoryLangCode(features().LyricsTranslationLanguage)
+}
+
+// deezerBuildYRC 把逐字轨拼成 YRC:`[行始,行长](词始,词长,0)词 …`,词之间的空格挂在前一个词末尾。
+// 没有词、时间倒挂的行跳过。纯函数,便于单测。
+func deezerBuildYRC(lines []deezerWordLine) string {
+	var b strings.Builder
+	for _, l := range lines {
+		var words []deezerWord
+		for _, w := range l.Words {
+			if strings.TrimSpace(w.Word) == "" || w.End < w.Start {
+				continue
+			}
+			words = append(words, w)
+		}
+		if len(words) == 0 || l.End < l.Start {
+			continue
+		}
+		fmt.Fprintf(&b, "[%d,%d]", l.Start, l.End-l.Start)
+		for i, w := range words {
+			text := strings.TrimSpace(w.Word)
+			if i < len(words)-1 {
+				text += " "
+			}
+			fmt.Fprintf(&b, "(%d,%d,0)%s", w.Start, w.End-w.Start, text)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// deezerTextKey 是逐字行与逐行比对文字用的归一形:只留字母和数字、转小写。
+func deezerTextKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func (w deezerWordLine) text() string {
+	parts := make([]string, 0, len(w.Words))
+	for _, x := range w.Words {
+		parts = append(parts, x.Word)
+	}
+	return strings.Join(parts, " ")
+}
+
+// deezerMatchSyncLine 给一行逐字找对应的逐行:deezerWordTrackMaxOffsetMs 内、文字归一后互相
+// 包含的第一行,skip 为真的行不算。找不到返回 -1。
+func deezerMatchSyncLine(w deezerWordLine, lines []deezerSyncLine, skip func(int) bool) int {
+	t := deezerTextKey(w.text())
+	if t == "" {
+		return -1
+	}
+	for i, l := range lines {
+		if skip != nil && skip(i) {
+			continue
+		}
+		r := deezerTextKey(l.Line)
+		if r == "" {
+			continue
+		}
+		d := l.Milliseconds - w.Start
+		if d < 0 {
+			d = -d
+		}
+		if d <= deezerWordTrackMaxOffsetMs && (strings.Contains(r, t) || strings.Contains(t, r)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// deezerWordTrackAgrees 判逐字轨能不能用:它跟逐行轨是两份独立的时间轴,多数只差几百毫秒,
+// 但偶尔整份错位(行序对、时刻全乱,或中段越走越偏)。逐字轨里能用 deezerMatchSyncLine
+// 找到对应逐行的行,要占到 deezerWordTrackMinAgreement 才用。纯函数,便于单测。
+func deezerWordTrackAgrees(words []deezerWordLine, lines []deezerSyncLine) bool {
+	if len(words) == 0 {
+		return false
+	}
+	agree := 0
+	for _, w := range words {
+		if deezerMatchSyncLine(w, lines, nil) >= 0 {
+			agree++
+		}
+	}
+	return float64(agree) >= float64(len(words))*deezerWordTrackMinAgreement
+}
+
+// deezerBuildTranslation 把 lineTranslated 拼成译文 LRC。words 非空(逐字轨已通过
+// deezerWordTrackAgrees)时,每句译文挂到对应逐字行的起点、每句只挂一次 —— 界面显示的是
+// 逐字轨的行,译文按时间就近配行,挂在逐行轨的时刻上会差出几百毫秒、配不上;words 为空时
+// 用逐行轨的时间戳。译文跟原文一样的行(人名、拟声词)不收;整份的主要文字系统跟目标语言
+// 对不上时整份不要(deezerTranslationFitsLanguage)。纯函数,便于单测。
+func deezerBuildTranslation(lines []deezerSyncLine, words []deezerWordLine, target string) string {
+	translated := func(l deezerSyncLine) string {
+		text := strings.TrimSpace(l.Line)
+		tr := strings.TrimSpace(l.LineTranslated)
+		if text == "" || tr == "" || strings.EqualFold(tr, text) {
+			return ""
+		}
+		return tr
+	}
+	var b, all strings.Builder
+	emit := func(ts, tr string) {
+		b.WriteString(ts)
+		b.WriteString(tr)
+		b.WriteString("\n")
+		all.WriteString(tr)
+		all.WriteString("\n")
+	}
+	if len(words) > 0 {
+		used := make([]bool, len(lines))
+		for _, w := range words {
+			i := deezerMatchSyncLine(w, lines, func(i int) bool { return used[i] })
+			if i < 0 {
+				continue
+			}
+			used[i] = true
+			if tr := translated(lines[i]); tr != "" {
+				emit(formatLRCTime(w.Start), tr)
+			}
+		}
+	} else {
+		for _, l := range lines {
+			ts := strings.TrimSpace(l.LRCTimestamp)
+			if tr := translated(l); ts != "" && tr != "" {
+				emit(ts, tr)
+			}
+		}
+	}
+	if b.Len() == 0 || !deezerTranslationFitsLanguage(all.String(), target) {
+		return ""
+	}
+	return b.String()
+}
+
+// deezerTranslationFitsLanguage:译文的主要文字系统是不是目标语言会用的那几套
+// (targetScripts)。挡的是「目标是中文、Deezer 没有中文就退回英文」这一类;目标本身是
+// 拉丁字母语言时,退回的英文分辨不出来。
+func deezerTranslationFitsLanguage(tr, target string) bool {
+	s := dominantScript(tr)
+	for _, t := range targetScripts(target) {
+		if s == t {
+			return true
+		}
+	}
+	return false
 }
 
 // deezerBuildLRC 把 synchronizedLines 拼成逐行 LRC。只认**同时**有时间戳和正文的行:
@@ -434,13 +642,13 @@ func deezerIsLyricsNotFound(errs string) bool {
 	return strings.Contains(errs, "LyricsNotFoundError") || strings.Contains(errs, "Lyrics does not exists")
 }
 
-// deezerFetchLyrics 取一首歌的歌词。返回(逐行 LRC, 纯文本, error)——两者都可能为空。
+// deezerFetchLyrics 取一首歌的歌词,各项都可能为空(见 deezerLyricsPayload)。
 // JWT 被拒(401)时清掉重换一次,只重试一次。
-func deezerFetchLyrics(ctx context.Context, trackID string) (string, string, error) {
+func deezerFetchLyrics(ctx context.Context, trackID string) (deezerLyricsPayload, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		jwt := deezerEnsureJWT(ctx)
 		if jwt == "" {
-			return "", "", fmt.Errorf("no anonymous jwt")
+			return deezerLyricsPayload{}, fmt.Errorf("no anonymous jwt")
 		}
 		body, err := json.Marshal(map[string]any{
 			"operationName": "SynchronizedTrackLyrics",
@@ -448,18 +656,21 @@ func deezerFetchLyrics(ctx context.Context, trackID string) (string, string, err
 			"query":         deezerLyricsQuery,
 		})
 		if err != nil {
-			return "", "", err
+			return deezerLyricsPayload{}, err
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, deezerPipeAPI, strings.NewReader(string(body)))
 		if err != nil {
-			return "", "", err
+			return deezerLyricsPayload{}, err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+jwt)
+		if lang := deezerAcceptLanguage(); lang != "" {
+			req.Header.Set("Accept-Language", lang)
+		}
 		resp, err := doHTTPTracked(lyricHTTPClient(deezerHTTPTimeout), req)
 		if err != nil {
-			return "", "", err
+			return deezerLyricsPayload{}, err
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		status := resp.StatusCode
@@ -469,37 +680,47 @@ func deezerFetchLyrics(ctx context.Context, trackID string) (string, string, err
 			continue
 		}
 		if status != http.StatusOK {
-			return "", "", fmt.Errorf("status %d", status)
+			return deezerLyricsPayload{}, fmt.Errorf("status %d", status)
 		}
 		if readErr != nil {
-			return "", "", readErr
+			return deezerLyricsPayload{}, readErr
 		}
 		var out struct {
 			Errors json.RawMessage `json:"errors"`
 			Data   struct {
 				Track struct {
 					Lyrics struct {
-						Text              string           `json:"text"`
-						SynchronizedLines []deezerSyncLine `json:"synchronizedLines"`
+						Text                        string           `json:"text"`
+						SynchronizedLines           []deezerSyncLine `json:"synchronizedLines"`
+						SynchronizedWordByWordLines []deezerWordLine `json:"synchronizedWordByWordLines"`
 					} `json:"lyrics"`
 				} `json:"track"`
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return "", "", err
+			return deezerLyricsPayload{}, err
 		}
 		if deezerHasError(out.Errors) {
 			errs := string(out.Errors)
 			if deezerIsLyricsNotFound(errs) {
 				// 正常结果:这首歌 Deezer 没有词。安静返回空。
-				return "", "", nil
+				return deezerLyricsPayload{}, nil
 			}
-			return "", "", fmt.Errorf("graphql error %s", strings.TrimSpace(errs))
+			return deezerLyricsPayload{}, fmt.Errorf("graphql error %s", strings.TrimSpace(errs))
 		}
 		ly := out.Data.Track.Lyrics
-		return deezerBuildLRC(ly.SynchronizedLines), strings.TrimSpace(ly.Text), nil
+		var words []deezerWordLine
+		if deezerWordTrackAgrees(ly.SynchronizedWordByWordLines, ly.SynchronizedLines) {
+			words = ly.SynchronizedWordByWordLines
+		}
+		return deezerLyricsPayload{
+			lrc:   deezerBuildLRC(ly.SynchronizedLines),
+			plain: strings.TrimSpace(ly.Text),
+			yrc:   deezerBuildYRC(words),
+			tr:    deezerBuildTranslation(ly.SynchronizedLines, words, features().LyricsTranslationLanguage),
+		}, nil
 	}
-	return "", "", fmt.Errorf("jwt refresh exhausted")
+	return deezerLyricsPayload{}, fmt.Errorf("jwt refresh exhausted")
 }
 
 // resolveDeezerLyric:①搜索(单次请求,10 条);②身份闸 + 时长闸淘汰、按分数稳定排序;
@@ -551,22 +772,20 @@ func resolveDeezerLyric(ctx context.Context, artist, title, album string, durati
 		candidates = candidates[:deezerMaxCandidatesToFetch]
 	}
 
-	type fetched struct{ synced, plain string }
-	got := make([]fetched, len(candidates))
+	got := make([]deezerLyricsPayload, len(candidates))
 	var wg sync.WaitGroup
 	for i, c := range candidates {
 		wg.Add(1)
 		go func(rank int, t deezerTrack) {
 			defer wg.Done()
-			synced, plain, err := deezerFetchLyrics(ctx, strconv.FormatInt(t.ID, 10))
+			p, err := deezerFetchLyrics(ctx, strconv.FormatInt(t.ID, 10))
 			if err != nil {
 				return
 			}
-			if isTimedLRC(synced) {
-				got[rank] = fetched{synced: synced}
-				return
+			if !isTimedLRC(p.lrc) {
+				p = deezerLyricsPayload{plain: p.plain}
 			}
-			got[rank] = fetched{plain: plain}
+			got[rank] = p
 		}(i, c.track)
 	}
 	wg.Wait()
@@ -579,8 +798,10 @@ func resolveDeezerLyric(ctx context.Context, artist, title, album string, durati
 		}
 	}
 	for rank, f := range got {
-		if f.synced != "" {
-			return build(rank, f.synced, false)
+		if f.lrc != "" {
+			r := build(rank, f.lrc, false)
+			r.yrc, r.tr = f.yrc, f.tr
+			return r
 		}
 	}
 	for rank, f := range got {

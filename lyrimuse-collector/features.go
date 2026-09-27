@@ -50,11 +50,11 @@ const (
 	lyricSourceLyricFind = "lyricfind"
 	// 酷我音乐(加,见 kuwo.go 头注)。接口契约从公开的第三方开源实现
 	// 逆向出来,实测搜索排序完全不可信(原版录音室版本常年不进 top10),接入时已经补了
-	// 自己的重新打分排序,不是简单照搬。只有逐行,没有逐字/译文,覆盖率同 amll/lyricfind
+	// 自己的重新打分排序,不是简单照搬。逐行 + 逐字(lrcx)+ 从正文摘出的中文译文,覆盖率同 amll/lyricfind
 	// 一档,是"锦上添花"的兜底,不是主力源。
 	lyricSourceKuwo = "kuwo"
 	// 咪咕音乐(加,见 migu.go 头注)。跟酷我相反,搜索排序基本可信(原版排第一),
-	// 只套身份闸淘汰、不重新打分;逐行 LRC + 外语歌的中文译文,没有逐字。华语曲库覆盖率预期
+	// 只套身份闸淘汰、不重新打分;逐行 LRC + 逐字(MRC)+ 外语歌的中文译文。华语曲库覆盖率预期
 	// 不低,但仍先按"锦上添花"档排在默认顺序末尾——三处顺序必须一致(见 lyricsSourceDefaultOrder)。
 	lyricSourceMigu = "migu"
 	// Deezer(加,见 deezer.go 头注)。跟 lyricfind **数据同源**:Deezer 的词
@@ -62,7 +62,7 @@ const (
 	// 第二条管道(那家原本只有 YouTube Music 一条路,YTM 一改版 / 一被地区限制,整家的数据
 	// 就都没了);② Deezer 是法国公司,法语曲库覆盖比现有九源都好——接入实测里三首"九源
 	// 只有 lrclib/netease 给得出低分候选"的法语小众歌,它都给出了逐行歌词。取词走
-	// pipe.deezer.com 的 GraphQL + 匿名 JWT(不需要账号)。只有逐行,没有逐字/译文。
+	// pipe.deezer.com 的 GraphQL + 匿名 JWT(不需要账号)。逐行之外带逐字(只在跟逐行轨对得上时用)和按译文语言设置取的译文。
 	// 默认顺序排在末尾的理由跟前四个新源一样:样本还不够,不是覆盖率结论。
 	lyricSourceDeezer = "deezer"
 	// Apple Music 官方歌词(加,见 applemusic.go 头注)。跟前十个源都不同:

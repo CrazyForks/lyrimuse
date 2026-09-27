@@ -19,7 +19,7 @@ import (
 const appleTTMLSample = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" itunes:timing="Word" xml:lang="es"><head><metadata><ttm:agent type="person" xml:id="v1"/></metadata></head><body dur="2:24.000"><div begin="7.439" end="10.928" itunes:songPart="Verse"><p begin="7.439" end="9.027" itunes:key="L1" ttm:agent="v1"><span begin="7.439" end="7.619">De</span> <span begin="7.619" end="7.759">la</span> <span begin="7.759" end="8.037">rumba</span></p><p begin="9.341" end="10.928" itunes:key="L2" ttm:agent="v1"><span begin="9.341" end="9.581">Casi</span> <span begin="9.581" end="9.741">ni</span></p></div></body></tt>`
 
 func TestApplemusicParseTTMLOffsetTime(t *testing.T) {
-	lrc, yrc, _, ok := applemusicParseTTML(appleTTMLSample)
+	lrc, yrc, _, _, ok := applemusicParseTTML(appleTTMLSample)
 	if !ok {
 		t.Fatal("解析失败")
 	}
@@ -130,7 +130,7 @@ func TestApplemusicCandidateScore(t *testing.T) {
 func TestApplemusicCoverTemplateSubstitution(t *testing.T) {
 	var s applemusicSong
 	s.Attributes.Artwork.URL = "https://example.com/{w}x{h}bb.{f}"
-	if got := s.cover(); got != "https://example.com/1000x1000bb.jpg" {
+	if got := s.cover(); got != "https://example.com/10000x10000bb.jpg" {
 		t.Errorf("artwork 模板替换不对:%q", got)
 	}
 	var empty applemusicSong
@@ -256,7 +256,7 @@ func TestApplemusicCoverReplacesAllPlaceholders(t *testing.T) {
 		// 留一个花括号在 URL 里,整条链接直接 400,封面永远加载不出来。
 		t.Fatalf("占位符没替换干净: %s", got)
 	}
-	if got != "https://is1-ssl.mzstatic.com/image/thumb/Music6/v4/x/y.jpg/1000x1000bb.jpg" {
+	if got != "https://is1-ssl.mzstatic.com/image/thumb/Music6/v4/x/y.jpg/10000x10000bb.jpg" {
 		t.Fatalf("替换结果不对: %s", got)
 	}
 	if (applemusicSong{}).cover() != "" {

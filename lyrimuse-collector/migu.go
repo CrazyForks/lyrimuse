@@ -39,14 +39,16 @@ import (
 // 下游既有的署名处理);② 译文 LRC 顶着同一套元数据头,同样要剥。
 //
 // 没有时长字段(搜索结果只有码率/文件大小),sourceReportedDurationSecs 留 0 = 该项不
-// 参与打分,跟 amll 一样;`albums` 对不少曲目为空,专辑参与身份闸时按空处理。只有逐行,
-// 没有逐字(`mrcurl` 字段存在但实测样本里都是空的,格式也是加密的,先不碰)。
+// 参与打分,跟 amll 一样;`albums` 对不少曲目为空,专辑参与身份闸时按空处理。逐字轨来自
+// 搜索结果里的 `mrcurl`(加密的 MRC 文件),只给选中的那一条拉,解密与转换见 migumrc.go。
 //
 // 合规提醒:这是网页/客户端接口、非公开 API 文档,"可能随时失效、要求验证码或发生变更"
 // ——跟 kuwo.go / musixmatch.go 同一类风险,不是新引入一种风险类别。healthcheck 走
 // enabledLyricSourceNames()(见 enrich.go lyricSourceNames),接进去自动被覆盖。
 type miguResult struct {
 	lyrics, tr, title, artist, album string
+	// yrc:MRC 解出的逐字轨(migumrc.go),没有 mrcurl 或解不开就是空串。
+	yrc string
 	// cover:搜索结果自带 imgItems(三档尺寸),不用再多发请求——见 miguCoverURL。拿不到
 	// 就留空,交给 enrich.go 的 coverOrFallback 退到 Apple 封面。
 	cover string
@@ -85,6 +87,7 @@ type miguSearchItem struct {
 	CopyrightID string `json:"copyrightId"`
 	LyricURL    string `json:"lyricUrl"` // 逐行 LRC 文件的直链;为空 = 这条没有歌词
 	TrcURL      string `json:"trcUrl"`   // 中文译文 LRC 的直链;外语歌才有,多数为空
+	MrcURL      string `json:"mrcurl"`   // 逐字歌词(加密 MRC)的直链;没有逐字时为空
 	Singers     []struct {
 		Name string `json:"name"`
 	} `json:"singers"`
@@ -329,6 +332,7 @@ func resolveMiguLyric(ctx context.Context, artist, title, album string, _ float6
 				r.tr = tr
 			}
 		}
+		r.yrc = miguFetchMRCYRC(ctx, it.MrcURL)
 		return r
 	}
 	return miguResult{}

@@ -83,8 +83,8 @@ func loadCoverImage(ctx context.Context, coverURL string) image.Image {
 	small := coverURL
 	referer := "https://music.163.com/"
 	if strings.Contains(coverURL, "music.126.net") || strings.Contains(coverURL, "music.127.net") {
-		if i := strings.Index(small, "?param="); i >= 0 {
-			small = small[:i]
+		if i := strings.Index(small, "?"); i >= 0 {
+			small = small[:i] // 摘掉 ?param= 或 neteaseCoverQuery 那一串
 		}
 		small += "?param=64y64" // 网易云 CDN 支持按需缩图,省流量
 	} else if strings.Contains(coverURL, "qq.com") {

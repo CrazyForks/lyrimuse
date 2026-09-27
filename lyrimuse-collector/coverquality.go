@@ -311,7 +311,14 @@ func coverURLIntendedEdge(coverURL string) int {
 	if u == "" {
 		return 0
 	}
-	// 网易云:`?param=800y800`(也见过 `?param=800x800`)。
+	// 网易云:`?param=800y800`(也见过 `?param=800x800`),或 neteaseCoverQuery 的 `thumbnail=3000y3000`。
+	// thumbnail 按原图封顶,读出来的是上限而不是实际尺寸 —— 跟 param 一样,这里只用来判「候选比设备
+	// 封面大不大」,设备封面进到这一步时都小于 deviceCoverTrustedMinEdge。
+	if q := strings.Index(u, "?"); q >= 0 && strings.Contains(u, "music.126.net") {
+		if i := strings.Index(u[q:], "thumbnail="); i >= 0 {
+			u = u[:q] + "?param=" + u[q+i+len("thumbnail="):]
+		}
+	}
 	if i := strings.Index(u, "?param="); i >= 0 {
 		spec := u[i+len("?param="):]
 		if j := strings.IndexAny(spec, "&#"); j >= 0 {

@@ -22,6 +22,7 @@ import (
 //	<p begin="00:26.510" ttm:agent="v1">        —— 每一行明确归属
 //	  <span begin="00:26.510" end="00:26.740">没</span>   —— 逐字
 //	  <span ttm:role="x-translation" xml:lang="zh-CN">…</span>  —— 内嵌译文
+//	  <span ttm:role="x-roman">…</span>                          —— 内嵌罗马音(整行一段,不带时间)
 //
 // LRC / Enhanced LRC(A2) / 网易云 YRC / QQ QRC 四种格式在**规范层面**都装不下演唱者
 // 信息(AMLL 官方格式对照表里 "Native background/duet" 一列只有 TTML 和 .lys 是 Yes),
@@ -49,10 +50,17 @@ const (
 	// 逐字填色同一时刻有两个词在亮。我们还没有"背景人声"这个显示概念,先如实丢掉。
 	amllRoleBackground  = "x-bg"
 	amllRoleTranslation = "x-translation"
+	// amllRoleRoman:内嵌罗马音。它跟译文一样是整行附属内容,不能当成一个词并进正文。
+	amllRoleRoman = "x-roman"
 )
 
 type amllResult struct {
 	lrc, yrc, tr string
+	// roma:内嵌罗马音拼成的逐行 LRC,跟 lrc 同一套时间戳。
+	roma string
+	// platform:命中的是哪个平台目录(am-lyrics / spotify-lyrics / ncm-lyrics / qq-lyrics)。候选借封面用,
+	// 见 enrich.go 组装 amll 候选那段。
+	platform string
 	// hasDuet:这份 TTML 里出现了两个及以上的非 group 演唱者。只用于日志,选源不看它。
 	hasDuet bool
 }
@@ -305,10 +313,11 @@ func amllSpeakerPrefixes(agents []ttmlAgent) map[string]string {
 	return out
 }
 
-// flattenTTMLLine 把一行的有序孩子拆成「逐字词」和「译文」两摊。
+// flattenTTMLLine 把一行的有序孩子拆成「逐字词」「译文」「罗马音」三摊。
 // 背景人声整枝跳过(见 amllRoleBackground);span 之间的字面文本(词间空白)挂到**前一个
-// 词**的尾巴上,见 ttmlWord 的注释。
-func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation *string) {
+// 词**的尾巴上,见 ttmlWord 的注释。带角色的 span 一律不进逐字词:没认出的角色落进 default
+// 会被当成一个词拼进正文。
+func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation, roman *string) {
 	for _, k := range kids {
 		if k.Span == nil {
 			appendTTMLGap(words, k.Text)
@@ -322,8 +331,14 @@ func flattenTTMLLine(kids []ttmlNode, words *[]ttmlWord, translation *string) {
 			if *translation == "" {
 				*translation = strings.TrimSpace(sp.text())
 			}
+		case sp.Role == amllRoleRoman:
+			if *roman == "" {
+				*roman = strings.TrimSpace(sp.text())
+			}
+		case sp.Role != "":
+			continue
 		case sp.hasSpanKid():
-			flattenTTMLLine(sp.Kids, words, translation)
+			flattenTTMLLine(sp.Kids, words, translation, roman)
 		default:
 			*words = append(*words, ttmlWord{begin: sp.Begin, end: sp.End, text: sp.text()})
 		}
@@ -383,14 +398,14 @@ func trimTTMLWordEdges(words []ttmlWord) []ttmlWord {
 	return words
 }
 
-// parseAMLLTTML 把一份 TTML 转成我们的三件套(整行 LRC / 逐字 YRC / 译文 LRC)。
+// parseAMLLTTML 把一份 TTML 转成整行 LRC / 逐字 YRC / 译文 LRC / 罗马音 LRC。
 func parseAMLLTTML(raw string) (amllResult, bool) {
 	var doc ttmlDoc
 	if err := xml.Unmarshal([]byte(raw), &doc); err != nil {
 		return amllResult{}, false
 	}
 	prefixes := amllSpeakerPrefixes(doc.Agents)
-	var lrc, yrc, tr strings.Builder
+	var lrc, yrc, tr, roma strings.Builder
 	lines, distinctPersons := 0, map[string]bool{}
 	for _, div := range doc.Divs {
 		for _, ln := range div.Lines {
@@ -399,8 +414,8 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 				continue
 			}
 			var words []ttmlWord
-			translation := ""
-			flattenTTMLLine(ln.Kids, &words, &translation)
+			translation, roman := "", ""
+			flattenTTMLLine(ln.Kids, &words, &translation, &roman)
 			words = trimTTMLWordEdges(words)
 
 			prefix := ""
@@ -425,6 +440,9 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 			if translation != "" {
 				tr.WriteString(formatLRCTime(start) + translation + "\n")
 			}
+			if roman != "" {
+				roma.WriteString(formatLRCTime(start) + roman + "\n")
+			}
 			if w := buildYRCLine(start, parseTTMLTime(ln.End), prefix, words); w != "" {
 				yrc.WriteString(w + "\n")
 			}
@@ -437,6 +455,7 @@ func parseAMLLTTML(raw string) (amllResult, bool) {
 		lrc:     lrc.String(),
 		yrc:     yrc.String(),
 		tr:      tr.String(),
+		roma:    roma.String(),
 		hasDuet: len(distinctPersons) >= 2,
 	}, true
 }
@@ -451,14 +470,18 @@ func ttmlWordsText(words []ttmlWord) string {
 	return b.String()
 }
 
-// ttmlLiteralText 是一个元素里的全部字面文本(含子 span),给「这一行没有逐字数据」兜底。
+// ttmlLiteralText 是一个元素里的正文字面文本(含子 span),给「这一行没有逐字数据」兜底。
+// 带角色的 span(背景人声 / 译文 / 罗马音)不算正文,跳过。
 func ttmlLiteralText(kids []ttmlNode) string {
 	var b strings.Builder
 	for _, k := range kids {
-		if k.Span == nil {
+		switch {
+		case k.Span == nil:
 			b.WriteString(k.Text)
-		} else {
-			b.WriteString(k.Span.text())
+		case k.Span.Role != "":
+			continue
+		default:
+			b.WriteString(ttmlLiteralText(k.Span.Kids))
 		}
 	}
 	return b.String()
@@ -586,6 +609,7 @@ func amllLyric(ctx context.Context, neteaseID, qqID, appleCatalogID, spotifyTrac
 			continue
 		}
 		if r, ok := parseAMLLTTML(raw); ok {
+			r.platform = try.dir
 			return r
 		}
 	}

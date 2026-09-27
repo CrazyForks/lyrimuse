@@ -203,7 +203,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "qq",
@@ -234,7 +235,8 @@
             "points": 250
           }
         ],
-        "has_word_timing": true
+        "has_word_timing": true,
+        "has_romanization": true
       },
       {
         "source": "soda",
@@ -349,7 +351,8 @@
             "kind": "consensus",
             "points": 250
           }
-        ]
+        ],
+        "has_romanization": true
       },
       {
         "source": "lrclib",

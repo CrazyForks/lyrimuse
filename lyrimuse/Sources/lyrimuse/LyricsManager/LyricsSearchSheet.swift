@@ -963,24 +963,13 @@ struct LyricsSearchSheet: View {
 
     // 封面缩略图——没有 URL(这个源本来就没给,比如 LRCLIB 恒无)或者加载失败/加载中,
     // 一律显示同一个占位图标,不特意区分"没有"和"加载中"这两种状态,用户不需要关心
-    // 这个区别。
+    // 这个区别。候选封面地址是各源的原图(可到 3000px),必须走 CachedImage 的缩略档在解码期
+    // 降采样,别换回 AsyncImage:那会整张解码,十几条候选就是几百 MB。
     @ViewBuilder
     private func coverThumbnail(_ url: URL?, size: CGFloat) -> some View {
-        Group {
-            if let url {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        coverPlaceholder
-                    }
-                }
-            } else {
-                coverPlaceholder
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        CachedImage(url: url) { coverPlaceholder }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 
     private var coverPlaceholder: some View {

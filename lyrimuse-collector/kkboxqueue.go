@@ -429,17 +429,29 @@ type kkboxImage struct {
 	URL string `json:"url"`
 }
 
-// albumCover:专辑封面地址,优先 600 那档;没有就空串。
+// albumCover:专辑封面地址,换成原图(见 kkboxOriginalImage);没有就空串。
 func (t kkboxTrack) albumCover() string {
 	if t.Album == nil || t.Album.Images == nil {
 		return ""
 	}
 	for _, img := range []*kkboxImage{t.Album.Images.Large, t.Album.Images.Medium} {
 		if img != nil && img.URL != "" {
-			return img.URL
+			return kkboxOriginalImage(img.URL)
 		}
 	}
 	return ""
+}
+
+// kkboxOriginalImage:图床地址末尾的 `/fit/600x600.jpg` 换成 `/original.jpg` 拿原图(实测 5000 / 1000);
+// fit 档比原图大时是放大出来的,3000 起回 404。不是这个形状的地址原样返回。
+func kkboxOriginalImage(u string) string {
+	if !strings.Contains(u, "i.kfs.io/") {
+		return u
+	}
+	if i := strings.LastIndex(u, "/fit/"); i > 0 && strings.HasSuffix(u, ".jpg") {
+		return u[:i] + "/original.jpg"
+	}
+	return u
 }
 
 // hasOwnArtist:曲目表里这一条自己带着歌手(歌单、歌曲集、自动续播都带;专辑接口的不带)。

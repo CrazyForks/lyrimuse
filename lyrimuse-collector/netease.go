@@ -895,11 +895,7 @@ func resolveNeteaseInfo(ctx context.Context, artist, title, album string, durati
 		}
 	}
 	if picURL != "" {
-		// 800 是网易云这个图床实测的真实天花板(拿两张不同封面各测一轮:
-		// 800 给 800,再往上请求 1000/1200/2000 全部被 CDN 静默钳到 800、字节数跟 800
-		// 完全相同)。悬浮歌词窗口那张满幅封面卡是 820px(@2x),600 拉到 820 是 1.37 倍
-		// 放大,肉眼可见模糊,必须取到网易云能给的实际上限。
-		info.Cover = picURL + "?param=800y800"
+		info.Cover = picURL + neteaseCoverQuery
 	}
 	// 带时间轴的 LRC 歌词，网页跟实时进度条同步高亮滚动。一次老接口就能拿齐原文(lrc)+
 	// 中文翻译(tlyric)+罗马音(romalrc)，三者时间轴对齐；逐字(yrc，词级)走 v1 接口、只有
@@ -1611,4 +1607,49 @@ func bestAlbumTrackByDurationDetailed(tracks []albumTrack, durationSecs float64)
 		return "", 0, false
 	}
 	return best, bestDiff, true
+}
+
+// neteaseCoverQuery 是网易云封面的取图参数:thumbnail 按原图封顶(不放大、保持比例),所以就是原图尺寸,
+// 3000 封顶;type=jpg 把 PNG 原图转成 JPEG —— 实测有 3000px 的 PNG 原图 9.3MB,转完 1.4MB。别换成
+// 不带参数的原图地址:那样 PNG 原图照原样下发。取色(loadCoverImage)和清晰度判定
+// (coverURLIntendedEdge)都认这个形状,改写法时三处一起改。
+const neteaseCoverQuery = "?imageView&thumbnail=3000y3000&type=jpg&quality=90"
+
+// neteaseCoverUpgrade 把存量的 `?param=WxH` 网易云封面地址换成 neteaseCoverQuery:同一张图的另一档,
+// 不是换封面。不是网易云图床、或已经是这个形状的,原样返回。
+func neteaseCoverUpgrade(u string) string {
+	if !strings.Contains(u, ".music.126.net/") {
+		return u
+	}
+	i := strings.Index(u, "?param=")
+	if i <= 0 {
+		return u
+	}
+	return u[:i] + neteaseCoverQuery
+}
+
+// migrateNeteaseCoverURLs:存量条目的网易云封面地址换成 neteaseCoverQuery(同一张图的另一档,不是换封面,
+// 不动 CoverSource / CoverAlbum / AccentColor)。纯字符串替换,不发请求;挂水位闸,只跑一次。
+func migrateNeteaseCoverURLs() {
+	if migrationDone(migrationNeteaseCoverURLs, migrationNeteaseCoverURLsVersion) {
+		return
+	}
+	enrichMu.Lock()
+	n := 0
+	for k, e := range enrichCache {
+		if u := neteaseCoverUpgrade(e.CoverURL); u != e.CoverURL {
+			e.CoverURL = u
+			enrichCache[k] = e
+			n++
+		}
+	}
+	if n > 0 {
+		enrichDirty = true // 不置脏 saveEnrichCache 不写盘
+	}
+	enrichMu.Unlock()
+	if n > 0 {
+		log.Printf("netease cover urls: upgraded %d entries", n)
+		saveEnrichCache()
+	}
+	markMigrationDone(migrationNeteaseCoverURLs, migrationNeteaseCoverURLsVersion)
 }

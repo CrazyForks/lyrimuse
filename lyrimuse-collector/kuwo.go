@@ -33,9 +33,9 @@ import (
 // 采纳最终仍由 enrich.go 的 scoreLyricCandidateDetailed 把关,这里只负责"尽力挑一份
 // 靠谱候选给下游"。
 //
-// 只有逐行 LRC,没有逐字/YRC,也没有社区译文——酷我的 lyric 接口只回 {time,
-// lineLyric},没有别的字段可挖。定位跟 amll/lyricfind 一样,是覆盖率有限的"锦上添花"
-// 兜底档,不是主力源,建议排在 lyricsSourceDefaultOrder 末尾(见 features.go)。
+// 网页端 lyric 接口只回 {time, lineLyric} 的逐行歌词,没有社区译文;逐字另走客户端的
+// lrcx 接口,只给选中的那一条拉(kuwolrcx.go)。定位跟 amll/lyricfind 一样,是覆盖率有限的
+// "锦上添花"兜底档,不是主力源,建议排在 lyricsSourceDefaultOrder 末尾(见 features.go)。
 //
 // 合规提醒:`search.kuwo.cn/r.s` 和 `kuwo.cn/openapi/...` 都是网页端
 // 接口、非公开 API 文档,这类接口"可能随时失效、
@@ -44,6 +44,8 @@ import (
 // lyricSourceNames),这个源接进去之后会被健康检查自动覆盖,不需要单独接线。
 type kuwoResult struct {
 	lyrics, title, artist, album string
+	// yrc:同一首歌的逐字轨(kuwolrcx.go),拉不到就是空串。已去掉烘入的译文行。
+	yrc string
 	// durationSecs:酷我搜索结果自报的这首歌时长(秒),0=没给/解析不动。透传用,
 	// 见 lyricCandidate.sourceReportedDurationSecs。
 	durationSecs float64
@@ -92,15 +94,15 @@ type kuwoSearchItem struct {
 }
 
 // kuwoCoverURL 把搜索结果自带的 web_albumpic_short(形如
-// "120/38/70/3416909732.jpg",首段是像素尺寸)拼成能直接访问的封面 URL,顺手把首段
-// 换成 500 拿大图(实测 200/500 都能 200)。拿不到就返回空串,不是错误。
+// "120/38/70/3416909732.jpg",首段是像素尺寸)拼成能直接访问的封面 URL,首段换成 0 拿原图
+// (实测 2048;填具体像素数会按要求缩放)。拿不到就返回空串,不是错误。
 func kuwoCoverURL(short string) string {
 	short = strings.TrimSpace(short)
 	if short == "" {
 		return ""
 	}
 	if parts := strings.SplitN(short, "/", 2); len(parts) == 2 {
-		short = "500/" + parts[1]
+		short = "0/" + parts[1]
 	}
 	return "https://img1.kuwo.cn/star/albumcover/" + short
 }
@@ -372,6 +374,7 @@ func resolveKuwoLyric(ctx context.Context, artist, title, album string, duration
 		return kuwoResult{
 			lyrics: f.lrc, title: f.it.SongName, artist: f.it.Artist, album: f.it.Album,
 			durationSecs: kuwoDurationSecs(f.it.Duration), cover: kuwoCoverURL(f.it.WebAlbumPicShort),
+			yrc: kuwoFetchLrcxYRC(ctx, kuwoMusicID(f.it.MusicRID)),
 		}
 	}
 	return kuwoResult{}

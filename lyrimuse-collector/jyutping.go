@@ -353,3 +353,30 @@ func jyutpingLRC(lyrics string) string {
 	}
 	return assembleTranslationLRC(lines, texts, len(lines)).lrc
 }
+
+// mandarinOnlyInitials:普通话拼音有、粤拼没有的声母。粤拼的声母只有
+// b p m f d t n l g k ng h gw kw w z c s j。
+var mandarinOnlyInitials = []string{"zh", "ch", "sh", "x", "q", "r"}
+
+// mandarinPinyinMinShare:用 mandarinOnlyInitials 开头的音节占到这个比例,就当它是普通话拼音。普通话歌词
+// 里这几个声母很常见;粤拼(带不带声调数字都一样)一个都不会有。
+const mandarinPinyinMinShare = 0.08
+
+// looksMandarinPinyin:这份罗马音是普通话拼音,不是粤拼。
+func looksMandarinPinyin(roma string) bool {
+	total, mandarin := 0, 0
+	for _, f := range strings.Fields(strings.ToLower(lrcTimestampRe.ReplaceAllString(roma, " "))) {
+		f = strings.Trim(f, ",.!?;:'\"()")
+		if f == "" || !unicode.IsLetter(rune(f[0])) {
+			continue
+		}
+		total++
+		for _, ini := range mandarinOnlyInitials {
+			if strings.HasPrefix(f, ini) {
+				mandarin++
+				break
+			}
+		}
+	}
+	return total > 0 && float64(mandarin) >= float64(total)*mandarinPinyinMinShare
+}

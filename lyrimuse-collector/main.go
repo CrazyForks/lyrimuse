@@ -389,6 +389,9 @@ func main() {
 	// 存量台语歌补记 SongLanguage、清掉普通话拼音(见 hokkien.go)。夹在 import 与 export 之间:清掉的罗马音由
 	// exportLyricsFiles 同步成删掉 .roma.lrc;排在 migrateManualPickMarks 之前,那一步按最终内容算指纹。
 	startupStep("migrateHokkienSongLanguage", migrateHokkienSongLanguage)
+	// 存量网易云封面换原图档(见 netease.go migrateNeteaseCoverURLs)。排在 refreshEnrichIndex 之前,
+	// App 读的精简索引里也带封面地址。
+	startupStep("migrateNeteaseCoverURLs", migrateNeteaseCoverURLs)
 	startupStep("migrateManualPickMarks", migrateManualPickMarks)
 	startupStep("exportLyricsFiles", exportLyricsFiles)
 	// 判决记录的候选明细挪到旁路目录(decisionstore.go)。必须在 migrateSodaCoverURLs 之后:那道迁移扫的是

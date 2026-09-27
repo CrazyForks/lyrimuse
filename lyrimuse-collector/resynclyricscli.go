@@ -27,7 +27,8 @@ import (
 // 三条约束跟 recheck-cover/recheck-instrumental 完全一致:dry-run 默认、-apply 才真写且
 // 要求常驻实例已停;只处理指定的 key,不做启动时全量扫;人工修正过的(ManualLyrics)一律
 // 跳过。字段写法直接照抄 rescoreLyrics 的那一套(decision/rescore 计数/来源名单都一起补),
-// 只是把"要不要更新歌词族字段"这道闸从"正文变了"放宽成"正文/译文/罗马音有任意一个变了"。
+// 只是把"要不要更新歌词族字段"这道闸从"正文变了"放宽成"正文/译文/罗马音有任意一个变了,
+// 或者多出了缓存里原本没有的逐字"(gainsWordTiming)。
 func runResyncLyricsCLI(args []string) {
 	fs := flag.NewFlagSet("resync-lyrics", flag.ExitOnError)
 	apply := fs.Bool("apply", false, "真正写回缓存;不加就是预演,只打印计划")
@@ -129,14 +130,15 @@ func runResyncLyrics(keys []string, apply bool) int {
 		lyricsSame := picked.Lyrics == e.Lyrics
 		trSame := picked.LyricsTr == e.LyricsTr
 		romaSame := picked.LyricsRoma == e.LyricsRoma
-		if lyricsSame && trSame && romaSame {
+		yrcGained := gainsWordTiming(e, picked)
+		if lyricsSame && trSame && romaSame && !yrcGained {
 			fmt.Println("   没变化:重新解析结果跟缓存里一样")
 			unchanged++
 			continue
 		}
-		fmt.Printf("   %s(%d) -> %s(%d)  歌词%s 译文%s 罗马音%s\n",
+		fmt.Printf("   %s(%d) -> %s(%d)  歌词%s 译文%s 罗马音%s 逐字%s\n",
 			e.LyricsSource, e.LyricsScore, picked.Source, picked.Score,
-			changedMark(!lyricsSame), changedMark(!trSame), changedMark(!romaSame))
+			changedMark(!lyricsSame), changedMark(!trSame), changedMark(!romaSame), changedMark(yrcGained))
 		changed++
 		if !apply {
 			continue
@@ -165,7 +167,7 @@ func runResyncLyrics(keys []string, apply bool) int {
 		}
 		cur.LyricsDecision = buildLyricsDecision(
 			lyricsDecisionPathRescore, artist, title, album, duration, scored, picked,
-			!lyricsSame || !trSame || !romaSame)
+			!lyricsSame || !trSame || !romaSame || yrcGained)
 		traceLyricsDecision(key, cur.LyricsDecision)
 		cur.LyricsDecisionApplied = cur.LyricsDecision
 		cur.Lyrics = picked.Lyrics
