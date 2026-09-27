@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	neturl "net/url"
@@ -363,7 +364,7 @@ func applemusicJWTExpiry(jwt string) time.Time {
 }
 
 var (
-	applemusicJSAssetRe = regexp.MustCompile(`/assets/index~[A-Za-z0-9]+\.js`)
+	applemusicJSAssetRe = regexp.MustCompile(`/assets/[A-Za-z0-9._~-]+\.js`)
 	applemusicJWTRe     = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{50,}\.[A-Za-z0-9_-]{20,}`)
 )
 
@@ -400,9 +401,50 @@ func applemusicExtractJWTs(js string) []string {
 	return out
 }
 
+// applemusicJSAssetMaxTries:一次最多下载几个 bundle 找 token(每个 3MB 量级)。
+const applemusicJSAssetMaxTries = 4
+
+// applemusicTokenParserName:parserdrift.go 里这条路径的名字。
+const applemusicTokenParserName = "apple-music-web-token"
+
+// applemusicDevTokenFetchCooldown:抓 token 失败之后隔多久再抓。一次要下首页(2MB 量级)加最多
+// applemusicJSAssetMaxTries 个 bundle(各 3MB 量级),不冷却的话每解析一首歌都重来一遍。
+const applemusicDevTokenFetchCooldown = 30 * time.Minute
+
+// applemusicDevTokenFailedAt:上次抓 token 失败的时刻。受 applemusicDevTokenFetchMu 保护。
+var applemusicDevTokenFailedAt time.Time
+
+// applemusicJSAssets 从首页里取出所有 `/assets/*.js`,去重后按「index~ 主包 → 其余 index 开头的
+// (index-legacy~ 等) → 其它」排序。token 在主包里,legacy 包里也有一份;只认一种文件名的话 Apple
+// 换一次打包命名就续不上 token。纯函数,便于单测。
+func applemusicJSAssets(home string) []string {
+	rank := func(a string) int {
+		name := strings.TrimPrefix(a, "/assets/")
+		switch {
+		case strings.HasPrefix(name, "index~"):
+			return 0
+		case strings.HasPrefix(name, "index"):
+			return 1
+		default:
+			return 2
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range applemusicJSAssetRe.FindAllString(home, -1) {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	return out
+}
+
 // applemusicFetchDeveloperToken 抓一个能用的 developer token:①取 music.apple.com 的
-// 首页,找到 index~*.js 的路径;②下载那个 bundle;③抽出所有候选 JWT;④逐个拿一个最轻的
-// catalog 请求去验,第一个 200 的就是它。
+// 首页,列出页面引用的 JS bundle(applemusicJSAssets);②按顺序下载;③抽出所有候选 JWT;
+// ④逐个拿一个最轻的 catalog 请求去验,第一个 200 的就是它。一个 bundle 里没有能用的就换下一个。
 //
 // ④ 这一步不能省:光看 JWT 形状分不出哪个是给 amp-api 用的(见 applemusicExtractJWTs)。
 // 验证成本是一次很小的 search 请求,而验过之后这个 token 能用 70 天量级,摊下来可以忽略。
@@ -435,18 +477,38 @@ func applemusicFetchDeveloperToken(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	asset := applemusicJSAssetRe.FindString(home)
-	if asset == "" {
+	assets := applemusicJSAssets(home)
+	if len(assets) == 0 {
+		log.Printf("applemusic: developer token: home page lists no /assets/*.js bundle")
+		noteParserUnrecognized(applemusicTokenParserName, "home page lists no /assets/*.js bundle")
 		return ""
 	}
-	js, ok := get(applemusicWebOrigin + asset)
-	if !ok {
-		return ""
-	}
-	for _, tok := range applemusicExtractJWTs(js) {
-		if applemusicDevTokenWorks(ctx, tok) {
-			return tok
+	tried := map[string]bool{}
+	read := 0
+	for i, asset := range assets {
+		if i >= applemusicJSAssetMaxTries || ctx.Err() != nil {
+			break
 		}
+		js, ok := get(applemusicWebOrigin + asset)
+		if !ok {
+			continue
+		}
+		read++
+		for _, tok := range applemusicExtractJWTs(js) {
+			if tried[tok] {
+				continue
+			}
+			tried[tok] = true
+			if applemusicDevTokenWorks(ctx, tok) {
+				noteParserRecognized(applemusicTokenParserName)
+				return tok
+			}
+		}
+	}
+	log.Printf("applemusic: developer token: no working token in %d bundle(s)", min(len(assets), applemusicJSAssetMaxTries))
+	// 一个 bundle 都没下成是网络问题,不算认不出。
+	if ctx.Err() == nil && read > 0 {
+		noteParserUnrecognized(applemusicTokenParserName, fmt.Sprintf("no working JWT in %d bundle(s), %d candidate(s)", min(len(assets), applemusicJSAssetMaxTries), len(tried)))
 	}
 	return ""
 }
@@ -485,11 +547,19 @@ func applemusicEnsureDeveloperToken(ctx context.Context) string {
 	if tok := applemusicLoadDevTokenFile(); tok != "" {
 		return tok
 	}
-	tok := applemusicFetchDeveloperToken(ctx)
-	if tok == "" {
+	if !applemusicDevTokenFailedAt.IsZero() && time.Since(applemusicDevTokenFailedAt) < applemusicDevTokenFetchCooldown {
 		applemusicSetLastFailureReason(lyricFailureReasonAppleMusicNoDevToken)
 		return ""
 	}
+	tok := applemusicFetchDeveloperToken(ctx)
+	if tok == "" {
+		if ctx.Err() == nil {
+			applemusicDevTokenFailedAt = time.Now()
+		}
+		applemusicSetLastFailureReason(lyricFailureReasonAppleMusicNoDevToken)
+		return ""
+	}
+	applemusicDevTokenFailedAt = time.Time{}
 	exp := applemusicJWTExpiry(tok)
 	if exp.IsZero() {
 		exp = time.Now().Add(24 * time.Hour)

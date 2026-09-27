@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -295,5 +296,21 @@ func TestApplemusicMarkTokenRejected(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("凭据文件权限要是 0600: %v %v", info.Mode().Perm(), err)
+	}
+}
+
+func TestApplemusicJSAssetsOrdersMainBundleFirst(t *testing.T) {
+	home := `<script src="/assets/polyfills-legacy~4ac4658e10.js"></script>` +
+		`<script src="/assets/index-legacy~dc41388d00.js"></script>` +
+		`<script src="/includes/js-cdn/musickit/v3/amp/musickit.js"></script>` +
+		`<script type="module" src="/assets/index~1c4278bfb3.js"></script>` +
+		`<link rel="modulepreload" href="/assets/index~1c4278bfb3.js">`
+	got := applemusicJSAssets(home)
+	want := []string{"/assets/index~1c4278bfb3.js", "/assets/index-legacy~dc41388d00.js", "/assets/polyfills-legacy~4ac4658e10.js"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("assets = %v, want %v", got, want)
+	}
+	if got := applemusicJSAssets(`<script src="/assets/app-main-3f2a.js"></script>`); len(got) != 1 {
+		t.Fatalf("renamed bundle not listed: %v", got)
 	}
 }
