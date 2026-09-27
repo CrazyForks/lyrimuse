@@ -1140,18 +1140,23 @@ public final class BrowserPositionProbe: @unchecked Sendable {
                 end try
             end repeat
             repeat with wi from 1 to winCount
-                set tabCount to count of tabs of window wi
+                -- 取 URL / 数标签页也要在 try 里:扫到一半关掉一枚标签页、或者某页 URL 是空值,都会抛错,
+                -- 没接住的话整次探测直接失败(BrowserTabProbeScript 那份模板同样这么包)。
+                set tabCount to 0
+                try
+                    set tabCount to count of tabs of window wi
+                end try
                 repeat with ti from 1 to tabCount
-                    if (URL of tab ti of window wi) contains "\(urlContains)" then
-                        try
+                    try
+                        if (URL of tab ti of window wi) contains "\(urlContains)" then
                             with timeout of \(probeEventTimeoutSeconds) seconds
                                 set r to \(executeLine)
                             end timeout
                             if r does not contain "NOTFOUND" and r does not contain "|1" then
                                 return r
                             end if
-                        end try
-                    end if
+                        end if
+                    end try
                 end repeat
             end repeat
             return "NOTFOUND"
@@ -1184,6 +1189,8 @@ public final class BrowserPositionProbe: @unchecked Sendable {
         let activeTab = activeTabExpression(family: family, windowIndex: "wi")
         let selectTab: String
         switch family {
+        // Arc 没有 `active tab index`(整段编译不过),用 select,见 BrowserTabFocus.arcBundleID。
+        case .chromium where bundleID == BrowserTabFocus.arcBundleID: selectTab = "select tab ti of window wi"
         case .chromium: selectTab = "set active tab index of window wi to ti"
         case .safari:   selectTab = "set current tab of window wi to tab ti of window wi"
         }
@@ -1200,14 +1207,14 @@ public final class BrowserPositionProbe: @unchecked Sendable {
             end repeat
             repeat with wi from 1 to count of windows
                 repeat with ti from 1 to count of tabs of window wi
-                    if (URL of tab ti of window wi) contains "\(urlContains)" then
-                        try
+                    try
+                        if (URL of tab ti of window wi) contains "\(urlContains)" then
                             \(selectTab)
                             set index of window wi to 1
                             activate
                             return "OK"
-                        end try
-                    end if
+                        end if
+                    end try
                 end repeat
             end repeat
             return "NOTFOUND"

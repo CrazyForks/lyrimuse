@@ -71,6 +71,10 @@ public final class MediaControlStreamWatcher {
     /// 不该每秒重启一个必然失败的子进程刷屏。
     private static let minRestartDelay: TimeInterval = 1
     private static let maxRestartDelay: TimeInterval = 30
+    /// 进程活过这么久才算稳定、可以把退避复位(见 consume)。
+    private static let stableRunSeconds: TimeInterval = 10
+    /// 当前这个子进程什么时候起的。
+    private var launchedAt: Date?
 
     /// 参数 = 这一批行里**有没有可能换了播放状态**(暂停/恢复/换歌)。纯粹的锚点刷新传
     /// false —— 下游据此决定要不要冻住外推,见 `LocalPlaybackSource.handlePlayerInfoChanged`。
@@ -86,11 +90,62 @@ public final class MediaControlStreamWatcher {
         self.onEvent = onEvent
     }
 
+    private var terminateObserver: NSObjectProtocol?
+
     public func start() {
         guard stopped else { return }
         stopped = false
         restartDelay = Self.minRestartDelay
+        Self.reapOrphanedStreamsOnce()
+        // 正常退出(⌘Q、更新重启)时把子进程一起带走。LyrimuseCore 不引 AppKit,按通知名字取。
+        if terminateObserver == nil {
+            terminateObserver = NotificationCenter.default.addObserver(
+                forName: Notification.Name("NSApplicationWillTerminateNotification"), object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stop() }
+            }
+        }
         launch()
+    }
+
+    // ---- 上一个实例留下的 stream 子进程 ----
+    //
+    // App 被直接 kill(build.sh 重装、崩溃)时退出回调不会跑,media-control 的 stream 子进程就被
+    // launchd 收养、一直活着:它只在 Now Playing 变化时才往管道写,父进程没了也不会马上因为写管道失败
+    // 而退出(实测一个活了 3 天多)。每重启一次多一个。所以每次启动先扫一遍,把父进程已经是 launchd、
+    // 路径是**这个 App 包里**那份 adapter 的 stream 进程结束掉 —— 别的 App 包(Dev 变体、别处装的副本)
+    // 的不碰。
+
+    private static var reapedOrphans = false
+
+    private static func reapOrphanedStreamsOnce() {
+        guard !reapedOrphans, let resourcePath = Bundle.main.resourcePath else { return }
+        reapedOrphans = true
+        let bundleMarker = resourcePath + "/media-control/"
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        Task.detached(priority: .utility) {
+            guard let result = ProcessRunner.run("/bin/ps", ["-Ao", "pid=,ppid=,command="], timeout: 3),
+                  result.succeeded else { return }
+            let pids = orphanedStreamPIDs(psOutput: result.stdoutText, bundleMarker: bundleMarker)
+                .filter { $0 != ownPID }
+            for pid in pids { kill(pid, SIGTERM) }
+            if !pids.isEmpty {
+                logger.notice("reaped \(pids.count) orphaned media-control stream process(es)")
+            }
+        }
+    }
+
+    /// `ps -Ao pid=,ppid=,command=` 的输出里挑出孤儿 stream 进程:父进程是 1、命令行里有这个 App 包的
+    /// media-control 目录和 `mediaremote-adapter.pl`、参数里有 `stream`。纯函数,selftest 直接覆盖。
+    public nonisolated static func orphanedStreamPIDs(psOutput: String, bundleMarker: String) -> [Int32] {
+        psOutput.split(whereSeparator: \.isNewline).compactMap { line -> Int32? in
+            let fields = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard fields.count == 3, let pid = Int32(fields[0]), fields[1] == "1" else { return nil }
+            let command = fields[2]
+            guard command.contains(bundleMarker), command.contains("mediaremote-adapter.pl"),
+                  command.split(separator: " ").contains("stream") else { return nil }
+            return pid
+        }
     }
 
     public func stop() {
@@ -98,6 +153,10 @@ public final class MediaControlStreamWatcher {
         restartWork?.cancel()
         restartWork = nil
         teardownProcess()
+        if let terminateObserver {
+            NotificationCenter.default.removeObserver(terminateObserver)
+            self.terminateObserver = nil
+        }
     }
 
     private func teardownProcess() {
@@ -136,7 +195,8 @@ public final class MediaControlStreamWatcher {
             // 到达时刻在这条读管道的线程上立刻取:hop 到主线程可能被 20Hz 渲染挡住几十毫秒,
             // 而锚点目击要的就是这几十毫秒的精度(见 MediaControlClient.streamAnchorLatency)。
             let arrivedAt = Date()
-            guard !chunk.isEmpty else { return } // EOF,交给 terminationHandler 处理
+            // EOF:摘掉自己再交给 terminationHandler。留着的话 FileHandle 会拿空数据一直回调,空转一条线程。
+            guard !chunk.isEmpty else { handle.readabilityHandler = nil; return }
             Task { @MainActor [weak self] in self?.consume(chunk, arrivedAt: arrivedAt) }
         }
         proc.terminationHandler = { [weak self] _ in
@@ -146,6 +206,7 @@ public final class MediaControlStreamWatcher {
         do {
             try proc.run()
             process = proc
+            launchedAt = Date()
             Self.logger.notice("media-control stream started (pid \(proc.processIdentifier))")
         } catch {
             Self.logger.error("failed to start media-control stream: \(error.localizedDescription)")
@@ -212,9 +273,12 @@ public final class MediaControlStreamWatcher {
         }
         // 一次回调里来了多行也只触发一次 —— 反正下游是"补查一次 poll()",行数没有意义。
         if fired {
-            // 进程能正常吐数据,说明它是活的,把退避计时器复位;否则一次成功启动之后的
-            // 偶发退出会带着上一次积累的长延迟重启。
-            restartDelay = Self.minRestartDelay
+            // 进程稳定跑了一阵才把退避计时器复位;否则一次成功启动之后的偶发退出会带着上一次积累的
+            // 长延迟重启。不能「吐一行就复位」:stream 每次启动都先把当前状态整份吐一遍,通道坏掉时
+            // 它吐完这一行就退,那样退避永远停在 1 秒、每秒重启一次。
+            if let launchedAt, arrivedAt.timeIntervalSince(launchedAt) >= Self.stableRunSeconds {
+                restartDelay = Self.minRestartDelay
+            }
             onEvent(stateSignal, resumeSignal)
         }
     }
@@ -312,7 +376,9 @@ public final class MediaControlStreamWatcher {
     private func handleTermination() {
         guard !stopped else { return }
         Self.logger.notice("media-control stream exited; restarting in \(self.restartDelay, format: .fixed(precision: 1))s")
+        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         process = nil
+        launchedAt = nil
         buffer.removeAll()
         scheduleRestart()
     }

@@ -631,4 +631,34 @@ func runCacheKeyTests() {
                 == EnrichCacheKeys.looseKey("K/DA|MORE|MORE"),
             false, "looseKey: 不同歌名仍然分开")
     }
+
+    // ---- 同名不同录音的时长变体(collector enrichKeyDurationVariant / durationMismatch) ----
+    do {
+        let base = "李宗盛|山丘|山丘"
+        expectEqual(EnrichCacheKeys.durationVariant(base, n: 2), "李宗盛|山丘~dur2|山丘", "时长变体: 后缀加在标题段")
+        expectEqual(EnrichCacheKeys.durationVariant("a|b|c|d", n: 3), "a|b~dur3|c|d", "时长变体: 只按前两个 | 切")
+        expectEqual(EnrichCacheKeys.strippingDurationVariant("李宗盛|山丘~dur2|山丘"), base, "时长变体: 去掉后缀回到基条目")
+        expectEqual(EnrichCacheKeys.strippingDurationVariant(base), base, "时长变体: 不是变体原样返回")
+        expectEqual(EnrichCacheKeys.strippingDurationVariant("a|x~dur9|c"), "a|x~dur9|c", "时长变体: 超出 2…8 不认")
+        expectEqual(EnrichCacheKeys.durationMismatch(275.1, 405.8), true, "时长变体: 差 32% 算冲突")
+        expectEqual(EnrichCacheKeys.durationMismatch(275.1, 280), false, "时长变体: 差 2% 不算")
+        expectEqual(EnrichCacheKeys.durationMismatch(nil, 280), false, "时长变体: 一方未知不算冲突")
+    }
+
+    // ---- 宽松匹配的胜者规则(collector betterEnrichEntry 同序) ----
+    do {
+        func entry(_ json: String) -> EnrichCacheEntry {
+            try! JSONDecoder().decode(EnrichCacheEntry.self, from: Data(json.utf8))
+        }
+        let manual = entry(#"{"lyrics":"x","manual_lyrics":true,"lyrics_score":1}"#)
+        let scored = entry(#"{"lyrics":"x","lyrics_score":90}"#)
+        let empty = entry(#"{"lyrics_score":99,"ts":9}"#)
+        let slimYRC = entry(#"{"lyrics":"x","lyrics_score":90,"body_crc":1,"body_fields":129}"#)
+        let newer = entry(#"{"lyrics":"x","lyrics_score":90,"ts":5}"#)
+        expectEqual(EnrichCacheReader.betterEntry(manual, scored, "b", "a"), true, "宽松胜者: 人工修正优先")
+        expectEqual(EnrichCacheReader.betterEntry(scored, empty, "b", "a"), true, "宽松胜者: 有词胜过分数高")
+        expectEqual(EnrichCacheReader.betterEntry(slimYRC, scored, "b", "a"), true, "宽松胜者: 同分时有逐字(精简位图)优先")
+        expectEqual(EnrichCacheReader.betterEntry(newer, scored, "b", "a"), true, "宽松胜者: 其余相同时解析得晚的优先")
+        expectEqual(EnrichCacheReader.betterEntry(scored, scored, "a", "b"), true, "宽松胜者: 全同按 key 字典序")
+    }
 }

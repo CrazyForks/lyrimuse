@@ -1530,4 +1530,18 @@ func runPlayerIdentityTests() {
         expectEqual(F.correctedTrackKey(bundle: bundle, artist: "陈慧琳 - 记事本", title: "第一句歌词", state: fix),
                     "陈慧琳 - 记事本|", "歌词在 title 里: 纠正还没跟上的那一首,身份同样不含曲名")
     }
+
+    // ---- 上一个实例留下的 media-control stream 子进程 ----
+    do {
+        let marker = "/Applications/Lyrimuse.app/Contents/Resources/media-control/"
+        let adapter = "/usr/bin/perl \(marker)bin/../lib/media-control/mediaremote-adapter.pl \(marker)bin/../Frameworks/MediaRemoteAdapter.framework \(marker)bin/../lib/media-control/MediaRemoteAdapterTestClient"
+        let ps = [
+            "52232     1 \(adapter) stream",
+            "10770 10730 \(adapter) stream",
+            "  401     1 \(adapter) get",
+            "  402     1 /usr/bin/perl /Other.app/Contents/Resources/media-control/bin/../lib/media-control/mediaremote-adapter.pl x stream",
+        ].joined(separator: "\n")
+        expectEqual(MediaControlStreamWatcher.orphanedStreamPIDs(psOutput: ps, bundleMarker: marker), [52232],
+                    "孤儿 stream: 只认父进程是 1、本 App 包、参数是 stream 的那个")
+    }
 }

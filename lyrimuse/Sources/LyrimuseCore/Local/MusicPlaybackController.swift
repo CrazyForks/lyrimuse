@@ -135,7 +135,8 @@ public enum MusicPlaybackController {
     }
 
     /// 把当前曲目从资料库删除。匹配口径与 currentTrackIsInLibrary() 完全同一套
-    /// (歌名+歌手+专辑,专辑空退两字段),删匹配的第一条 —— delete 作用在 library
+    /// (歌名+歌手+专辑,专辑空才退成两字段 —— 专辑对不上时**不**退:库里另一个专辑的同名版本
+    /// 是别的曲目,退过去删的就是它),删匹配的第一条 —— delete 作用在 library
     /// playlist 上就是从资料库整个移除(区别于从普通歌单移除)。没匹配时脚本报错→
     /// 返回 false。Apple Music 专属,调用方约定同上;不要在主线程调用。
     ///
@@ -143,7 +144,9 @@ public enum MusicPlaybackController {
     /// 队列自动往下走)就不删 —— 不然删掉的是用户根本没选的那首。nil = 不校验。
     @discardableResult
     public static func removeCurrentTrackFromLibrary(expectedName: String? = nil) -> Bool {
-        runAppleScriptCapturing(#"""
+        // 给了歌名却是空的(界面这一刻没有歌名)就不删:核对不了,删掉的可能不是用户选的那首。
+        if let expectedName, expectedName.isEmpty { return false }
+        return runAppleScriptCapturing(#"""
         tell application "Music"
             set t to current track
             set tName to name of t
@@ -151,11 +154,9 @@ public enum MusicPlaybackController {
 
             set tArtist to artist of t
             set tAlbum to album of t
-            set matches to {}
             if tAlbum is not "" then
                 set matches to (every track of library playlist 1 whose name is tName and artist is tArtist and album is tAlbum)
-            end if
-            if (count of matches) is 0 then
+            else
                 set matches to (every track of library playlist 1 whose name is tName and artist is tArtist)
             end if
             if (count of matches) is 0 then error "not in library"
@@ -691,13 +692,17 @@ public enum MusicPlaybackController {
     /// 歌词莫名其妙不动了。
     static let appleScriptTimeout: TimeInterval = 5
 
-    // 下面两个 runXxx 是**发完就不管**(try? process.run(),不等退出),所以它们不会
-    // 卡住调用方,不需要走 ProcessRunner。改成等待反而会把"发一条播放指令"变成一次阻塞。
+    // 下面两个 runXxx 对调用方是**发完就不管**:指令排进一条串行队列,在那里等子进程跑完(带超时)。
+    // 串行是为了顺序 —— 连按「下一首」「上一首」时各自起一个 osascript 谁先落地没保证;带超时是为了
+    // Music 卡住时不越堆越多挂着的 osascript(没有超时的话每点一下多挂一个,直到 AppleScript 自己的
+    // 60 秒默认超时)。调用方照旧不阻塞。
+    private static let commandQueue = DispatchQueue(label: "me.yudaotor.lyrimuse.playback-commands",
+                                                    qos: .userInitiated)
+
     private static func runAppleScript(_ script: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        try? process.run()
+        commandQueue.async {
+            _ = ProcessRunner.run("/usr/bin/osascript", ["-e", script], timeout: appleScriptTimeout)
+        }
     }
 
     /// 跟 runAppleScript 的区别:这个要**等**子进程结束并取回 stdout,失败(非零退出)返回
@@ -719,9 +724,8 @@ public enum MusicPlaybackController {
     // 也要用这同一个二进制),不重复各写一份。
     private static func runMediaControl(_ command: String, arguments: [String] = []) {
         guard let binaryPath = MediaControlClient.binaryPath() else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = [command] + arguments
-        try? process.run()
+        commandQueue.async {
+            _ = ProcessRunner.run(binaryPath, [command] + arguments, timeout: appleScriptTimeout)
+        }
     }
 }

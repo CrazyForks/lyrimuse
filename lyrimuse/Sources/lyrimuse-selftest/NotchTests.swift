@@ -581,8 +581,10 @@ func runNotchTests() {
         expectEqual(F.parse("ALREADY"), .alreadyCurrent, "切标签页: 本来就是当前页")
         expectEqual(F.parse("\"FRONTWINDOW\"\n"), .frontWindow, "切标签页: 用户正在看的窗口(脱掉 AppleScript 的引号)")
         expectEqual(F.parse("NOTFOUND"), .notFound, "切标签页: 没有标签页在放广告")
-        expectEqual(F.parse("SWITCHED|4127|2|5"), .switched(windowID: 4127, previousIndex: 2, tabIndex: 5), "切标签页: 切过去了,记下怎么切回")
-        expectEqual(F.parse("SWITCHED|x|2|5"), nil, "切标签页: 字段坏了不当成切过去(不然会拿垃圾值去切回)")
+        expectEqual(F.parse("SWITCHED|4127|2|5"), .switched(windowID: "4127", previousIndex: 2, tabIndex: 5), "切标签页: 切过去了,记下怎么切回")
+        expectEqual(F.parse("SWITCHED|x|y|5"), nil, "切标签页: 字段坏了不当成切过去(不然会拿垃圾值去切回)")
+        expectEqual(F.parse("SWITCHED|A1B2-C3|2|5"), .switched(windowID: "A1B2-C3", previousIndex: 2, tabIndex: 5),
+                    "切标签页: Arc 的窗口 id 是文本,照样认")
         expectEqual(F.parse("garbage"), nil, "切标签页: 看不懂的返回是 nil")
         expectEqual(F.adTabJS.contains("\"") || F.adTabJS.contains("\\"), false,
                     "切标签页: JS 里没有双引号 / 反斜杠(要嵌进 AppleScript 双引号串)")
@@ -599,8 +601,17 @@ func runNotchTests() {
         expectEqual(chromeFocus.contains("set active tab index of window wi to ti"), true, "切标签页: Chromium 用 active tab index")
         expectEqual(safariFocus.contains("activate") || chromeFocus.contains("activate"), false,
                     "切标签页: 只换当前标签页,不激活浏览器")
-        let safariRestore = F.restoreScript(bundleID: "com.apple.Safari", family: .safari, windowID: 7, previousIndex: 2, tabIndex: 5)
-        let chromeRestore = F.restoreScript(bundleID: "com.google.Chrome", family: .chromium, windowID: 7, previousIndex: 2, tabIndex: 5)
+        let safariRestore = F.restoreScript(bundleID: "com.apple.Safari", family: .safari, windowID: "7", previousIndex: 2, tabIndex: 5)
+        let chromeRestore = F.restoreScript(bundleID: "com.google.Chrome", family: .chromium, windowID: "7", previousIndex: 2, tabIndex: 5)
+        // Arc:字典里没有 `active tab index`(编译不过),窗口 id 是文本。
+        let arcFocus = F.focusScript(bundleID: F.arcBundleID, family: .chromium, hostMarker: "music.youtube.com",
+                                     avoidFrontWindow: false, eventTimeoutSeconds: 4)
+        let arcRestore = F.restoreScript(bundleID: F.arcBundleID, family: .chromium, windowID: "A1B2", previousIndex: 2, tabIndex: 5)
+        expectEqual(arcFocus.contains("active tab index") || arcRestore.contains("active tab index"), false,
+                    "切标签页: Arc 不用 active tab index")
+        expectEqual(arcFocus.contains("select tab ti of window wi") && arcRestore.contains("set w to window id \"A1B2\""), true,
+                    "切标签页: Arc 用 select,窗口 id 按文本写")
+        expectEqual(chromeRestore.contains("set w to window id 7"), true, "切回: Chrome 的窗口 id 仍按数字写")
         expectEqual(safariRestore.contains("if (index of current tab of w) is 5 then set current tab of w to tab 2 of w"), true,
                     "切回: 那扇窗口的当前页还是 YT Music 才切回(用户自己点走了就不管)")
         expectEqual(chromeRestore.contains("if (active tab index of w) is 5 then set active tab index of w to 2"), true,

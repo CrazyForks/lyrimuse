@@ -23,7 +23,8 @@ public enum BrowserTabFocus {
         case alreadyCurrent
         /// 切过去了。`windowID` 是那扇窗口的 AppleScript id,`previousIndex` 是切之前的当前标签页序号,
         /// `tabIndex` 是 YT Music 那一页的序号 —— 切回去时用。
-        case switched(windowID: Int, previousIndex: Int, tabIndex: Int)
+        /// `windowID` 按字符串存:Arc 的窗口 id 是文本,Chrome / Safari 是整数。
+        case switched(windowID: String, previousIndex: Int, tabIndex: Int)
         /// 标签页在用户正在看的那扇窗口里,不切。
         case frontWindow
         /// 没有哪个 YT Music 标签页处于广告态。
@@ -33,12 +34,25 @@ public enum BrowserTabFocus {
     /// 认"正在放广告的那一页":`#movie_player` 挂着 `ad-showing`。只读。
     public static let adTabJS = "(function(){var p=document.querySelector('#movie_player');return (p&&p.classList.contains('ad-showing'))?'AD':'NOAD';})()"
 
+    /// Arc 的 bundle id。它是 Chromium 系,但脚本字典跟 Chrome 不一样:没有 `active tab index`
+    /// (整段脚本编译不过,osacompile 报 -2741),选中标签页用 `select`,窗口 id 是文本。
+    public static let arcBundleID = "company.thebrowser.Browser"
+
     public static func focusScript(bundleID: String, family: BrowserAutomationPermission.Family,
                                    hostMarker: String, avoidFrontWindow: Bool, eventTimeoutSeconds: Int) -> String {
         let executeTab: String
         let currentIndex: String
         let switchTab: String
         switch family {
+        case .chromium where bundleID == arcBundleID:
+            executeTab = "execute (tab ti of window wi) javascript \"\(adTabJS)\""
+            // 按当前标签页的 id 找回它的序号。
+            currentIndex = "0\n"
+                + "                                set curID to id of active tab of window wi\n"
+                + "                                repeat with k from 1 to tabCount\n"
+                + "                                    if (id of tab k of window wi) is curID then set curIdx to k\n"
+                + "                                end repeat"
+            switchTab = "select tab ti of window wi"
         case .chromium:
             executeTab = "execute (tab ti of window wi) javascript \"\(adTabJS)\""
             currentIndex = "active tab index of window wi"
@@ -80,18 +94,27 @@ public enum BrowserTabFocus {
     }
 
     public static func restoreScript(bundleID: String, family: BrowserAutomationPermission.Family,
-                                     windowID: Int, previousIndex: Int, tabIndex: Int) -> String {
+                                     windowID: String, previousIndex: Int, tabIndex: Int) -> String {
         let body: String
+        // Chrome / Safari 的窗口 id 是整数,写成数字;Arc 的是文本,写成字符串(转义引号 / 反斜杠)。
+        let windowRef: String
         switch family {
+        case .chromium where bundleID == arcBundleID:
+            body = "if (id of tab \(tabIndex) of w) is (id of active tab of w) then select tab \(previousIndex) of w"
+            let escaped = windowID.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            windowRef = "\"\(escaped)\""
         case .chromium:
             body = "if (active tab index of w) is \(tabIndex) then set active tab index of w to \(previousIndex)"
+            windowRef = Int(windowID).map(String.init) ?? "0"
         case .safari:
             body = "if (index of current tab of w) is \(tabIndex) then set current tab of w to tab \(previousIndex) of w"
+            windowRef = Int(windowID).map(String.init) ?? "0"
         }
         return """
         tell application id "\(bundleID)"
             try
-                set w to window id \(windowID)
+                set w to window id \(windowRef)
                 \(body)
             end try
             return "OK"
@@ -109,8 +132,8 @@ public enum BrowserTabFocus {
         case "FRONTWINDOW": return .frontWindow
         case "NOTFOUND": return .notFound
         case "SWITCHED":
-            guard parts.count == 4, let w = Int(parts[1]), let prev = Int(parts[2]), let ti = Int(parts[3]) else { return nil }
-            return .switched(windowID: w, previousIndex: prev, tabIndex: ti)
+            guard parts.count == 4, !parts[1].isEmpty, let prev = Int(parts[2]), let ti = Int(parts[3]) else { return nil }
+            return .switched(windowID: parts[1], previousIndex: prev, tabIndex: ti)
         default: return nil
         }
     }
@@ -133,11 +156,11 @@ public enum BrowserTabFocus {
 
     /// 切回去(那扇窗口的当前标签页还是 YT Music 那一页时才切)。
     public static func restore(bundleID: String, family: BrowserAutomationPermission.Family,
-                               windowID: Int, previousIndex: Int, tabIndex: Int) {
+                               windowID: String, previousIndex: Int, tabIndex: Int) {
         let source = restoreScript(bundleID: bundleID, family: family, windowID: windowID,
                                    previousIndex: previousIndex, tabIndex: tabIndex)
         let ok = runScript(source, label: "ytmusic-restore") != nil
-        logger.notice("focus: restore window \(windowID) tab \(previousIndex) ok=\(ok, privacy: .public)")
+        logger.notice("focus: restore window \(windowID, privacy: .public) tab \(previousIndex) ok=\(ok, privacy: .public)")
     }
 
     private static func runScript(_ source: String, label: String) -> String? {

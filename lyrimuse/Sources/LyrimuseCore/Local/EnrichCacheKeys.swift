@@ -216,4 +216,30 @@ public enum EnrichCacheKeys {
         return String(out)
     }
 
+    // ---- 同名不同录音的时长变体(collector enrichkey.go 的 enrichKeyDurationVariant 一族) ----
+
+    /// collector `maxEnrichKeyDurationVariants`。
+    public static let maxDurationVariants = 8
+
+    /// 第 n 个时长变体:后缀加在**标题段**上(`歌手|歌名~dur2|专辑`),按前两个 `|` 切,同 splitEnrichKey。
+    /// 切不出三段时原样返回。
+    public static func durationVariant(_ key: String, n: Int) -> String {
+        let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return key }
+        return "\(parts[0])|\(parts[1])~dur\(n)|\(parts[2])"
+    }
+
+    /// 去掉标题段末尾的 `~durN`(N 在 2…8),不是变体原样返回。
+    public static func strippingDurationVariant(_ key: String) -> String {
+        let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, let r = parts[1].range(of: "~dur", options: .backwards),
+              let n = Int(parts[1][r.upperBound...]), (2...maxDurationVariants).contains(n) else { return key }
+        return "\(parts[0])|\(parts[1][..<r.lowerBound])|\(parts[2])"
+    }
+
+    /// collector `durationMismatch`:任一方未知(≤0 / nil)不算冲突,差超过较长者的 12% 才算。
+    public static func durationMismatch(_ a: Double?, _ b: Double?) -> Bool {
+        guard let a, let b, a > 0, b > 0 else { return false }
+        return abs(a - b) / max(a, b) > 0.12
+    }
 }

@@ -2306,7 +2306,8 @@ final class LastfmStatsService: ObservableObject {
         }
         localAliasRefreshTask?.cancel()
         localAliasRefreshTask = Task { @MainActor [weak self] in
-            let tables = await EnrichCacheReader.computeLocalAliasTables()
+            // nil = 缓存正在重建、读不到:什么都不套用,等下一次缓存变化再来(见 computeLocalAliasTables)。
+            guard let tables = await EnrichCacheReader.computeLocalAliasTables() else { return }
             guard let self, !Task.isCancelled else { return }
             // 后台算的这段时间里族可能已经用空表建过了(首次启动就是这样),必须重建。
             self.applyLocalAliases(tables, rebuildFamilies: self.titleFormsLoaded)

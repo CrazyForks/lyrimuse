@@ -62,7 +62,10 @@ public struct ChartLinkIndex: Sendable {
     var albums: [String: URL] = [:]
     var artists: [String: AlbumEditorialNotes.AlbumRef] = [:]
 
-    public static func build(_ rows: [Row]) -> ChartLinkIndex {
+    /// `looseKey`:算宽松键的函数,默认就是 `EnrichCacheKeys.looseKey`。App 里传一个带记忆的版本进来:
+    /// 九千多条缓存每条要算四次(歌手、主歌手、专辑两次),每次一遍繁简转换,全量现算实测约 0.4 秒,
+    /// 而歌手 / 专辑名大量重复,记住之后只剩字典查找。
+    public static func build(_ rows: [Row], looseKey: (String) -> String = EnrichCacheKeys.looseKey) -> ChartLinkIndex {
         var index = ChartLinkIndex()
         var trackAliases: [String: ChartAppLinks] = [:]
         var albumAliases: [String: URL] = [:]
@@ -88,14 +91,16 @@ public struct ChartLinkIndex: Sendable {
             if !album.isEmpty,
                let albumURL = MusicCatalogSearch.musicSchemeURL(
                    AlbumEditorialNotes.pageURL(albumID: ref.id, storefront: ref.storefront ?? "")?.absoluteString) {
-                let exact = EnrichCacheReader.albumCoverKey(artist: artist, album: album)
+                // 同 EnrichCacheReader.albumCoverKey,只是经传进来的 looseKey 算。
+                let looseAlbum = looseKey(album)
+                let exact = looseKey(artist) + "|" + looseAlbum
                 if index.albums[exact] == nil { index.albums[exact] = albumURL }
-                let alias = EnrichCacheReader.albumCoverKey(artist: merged, album: album)
+                let alias = looseKey(merged) + "|" + looseAlbum
                 if alias != exact, albumAliases[alias] == nil { albumAliases[alias] = albumURL }
             }
-            let exactArtist = EnrichCacheKeys.looseKey(artist)
+            let exactArtist = looseKey(artist)
             if index.artists[exactArtist] == nil { index.artists[exactArtist] = ref }
-            let aliasArtist = EnrichCacheKeys.looseKey(merged)
+            let aliasArtist = looseKey(merged)
             if aliasArtist != exactArtist, artistAliases[aliasArtist] == nil { artistAliases[aliasArtist] = ref }
         }
         for (k, v) in trackAliases where index.tracks[k] == nil { index.tracks[k] = v }

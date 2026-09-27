@@ -107,7 +107,22 @@ public enum BrowserAutomationPermission {
     /// 启动时由 `AppDelegate` 从 `AppSettings` 灌进来,跟
     /// `BrowserPositionProbe.platformBrowserPairs` 同一个"持久化在 AppSettings、运行期同步进
     /// 单例"的双写模式 —— 只写一边的话要么关了 App 就忘,要么改了要等下次启动才生效。
-    public static var manuallyAddedFamilies: [String: Family] = [:]
+    ///
+    /// 加锁:设置页在主线程改它,探针在后台线程经 `family(forBundleID:)` 读它,不加锁就是字典的并发读写。
+    public static var manuallyAddedFamilies: [String: Family] {
+        get {
+            manualFamiliesLock.lock()
+            defer { manualFamiliesLock.unlock() }
+            return manualFamiliesStorage
+        }
+        set {
+            manualFamiliesLock.lock()
+            manualFamiliesStorage = newValue
+            manualFamiliesLock.unlock()
+        }
+    }
+    private static let manualFamiliesLock = NSLock()
+    private static var manualFamiliesStorage: [String: Family] = [:]
 
     /// Chromium 系 `execute javascript` 与 Safari `do JavaScript` 的 AppleScript **四字码**。
     ///

@@ -2553,6 +2553,11 @@ public final class LocalPlaybackSource: ObservableObject {
         //
         // 放在 apply 最前面而不是 MediaControlClient 里:EnrichCacheReader 是 @MainActor 隔离的,
         // 快照那条路是 nonisolated,够不着。
+        // 这一拍之后所有针对这首的缓存查询都按它的时长挑同名不同录音的变体(见 EnrichCacheReader.matchedKey)。
+        // 电台的系统时长是整档节目,不给。
+        EnrichCacheReader.notePlayingDuration(
+            artist: rawSnapshot.artist ?? "", title: rawSnapshot.title ?? "", album: rawSnapshot.album ?? "",
+            secs: rawSnapshot.isRadio == true ? nil : rawSnapshot.duration)
         var snapshot = rawSnapshot
         if rawSnapshot.isRadio == true,
            let cached = EnrichCacheReader.trackDurationSecs(
@@ -2716,8 +2721,10 @@ public final class LocalPlaybackSource: ObservableObject {
         // pageVerdict 只在**原生 Spotify** 上置 nil(它有自己的 AppleScript 复核语义);浏览器播放一律
         // 传 YT Music 探针的判定 —— 不能按 isSpotifyWeb 置 nil,那会让"配对了 Spotify 网页版的浏览器"
         // 里的 YT Music MV 在前贴片放完后回落不了(修正,同上一段)。
+        // 「是不是新曲」跟 lastKey 用同一把尺子(identityKey):拿 trackKey 比的话,署名不可信的播放器
+        // 两者恒不相等,每拍都算新曲,同曲期间只往「广告」方向棘轮的规则就失效了。
         let nextAd = Self.nextAdBreakState(
-            previous: isCurrentTrackAdBreak, isNewTrack: snapshot.trackKey != lastKey,
+            previous: isCurrentTrackAdBreak, isNewTrack: snapshot.identityKey != lastKey,
             adByFields: adByFields, pageVerdict: isSpotifyNative ? nil : youTubeMusicVerdict)
         if isCurrentTrackAdBreak != nextAd { isCurrentTrackAdBreak = nextAd }
         // 广告计数跟着广告态一起收:不在广告里就必须是 nil,否则下一首歌会挂着

@@ -83,6 +83,11 @@ public struct EnrichCacheEntry: Decodable, Sendable {
     // 只出现在 collector 给 App 的精简索引里:五个正文字段的校验值(collector enrichindex.go)。索引条目
     // 没有逐字 / 罗马音 / 译文 / 纯文本采纳,`lookup` 按这个值去读这首的正文小文件、对上了才用。
     let bodyCRC: UInt32?
+    // 宽松匹配挑胜者用的三样(跟 collector `betterEnrichEntry` 同一套排序):人工修正过没有、歌词打分、
+    // 精简条目的正文位图(看有没有逐字)。
+    let manualLyrics: Bool?
+    let lyricsScore: Int?
+    let bodyFields: Int?
 
     enum CodingKeys: String, CodingKey {
         case lyrics
@@ -113,6 +118,17 @@ public struct EnrichCacheEntry: Decodable, Sendable {
         case lyricsSourcesSkipped = "lyrics_sources_skipped"
         case lyricsFillCount = "lyrics_fill_count"
         case bodyCRC = "body_crc"
+        case manualLyrics = "manual_lyrics"
+        case lyricsScore = "lyrics_score"
+        case bodyFields = "body_fields"
+    }
+
+    /// 有没有逐字:完整条目看字段本身,精简条目看位图(位图带 known 位才可信,见 EnrichCacheSlim.Fields)。
+    var hasWordTiming: Bool {
+        if let yrc = lyricsYRC, !yrc.isEmpty { return true }
+        guard let raw = bodyFields else { return false }
+        let fields = EnrichCacheSlim.Fields(rawValue: raw)
+        return fields.contains(.known) && fields.contains(.yrc)
     }
 }
 
@@ -229,9 +245,8 @@ public enum EnrichCacheReader {
     private static var cachedCoverIndex: [String: String]?
     // 「歌手 + 专辑」的封面索引,跟 cachedCoverIndex 同寿命、在同样的地方作废 —— 见 albumCoverURL。
     private static var cachedAlbumCoverIndex: [String: String]?
-    // 宽松匹配索引(looseKey → 组内字典序最小的原 key),跟 cachedEntries 同寿命、惰性
-    // 构建 —— 见 looseMatch(性能审计:原来每次精确 miss 都对全部 ~900 个 key
-    // 逐个现算 ICU 繁简 transform,~7ms 主线程,新歌未解析窗口内每 2s 重复一遍)。
+    // 宽松匹配索引(looseKey → 组内代表 key,挑法见 betterEntry),跟 cachedEntries 同寿命、惰性
+    // 构建 —— 见 looseIndex。
     private static var cachedLooseIndex: [String: String]?
     // 后台解码的世代号:kick 时占位,完成回主线程时对得上才采纳(reloadSoon 与内存压力让出
     // 会推进世代号,把在飞的旧结果作废)。inFlightGeneration nil = 没有在飞的后台解码。
@@ -255,7 +270,7 @@ public enum EnrichCacheReader {
     public static func sourceInfo(artist: String, title: String, album: String) -> SourceInfo? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        guard let entry = all[key] ?? looseMatch(key, in: all) else { return nil }
+        guard let entry = matchedEntry(key, in: all) else { return nil }
         return SourceInfo(lyricsSource: entry.lyricsSource, coverSource: entry.coverSource)
     }
 
@@ -264,7 +279,7 @@ public enum EnrichCacheReader {
     public static func appleAlbumRef(artist: String, title: String, album: String) -> AlbumEditorialNotes.AlbumRef? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        guard let entry = all[key] ?? looseMatch(key, in: all) else { return nil }
+        guard let entry = matchedEntry(key, in: all) else { return nil }
         return AlbumEditorialNotes.albumRef(fromAppleMusicURL: entry.appleMusicURL)
     }
 
@@ -292,7 +307,7 @@ public enum EnrichCacheReader {
     public static func platformLinks(artist: String, title: String, album: String) -> PlatformLinks? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        guard let entry = all[key] ?? looseMatch(key, in: all) else { return nil }
+        guard let entry = matchedEntry(key, in: all) else { return nil }
         let rawQQ = entry.qqMusicURL ?? ""
         // 搜索兜底链接不当"歌曲页"给出去,理由见 PlatformLinks.isQQSearchFallback
         let qqSong = (!rawQQ.isEmpty && !PlatformLinks.isQQSearchFallback(rawQQ))
@@ -322,7 +337,7 @@ public enum EnrichCacheReader {
     public static func trackDurationSecs(artist: String, title: String, album: String) -> Double? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        guard let entry = all[key] ?? looseMatch(key, in: all) else { return nil }
+        guard let entry = matchedEntry(key, in: all) else { return nil }
         for candidate in [entry.resolvedDurationSecs, entry.durationSecs] {
             if let candidate, candidate > 0 { return candidate }
         }
@@ -337,8 +352,7 @@ public enum EnrichCacheReader {
     public static func resolvedKey(artist: String, title: String, album: String) -> String? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        if all[key] != nil { return key }
-        return looseIndex(in: all)[EnrichCacheKeys.looseKey(key)]
+        return matchedKey(key, in: all)
     }
 
     public static var fileModificationDate: Date? { currentSource().mtime }
@@ -371,10 +385,21 @@ public enum EnrichCacheReader {
 
     /// 这一版索引的正文对不上:作废它、后台改读主缓存(解完经 onContentAdopted 捅一次 poll,
     /// `decodedContentVersion` 推进,歌词自然换成完整的那份)。
+    ///
+    /// 索引跟主缓存是同一个文件(collector 现在把索引写成主缓存的硬链接,本机两者 inode 相同)时不作废:
+    /// 「改读主缓存」读到的还是这份内容,只会白做一次整份后台解码,正文照样缺。
     private static func rejectCurrentIndex() {
-        guard cachedFromIndex, let idx = mtime(of: indexURL) else { return }
+        guard cachedFromIndex, let idx = mtime(of: indexURL), !indexIsMainCache() else { return }
         indexRejectedAt = idx
         kickBackgroundDecode()
+    }
+
+    private static func indexIsMainCache() -> Bool {
+        let fm = FileManager.default
+        guard let a = ((try? fm.attributesOfItem(atPath: indexURL.path))?[.systemFileNumber] as? NSNumber)?.uint64Value,
+              let b = ((try? fm.attributesOfItem(atPath: cacheURL.path))?[.systemFileNumber] as? NSNumber)?.uint64Value
+        else { return false }
+        return a == b
     }
 
     // 文件不存在/解析失败/key 查不到都返回 nil,上层据此显示"还没有内容"而不是崩溃。
@@ -384,15 +409,16 @@ public enum EnrichCacheReader {
         // (`不散的筵席（I Miss You）`)就会**查不到任何歌词**——不是显示旧内容,是整首歌
         // 没词,而且只在部分播放器上复现。
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
+        // collector 刚写的「正在放的这一条」:它是按真实时长挑过变体的(见 matchedKey),所以按去掉
+        // `~durN` 之后的 key 认 —— 正在放的是变体时,播放器报的三段拼出来的永远是基条目的 key。
         if let p = freshPlayingEntry(),
-           p.key == key || EnrichCacheKeys.looseKey(p.key) == EnrichCacheKeys.looseKey(key) {
+           EnrichCacheKeys.looseKey(EnrichCacheKeys.strippingDurationVariant(p.key)) == EnrichCacheKeys.looseKey(key) {
             let e = p.entry
             return makeLyrics(e, lyrics: e.lyrics ?? "", tr: e.lyricsTr ?? "", roma: e.lyricsRoma ?? "",
                               yrc: e.lyricsYRC ?? "", plain: e.plainLyrics ?? "", bg: e.lyricsBG ?? "")
         }
         guard let all = loadEntries() else { return nil }
-        let matchedKey = all[key] != nil ? key : looseIndex(in: all)[EnrichCacheKeys.looseKey(key)]
-        guard let matchedKey, let entry = all[matchedKey] else { return nil }
+        guard let matchedKey = matchedKey(key, in: all), let entry = all[matchedKey] else { return nil }
         // 精简条目(索引,以及新版 collector 写的主缓存都是)的四块大正文在这首的正文小文件里。读不到就先用
         // 条目里的主歌词顶着;读的是索引时同时作废这一版索引、后台改读主缓存 —— 绝不拿不自洽的正文拼进来。
         var lyrics = entry.lyrics ?? "", tr = entry.lyricsTr ?? "", roma = entry.lyricsRoma ?? ""
@@ -435,35 +461,108 @@ public enum EnrichCacheReader {
     /// QQ 音乐报 `Susan说`、网易云报 `Susan 说`,缓存里现在只剩后者。没有这层兜底,前者就
     /// 精确 miss,用户看到的是「这首歌整首没有歌词」,而不是「歌词不太对」,更难归因。
     ///
-    /// 多条候选时必须挑**确定的**那一条:Swift 的 Dictionary 遍历顺序不保证稳定,撞见谁
-    /// 用谁的话,同一首歌这次读到 A 的歌词、下次读到 B 的。按 key 字典序取最小,跟 collector
-    /// 侧合并后只剩一条的常态也不冲突(那时候本来就只有一个候选)。
+    /// 多条候选时必须挑**确定的**那一条,而且要跟 collector 挑的是同一条(`canonicalEnrichKey` →
+    /// `betterEnrichEntry`:人工修正 > 有词 > 分数高 > 有逐字 > 解析得晚 > key 字典序)。原来按 key 字典序
+    /// 取最小,本机 55 个多条组里 47 组跟 collector 选的不是同一条:collector 往 A 里补译文、重选歌词,
+    /// App 显示的却是 B,「搜索歌词」写回也落到 B 上。
     ///
     /// 成本:只在精确 miss 时才扫,而 miss 只发生在合并过的那些歌上,量级是几百条字符串。
-    private static func looseMatch(_ key: String, in all: [String: EnrichCacheEntry]) -> EnrichCacheEntry? {
-        // 经 cachedLooseIndex 查表:原来每次 miss 对全表逐 key 现算 looseKey
-        // (每 key 一次 CFStringTransform 繁简转换),索引把它塌缩成一次 looseKey + 一次
-        // 字典查找。索引**惰性**构建(首次 miss 时,~8ms 一次)——不急切挂在解码后:精确
-        // 命中的曲目今天零成本,collector 预取连环写盘时急切重建反而是新增回归(对抗核实
-        // 指出的坑);"字典序最小 key 胜出"的归并语义原样保留。
-        guard let bestKey = looseIndex(in: all)[EnrichCacheKeys.looseKey(key)] else { return nil }
-        return all[bestKey]
+    ///
+    /// 命中之后再按时长挑变体,见 `durationVariantKey(for:in:)`。
+    private static func matchedKey(_ key: String, in all: [String: EnrichCacheEntry]) -> String? {
+        guard let base = all[key] != nil ? key : looseIndex(in: all)[EnrichCacheKeys.looseKey(key)] else {
+            return nil
+        }
+        return durationVariantKey(for: base, in: all)
     }
 
+    private static func matchedEntry(_ key: String, in all: [String: EnrichCacheEntry]) -> EnrichCacheEntry? {
+        matchedKey(key, in: all).flatMap { all[$0] }
+    }
+
+    /// 正在放的这首的时长(秒),连同按播放器报的三段算出的归一化 key。只对这一个 key 生效:
+    /// 别的查询(歌词管理列表、统计页)不知道放的是哪一份录音,照旧取基条目。
+    private static var playingDuration: (key: String, secs: Double)?
+
+    /// 每拍 poll 报一次当前曲目和它的时长(电台、没报时长时给 nil)。
+    public static func notePlayingDuration(artist: String, title: String, album: String, secs: Double?) {
+        guard let secs, secs > 0, !title.isEmpty else { playingDuration = nil; return }
+        playingDuration = (EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album), secs)
+    }
+
+    /// collector 的 `resolveEnrichKeyForDuration`:同一个 key 下两份录音时长差超过 12% 时,另一份存在
+    /// `歌名~dur2`…`~dur8` 里。命中的条目时长对不上正在放的这首,就依次找变体:时长兼容的用它,
+    /// 空位说明 collector 还没给这份录音建条目(下一拍它会建),返回 nil —— 拿另一份录音的歌词顶着,
+    /// 时间轴整首都是错的;8 个位都冲突才退回基条目,跟 collector 一样。
+    private static func durationVariantKey(for base: String, in all: [String: EnrichCacheEntry]) -> String? {
+        guard let playing = playingDuration,
+              memoizedLooseKey(playing.key) == memoizedLooseKey(base),
+              EnrichCacheKeys.durationMismatch(all[base]?.durationSecs, playing.secs) else { return base }
+        for n in 2...EnrichCacheKeys.maxDurationVariants {
+            let vk = EnrichCacheKeys.durationVariant(base, n: n)
+            guard let e = all[vk] else { return nil }
+            if !EnrichCacheKeys.durationMismatch(e.durationSecs, playing.secs) { return vk }
+        }
+        return base
+    }
+
+    /// 宽松索引:looseKey → 这一组的代表 key。**惰性**构建(首次精确 miss 时):精确命中的曲目零成本,
+    /// collector 预取连环写盘时急切重建反而是新增开销。
     private static func looseIndex(in all: [String: EnrichCacheEntry]) -> [String: String] {
         if let cachedLooseIndex { return cachedLooseIndex }
         var index: [String: String] = [:]
         index.reserveCapacity(all.count)
-        for k in all.keys {
-            let loose = EnrichCacheKeys.looseKey(k)
-            if let existing = index[loose] {
-                if k < existing { index[loose] = k }
+        for (k, e) in all {
+            let loose = memoizedLooseKey(k)
+            if let existing = index[loose], let current = all[existing] {
+                if betterEntry(e, current, k, existing) { index[loose] = k }
             } else {
                 index[loose] = k
             }
         }
+        // 缓存里已经没有的 key 留在记忆表里只占内存:涨到两倍多就按这一版重建一次。
+        if looseKeyMemo.count > all.count * 2 + 64 {
+            looseKeyMemo = looseKeyMemo.filter { all[$0.key] != nil }
+        }
         cachedLooseIndex = index
         return index
+    }
+
+    /// looseKey 跨缓存版本记住(同 collector 的 looseKeyMemo)。每算一次要做一遍繁简转换,九千多条全量重算
+    /// 实测 0.1 秒,而宽松索引在每一版缓存(collector 每写一次盘)之后都要重建,全在主线程。
+    private static var looseKeyMemo: [String: String] = [:]
+
+    /// 歌手 / 专辑名这类片段的 looseKey 记忆(榜单链接索引用,见 ChartLinkIndex.build)。跟整条 key 的那份分开:
+    /// 那份按「缓存里还有没有这条 key」修剪,名字片段不是 key。只增不删,涨过上限整份清掉重来。
+    private static var nameLooseKeyMemo: [String: String] = [:]
+
+    private static func memoizedNameLooseKey(_ name: String) -> String {
+        if let v = nameLooseKeyMemo[name] { return v }
+        if nameLooseKeyMemo.count > 50_000 { nameLooseKeyMemo.removeAll(keepingCapacity: true) }
+        let v = EnrichCacheKeys.looseKey(name)
+        nameLooseKeyMemo[name] = v
+        return v
+    }
+
+    private static func memoizedLooseKey(_ key: String) -> String {
+        if let v = looseKeyMemo[key] { return v }
+        let v = EnrichCacheKeys.looseKey(key)
+        looseKeyMemo[key] = v
+        return v
+    }
+
+    /// collector `betterEnrichEntry` 的镜像,两边必须同序:a 是否比 b 更该当这一组的代表。
+    public static func betterEntry(_ a: EnrichCacheEntry, _ b: EnrichCacheEntry, _ aKey: String, _ bKey: String) -> Bool {
+        let aManual = a.manualLyrics ?? false, bManual = b.manualLyrics ?? false
+        if aManual != bManual { return aManual }
+        let aHas = !(a.lyrics ?? "").isEmpty, bHas = !(b.lyrics ?? "").isEmpty
+        if aHas != bHas { return aHas }
+        let aScore = a.lyricsScore ?? 0, bScore = b.lyricsScore ?? 0
+        if aScore != bScore { return aScore > bScore }
+        if a.hasWordTiming != b.hasWordTiming { return a.hasWordTiming }
+        let aTS = a.ts ?? 0, bTS = b.ts ?? 0
+        if aTS != bTS { return aTS > bTS }
+        return aKey < bKey
     }
 
     /// 这首歌在本机缓存里有没有封面(collector 从网易云/QQ/Apple 解析出来的那张),
@@ -487,11 +586,18 @@ public enum EnrichCacheReader {
     /// 忽略专辑的兜底给出一张**可能是别的版本**的图,onlyIfMissing 会把这张错图焊死到
     /// 换歌之前,后面精确条目写好了也不会被拿去纠正(这正是那次误封面的
     /// 根因)。
+    ///
+    /// collector 单独写的「正在放的这一条」比已解码的缓存新时先看它,判据跟 `lookup` 逐字一致:主缓存还没解码完
+    /// (App 刚启动)或落后于它时,`lookup` 从这份拿得到歌词,封面也得从这份拿,不然是有词没图。
     public static func albumMatchedCoverURL(artist: String, title: String, album: String) -> URL? {
-        guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        if let s = all[key]?.coverURL, let url = URL(string: s) { return url }
-        if let s = looseMatch(key, in: all)?.coverURL, let url = URL(string: s) { return url }
+        if let p = freshPlayingEntry(),
+           EnrichCacheKeys.looseKey(EnrichCacheKeys.strippingDurationVariant(p.key)) == EnrichCacheKeys.looseKey(key),
+           let s = p.entry.coverURL, let url = URL(string: s) {
+            return url
+        }
+        guard let all = loadEntries() else { return nil }
+        if let s = matchedEntry(key, in: all)?.coverURL, let url = URL(string: s) { return url }
         return nil
     }
 
@@ -508,7 +614,7 @@ public enum EnrichCacheReader {
     ) -> (master: URL, preview: String?, identityVerified: Bool)? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        let entry = all[key] ?? looseMatch(key, in: all)
+        let entry = matchedEntry(key, in: all)
         guard let entry, let s = entry.motionCoverURL, let url = URL(string: s) else { return nil }
         return (url, entry.motionPreviewURL, entry.motionCoverIdentityVerified ?? false)
     }
@@ -523,7 +629,7 @@ public enum EnrichCacheReader {
     public static func albumVerifiedCoverURL(artist: String, title: String, album: String) -> URL? {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
-        let entry = all[key] ?? looseMatch(key, in: all)
+        let entry = matchedEntry(key, in: all)
         guard let entry, coverAlbumVerified(coverAlbum: entry.coverAlbum, requestedAlbum: album),
               let s = entry.coverURL, let url = URL(string: s) else { return nil }
         return url
@@ -737,7 +843,7 @@ public enum EnrichCacheReader {
             index = ChartLinkIndex.build(all.map { key, entry in
                 ChartLinkIndex.Row(key: key, appleMusicURL: entry.appleMusicURL,
                                    spotifyTrackID: entry.spotifyTrackID, kkboxURL: entry.kkboxURL)
-            })
+            }, looseKey: memoizedNameLooseKey)
             cachedChartLinkIndex = (cachedMTime, cachedFromIndex, index)
         }
         return index.links(kind: kind, artist: artist, name: name)
@@ -822,9 +928,12 @@ public enum EnrichCacheReader {
     /// 毫秒,而 enrich 缓存在播放中每隔几秒就会变一次(collector 落歌词/译文/封面),放主线程就撞
     /// 20Hz 歌词节拍。条目字典是值类型,拷一份给后台线程即可;算完回主线程时缓存已换代就丢弃
     /// (下一拍会再算)。
-    public static func computeLocalAliasTables() async -> LocalAliasTables {
+    ///
+    /// 缓存读不到(内存压力让出后正在后台重建)时返回 nil,调用方别套用:给空表的话,两张表会被当成
+    /// 「真的没有别名」整个清掉,受影响行的播放次数全标过期重取,重建完再来一遍。
+    public static func computeLocalAliasTables() async -> LocalAliasTables? {
         if let cachedAliasTables { return cachedAliasTables }
-        guard let all = loadEntries() else { return .empty }
+        guard let all = loadEntries() else { return nil }
         aliasTablesGeneration += 1
         let gen = aliasTablesGeneration
         let entries = all
@@ -931,15 +1040,23 @@ public enum EnrichCacheReader {
         cachedEntries == nil && (releasedUnderMemoryPressure || inFlightGeneration != nil)
     }
 
+    /// 同步解码失败的那一版文件的 mtime(见 decodeSynchronously)。
+    private static var failedDecodeMTime: Date?
+
     private static func decodeSynchronously() {
         // mtime 取读文件**之前**的:rename 发生在 stat 与 read 之间时,读到的是更新的内容
         // 而记的是旧 mtime——下一拍会再解一次,方向安全;反过来记新 mtime 配旧内容会把
         // 一版内容永久漏掉。
         let source = currentSource()
         let mtime = source.mtime
+        // 同一版文件上次就没解开:不再每拍在主线程把几十 MB 重读重解一遍,等文件变了再试。
+        if let mtime, mtime == failedDecodeMTime { return }
         guard let data = try? Data(contentsOf: source.url),
               let all = try? JSONDecoder().decode([String: EnrichCacheEntry].self, from: data)
         else {
+            failedDecodeMTime = mtime
+            // 解不开的是索引就作废这一版索引,下一次改读主缓存(见 currentSource)。
+            if source.isIndex, let mtime { indexRejectedAt = mtime; failedDecodeMTime = nil }
             cachedMTime = nil
             cachedEntries = nil
             cachedCoverIndex = nil
