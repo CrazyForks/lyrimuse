@@ -13,6 +13,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,12 @@ func saveArtistAliasCache() {
 // 必要时 sleep 补足间隔就够了,不需要更复杂的令牌桶实现。
 const musicbrainzMinIntervalBetweenCalls = 1100 * time.Millisecond
 
+// musicbrainzSharedMaxWait:跨进程窗口还要等超过这么久,就说明是被 503 停手了,这次不发。
+const musicbrainzSharedMaxWait = 3 * time.Second
+
+// musicbrainzThrottledPause:MusicBrainz 回 503 / 429 时,所有进程一起停多久(响应没给 Retry-After 时),封顶一分钟。
+const musicbrainzThrottledPause = 10 * time.Second
+
 var (
 	musicbrainzRateMu   sync.Mutex
 	musicbrainzLastCall time.Time
@@ -117,8 +124,31 @@ func musicbrainzThrottle(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	// 跨进程:App、collector 子命令也打 MusicBrainz,同一个出口 IP 合起来算限额。共享窗口记的是「下一个请求最早
+	// 什么时候能发」:没到就等,等太久(被 503 停手)这次不发;发之前把窗口往后推一个间隔。
+	now := time.Now()
+	if until := sharedCooldownUntilFresh(sharedCooldownMusicBrainz, now); !until.IsZero() {
+		wait := until.Sub(now)
+		if wait > musicbrainzSharedMaxWait {
+			return errHostGuarded
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	musicbrainzLastCall = time.Now()
+	publishSharedCooldown("musicbrainz.org", sharedCooldownMusicBrainz, musicbrainzLastCall.Add(musicbrainzMinIntervalBetweenCalls))
 	return nil
+}
+
+// musicbrainzPauseFor:回 503 / 429 时停多久。Retry-After 给了秒数就按它(封顶一分钟),没给按 musicbrainzThrottledPause。纯函数。
+func musicbrainzPauseFor(retryAfter string) time.Duration {
+	if secs, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && secs > 0 {
+		return min(time.Duration(secs)*time.Second, time.Minute)
+	}
+	return musicbrainzThrottledPause
 }
 
 // canonicalArtistViaMusicBrainz 是 canonical_artist 解析链路里第一个被咨询的来源,
@@ -251,24 +281,31 @@ func resolveArtistIdentityMB(name, knownMbid string) mbArtistIdentity {
 	}
 	ctx := context.Background()
 	id := mbArtistIdentity{Mbid: knownMbid}
+	// 任何一步没问成(限速被拒、网络失败、共享窗口停手)就只返回、不写缓存:缓存查一次永久生效,
+	// 把「没问成」写成「查过、没有」会把这位歌手永久钉在没有身份上。
 	if id.Mbid == "" {
-		if err := musicbrainzThrottle(ctx); err == nil {
-			var search mbSearchResponse
-			searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(name) + "&fmt=json&limit=5"
-			if err := mbGetJSON(ctx, searchURL, &search); err == nil && len(search.Artists) > 0 &&
-				search.Artists[0].Score >= musicbrainzMinScore {
-				id.Mbid = search.Artists[0].ID
-			}
+		if err := musicbrainzThrottle(ctx); err != nil {
+			return id
+		}
+		var search mbSearchResponse
+		searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(name) + "&fmt=json&limit=5"
+		if err := mbGetJSON(ctx, searchURL, &search); err != nil {
+			return id
+		}
+		if len(search.Artists) > 0 && search.Artists[0].Score >= musicbrainzMinScore {
+			id.Mbid = search.Artists[0].ID
 		}
 	}
 	if id.Mbid != "" && !containsHan(name) {
-		if err := musicbrainzThrottle(ctx); err == nil {
-			var withAliases mbArtistWithAliases
-			aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(id.Mbid) + "?inc=aliases&fmt=json"
-			if err := mbGetJSON(ctx, aliasURL, &withAliases); err == nil {
-				id.Zh = pickChineseAlias(withAliases.Aliases, withAliases.Country)
-			}
+		if err := musicbrainzThrottle(ctx); err != nil {
+			return id
 		}
+		var withAliases mbArtistWithAliases
+		aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(id.Mbid) + "?inc=aliases&fmt=json"
+		if err := mbGetJSON(ctx, aliasURL, &withAliases); err != nil {
+			return id
+		}
+		id.Zh = pickChineseAlias(withAliases.Aliases, withAliases.Country)
 	}
 	artistIdentityMu.Lock()
 	artistIdentityCache[name] = id
@@ -814,6 +851,10 @@ func mbGetBody(ctx context.Context, url string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests {
+		// 按 IP 限速被拒:写进共享窗口,App 和其它 collector 进程一起停手。
+		publishSharedCooldown("musicbrainz.org", sharedCooldownMusicBrainz, time.Now().Add(musicbrainzPauseFor(resp.Header.Get("Retry-After"))))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("musicbrainz %s: status %d", url, resp.StatusCode)
 	}

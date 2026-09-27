@@ -599,6 +599,8 @@ func runSourceContractTests() {
             if let shared = text("lyrimuse-collector/sharedcooldown.go") {
                 expectEqual(shared.contains("\"\(OutboundCooldowns.itunesSearchKey)\""), true,
                             "共享限流窗口: iTunes 搜索的键两边写法一致")
+                expectEqual(shared.contains("\"\(OutboundCooldowns.musicBrainzKey)\""), true,
+                            "共享限流窗口: MusicBrainz 的键两边写法一致")
                 expectEqual(shared.contains("\"\(OutboundCooldowns.lastfmKey)\""), true,
                             "共享限流窗口: Last.fm 的键两边写法一致")
                 expectEqual(shared.contains("`json:\"endpoints\"`"), true,

@@ -1904,6 +1904,15 @@ private enum ArtistPageCache {
     static func pages(mbid: String) async -> ArtistPlatformPages.Pages? {
         if let hit = pages[mbid] { return hit }
         guard let url = ArtistPlatformPages.lookupURL(mbid: mbid) else { return nil }
+        // 跟 collector 共用 MusicBrainz 的跨进程窗口(同一个出口 IP 合起来算限额):没到就等一会儿,等太久(被 503
+        // 停手)这次不查;发之前把窗口往后推一个间隔。
+        let store = OutboundCooldownStore.shared
+        if let until = store.freshUntil(OutboundCooldowns.musicBrainzKey) {
+            let wait = until.timeIntervalSinceNow
+            if wait > 3 { return nil }
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+        }
+        store.publish(OutboundCooldowns.musicBrainzKey, until: Date().addingTimeInterval(OutboundCooldowns.musicBrainzInterval))
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
         // MusicBrainz 要求调用方在 User-Agent 里标明应用名、版本和联系方式,跟 collector 同一个写法。
@@ -1915,6 +1924,9 @@ private enum ArtistPageCache {
             let status = (response as? HTTPURLResponse)?.statusCode
             NetworkAuditLog.record(service: "musicbrainz", operation: "artist.url-rels", host: url.host ?? "musicbrainz.org",
                                    statusCode: status, durationMs: Date().timeIntervalSince(start) * 1000, error: nil)
+            if status == 503 || status == 429 {
+                store.publish(OutboundCooldowns.musicBrainzKey, until: Date().addingTimeInterval(10))
+            }
             guard status == 200 else { return nil }
             let parsed = ArtistPlatformPages.parse(data)
             pages[mbid] = parsed

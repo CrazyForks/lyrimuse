@@ -23,6 +23,9 @@ import (
 const (
 	sharedCooldownITunesSearch = "itunes.apple.com/search"
 	sharedCooldownLastfm       = "ws.audioscrobbler.com/2.0/"
+	// sharedCooldownMusicBrainz 是整个 MusicBrainz 接口共用的一个键(它按 IP 限速,不分端点):窗口截止时刻就是
+	// 「下一个请求最早什么时候能发」,见 musicbrainzThrottle。
+	sharedCooldownMusicBrainz = "musicbrainz.org/ws/2/"
 	// sharedCooldownRereadEvery:读缓存的有效期,出站闸每个请求都会问一次,别每次都 stat。
 	sharedCooldownRereadEvery = time.Second
 )
@@ -31,6 +34,7 @@ const (
 var sharedCooldownHosts = map[string]bool{
 	"itunes.apple.com":      true,
 	"ws.audioscrobbler.com": true,
+	"musicbrainz.org":       true,
 }
 
 type sharedCooldownFile struct {
@@ -84,6 +88,26 @@ func sharedCooldownUntil(key string, now time.Time) time.Time {
 		}
 	}
 	secs, ok := sharedCooldownCache[key]
+	if !ok {
+		return time.Time{}
+	}
+	until := time.Unix(0, int64(secs*float64(time.Second)))
+	if !now.Before(until) {
+		return time.Time{}
+	}
+	return until
+}
+
+// sharedCooldownUntilFresh 同 sharedCooldownUntil,但每次都读文件、不走 1 秒缓存:MusicBrainz 的窗口本身就只有
+// 1.1 秒,读缓存的数会晚一整个间隔。
+func sharedCooldownUntilFresh(key string, now time.Time) time.Time {
+	sharedCooldownMu.Lock()
+	path := sharedCooldownPath
+	sharedCooldownMu.Unlock()
+	if path == "" {
+		return time.Time{}
+	}
+	secs, ok := readSharedCooldownFile(path)[key]
 	if !ok {
 		return time.Time{}
 	}

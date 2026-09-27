@@ -13,6 +13,11 @@ public enum OutboundCooldowns {
     public static let fileName = "lyrimuse-outbound-cooldowns.json"
     public static let itunesSearchKey = "itunes.apple.com/search"
     public static let lastfmKey = "ws.audioscrobbler.com/2.0/"
+    /// 整个 MusicBrainz 接口共用一个键(按 IP 限速,不分端点)。窗口截止时刻 = 下一个请求最早什么时候能发,
+    /// 同 collector `sharedCooldownMusicBrainz`。
+    public static let musicBrainzKey = "musicbrainz.org/ws/2/"
+    /// 两个 MusicBrainz 请求之间至少隔多久,同 collector `musicbrainzMinIntervalBetweenCalls`。
+    public static let musicBrainzInterval: TimeInterval = 1.1
 
     private struct File: Codable {
         var endpoints: [String: Double]
@@ -72,6 +77,12 @@ public final class OutboundCooldownStore: @unchecked Sendable {
             }
         }
         return OutboundCooldowns.until(cache, key: key, now: now)
+    }
+
+    /// 同 activeUntil,但每次都读文件、不走 1 秒缓存:MusicBrainz 的窗口本身就只有 1.1 秒。
+    public func freshUntil(_ key: String, now: Date = Date()) -> Date? {
+        let endpoints = (try? Data(contentsOf: url)).map(OutboundCooldowns.decode) ?? [:]
+        return OutboundCooldowns.until(endpoints, key: key, now: now)
     }
 
     public func publish(_ key: String, until: Date, now: Date = Date()) {
