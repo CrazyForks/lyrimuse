@@ -51,6 +51,8 @@ struct LastfmStatsSection: View {
     @AppStorage("np:lastfmHeatmapCollapsed") private var heatmapCollapsed = false
     @AppStorage("np:lastfmHoursCollapsed") private var hoursCollapsed = false
     @AppStorage("np:lastfmHoursSpan") private var hoursSpanRaw = ListeningHours.Span.month.rawValue
+    @AppStorage("np:lastfmRegionsCollapsed") private var regionsCollapsed = false
+    @AppStorage("np:lastfmRegionsSpan") private var regionsSpanRaw = ListeningHours.Span.month.rawValue
     @AppStorage("np:lastfmChartKind") private var kindRaw = LastfmStatsService.ChartKind.artists.rawValue
     @AppStorage("np:lastfmChartPeriod") private var periodRaw = LastfmStatsService.Period.month.rawValue
 
@@ -92,11 +94,13 @@ struct LastfmStatsSection: View {
             case .onThisDay:
                 // 「足迹」段(由「那年今日」改名)的卡序:足迹卡(几个数字的总账)在最上,几行就读完、
                 // 也不会把下面的图挤下去;热力图(一年里哪几天)和收听时段(一天里几点、一周哪天)
-                // 都在答"什么时候在听",挨着放、由大到小;那年今日在最下——一年里大半天是空的
-                // ("那天没听"很正常),放上面会让整段先看到一句"没有记录"。顺序固定,不随哪张有没有内容变。
+                // 都在答"什么时候在听",挨着放、由大到小;歌手来自哪里答"听的是谁",接在后面;那年今日在最下
+                // ——一年里大半天是空的("那天没听"很正常),放上面会让整段先看到一句"没有记录"。
+                // 顺序固定,不随哪张有没有内容变。
                 listeningFootprintCard
                 heatmapCard
                 listeningHoursCard
+                artistRegionsCard
                 onThisDayCard
             // 见 Tab.settings:内容由 AccountLinkingTab 画,这里只保持挂载不掉线。
             case .settings: EmptyView()
@@ -1466,6 +1470,36 @@ struct LastfmStatsSection: View {
                 }
             }
         }
+    }
+
+    // MARK: - 歌手来自哪里
+
+    /// collector 后台汇总(artistregions.go),这里只读。首轮还没算出来时 LastfmArtistRegionsView 自己显示一句说明。
+    private var artistRegionsCard: some View {
+        SettingsCard {
+            collapsibleHeader(icon: "globe.asia.australia", title: L10n.t("歌手来自哪里"),
+                              help: L10n.t("按 MusicBrainz 登记的所属国家或地区统计，不是出生地"),
+                              collapsed: $regionsCollapsed) {
+                if !regionsCollapsed {
+                    SettingsSegmentedControlHashable(
+                        selection: regionsSpanBinding,
+                        options: ListeningHours.Span.allCases,
+                        label: Self.hoursSpanLabel
+                    )
+                }
+            }
+            if !regionsCollapsed {
+                CardDivider()
+                LastfmArtistRegionsView(span: regionsSpanBinding.wrappedValue)
+            }
+        }
+    }
+
+    private var regionsSpanBinding: Binding<ListeningHours.Span> {
+        Binding(
+            get: { ListeningHours.Span(rawValue: regionsSpanRaw) ?? .month },
+            set: { regionsSpanRaw = $0.rawValue }
+        )
     }
 
     private var hoursSpanBinding: Binding<ListeningHours.Span> {

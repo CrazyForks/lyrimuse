@@ -321,6 +321,23 @@ func artistMergeGroups(entries []lastfmChartEntry, resolve artistIdentityFn, nam
 }
 
 func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentityFn, nameKey, displayName func(string) string) []lastfmChartEntry {
+	merged, _ := mergeAliasedArtistBuckets(entries, resolve, nameKey, displayName)
+	out := make([]lastfmChartEntry, len(merged))
+	for i, m := range merged {
+		out[i] = m.lastfmChartEntry
+	}
+	return out
+}
+
+// mergedArtist 是归并后的一行,带着它由哪几条原始条目并成(entries 下标,原顺序)。
+type mergedArtist struct {
+	lastfmChartEntry
+	members []int
+}
+
+// mergeAliasedArtistBuckets 是 mergeAliasedArtistsNamed 的本体,多返回每一行的成员和每条的身份:
+// 歌手地区汇总(artistregions.go)要从成员里取 mbid,显示名与次数跟歌手榜同一套。
+func mergeAliasedArtistBuckets(entries []lastfmChartEntry, resolve artistIdentityFn, nameKey, displayName func(string) string) ([]mergedArtist, []mbArtistIdentity) {
 	n := len(entries)
 	find, ids := artistMergeGroups(entries, resolve, nameKey)
 
@@ -339,6 +356,7 @@ func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentity
 		hanName   string // 桶里第一个(=播放最多的)单人中文成员名,见下面挑选注释
 		zh        string // 身份解析给出的中文名(桶里没有任何中文成员名时的显示兜底)
 		playCount int
+		members   []int
 	}
 	buckets := make(map[int]*bucket, n)
 	order := make([]int, 0, n)
@@ -367,9 +385,10 @@ func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentity
 			b.zh = ids[i].Zh
 		}
 		b.playCount += e.PlayCount
+		b.members = append(b.members, i)
 	}
 
-	out := make([]lastfmChartEntry, 0, len(order))
+	out := make([]mergedArtist, 0, len(order))
 	for _, root := range order {
 		b := buckets[root]
 		name := b.name
@@ -380,12 +399,12 @@ func mergeAliasedArtistsNamed(entries []lastfmChartEntry, resolve artistIdentity
 		} else if b.zh != "" {
 			name = b.zh
 		}
-		out = append(out, lastfmChartEntry{Name: name, PlayCount: b.playCount})
+		out = append(out, mergedArtist{lastfmChartEntry: lastfmChartEntry{Name: name, PlayCount: b.playCount}, members: b.members})
 	}
 	// SliceStable:平分的歌手保持合并前的相对次序(合并前列表来自 Last.fm,本身有序),
 	// sort.Slice 的不稳定性会让平分名次每次刷新随机跳。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].PlayCount > out[j].PlayCount })
-	return out
+	return out, ids
 }
 
 // resolveArtistAvatar 给一个歌手名找头像图——优先 QQ 音乐(qqSingerAvatar,这个项目

@@ -1166,6 +1166,37 @@ func runLastfmTests() {
         expectEqual(tie?.peakHour, 9, "收听时段: 并列最多取最早的钟点")
     }
 
+    // MARK: - ArtistRegions(歌手来自哪里)
+    do {
+        let json = """
+        {"user":"KhalilChan3","periods":{"1month":{"covered":100,"pending":2,"pending_artists":["林宥嘉"],"unresolved":8,"unresolved_artists":["Valorant"],
+          "regions":[{"code":"US","plays":40,"artists":["Prince","Michael Jackson","Musiq"]},
+                     {"code":"TW","plays":20,"artists":["陶喆"]},{"code":"HK","plays":10,"artists":["方大同"]},
+                     {"code":"CN","plays":7,"artists":["丁世光"]},{"code":"JP","plays":5,"artists":["宇多田ヒカル"]},
+                     {"code":"KR","plays":4,"artists":["aespa"]},{"code":"GB","plays":3,"artists":["Adele"]},
+                     {"code":"CA","plays":3,"artists":["Daniel Caesar"]},{"code":"FR","plays":0,"artists":[]}]},
+          "overall":{"covered":5}}}
+        """.data(using: .utf8)!
+        let parsed = ArtistRegions.parse(json, user: "khalilchan3")
+        expectEqual(parsed.keys.sorted(), ["1month", "overall"], "歌手地区: 账号名不分大小写")
+        expectEqual(ArtistRegions.parse(json, user: "someone").isEmpty, true, "歌手地区: 别的账号的文件不认")
+        expectEqual(ArtistRegions.parse(Data("{}".utf8), user: "x").isEmpty, true, "歌手地区: 没记账号的文件不认")
+        expectEqual(parsed["overall"]?.regions.isEmpty, true, "歌手地区: 缺字段按空")
+        let rows = ArtistRegions.rows(parsed["1month"]!)
+        expectEqual(rows.map(\.kind), [.region("US"), .region("TW"), .region("HK"), .region("CN"), .region("JP"),
+                                       .region("KR"), .other, .pending, .unresolved], "歌手地区: 前 6 个地区 + 其他 + 还在查 + 未查到")
+        expectEqual(rows[7].artists, ["林宥嘉"], "歌手地区: 还在查列 collector 给的名字")
+        expectEqual(rows[6].plays, 6, "歌手地区: 其他 = 第 7 名起的合计(次数 0 的不算)")
+        expectEqual(rows[6].artists, ["Adele", "Daniel Caesar"], "歌手地区: 其他列各地区第一位")
+        expectEqual(rows[8].artists, ["Valorant"], "歌手地区: 未查到列 collector 给的名字")
+        expectEqual(ArtistRegions.period(for: .year), "12month", "歌手地区: 范围对到 Last.fm 时段名")
+        let nullNames = Data(#"{"user":"u","periods":{"1month":{"covered":3,"regions":[{"code":"US","plays":3,"artists":null}]}}}"#.utf8)
+        expectEqual(ArtistRegions.parse(nullNames, user: "u")["1month"]?.regions.first?.plays, 3,
+                    "歌手地区: 名字列表是 null 时这一行照样读出来")
+        expectEqual(ArtistRegions.rows(ArtistRegions.parse(nullNames, user: "u")["1month"]!).map(\.kind), [.region("US")],
+                    "歌手地区: 全部查完(没有 pending)就不出「还在查」")
+    }
+
     // MARK: - OnThisDayPlanner / ListeningMilestones(那年今日计划 + 收听足迹)
     do {
         var cal = Calendar(identifier: .gregorian)

@@ -934,6 +934,8 @@ final class LastfmStatsService: ObservableObject {
         dailyCounts = [:]
         hourlyCounts = [:]
         hourlyBackfillNeeded = false
+        artistRegions = [:]
+        artistRegionsVersion = nil
         dailySyncedThrough = 0
         dailyLoaded = false
         dailySyncing = false
@@ -2922,6 +2924,7 @@ final class LastfmStatsService: ObservableObject {
     /// 就是唯一的推进者),再按已解码版本判变化。
     func refreshLocalCoversIfCacheChanged() {
         EnrichCacheReader.refreshIfNeeded()
+        refreshArtistRegionsIfChanged()
         // 右键链接另外还跟着 collector 的平台主页缓存走,放在下面那道判断前面(它自己按输入早退)
         refreshChartAppLinks()
         let stamp = EnrichCacheReader.decodedContentVersion
@@ -2933,6 +2936,22 @@ final class LastfmStatsService: ObservableObject {
         // 中文名同一个网易云 id,这一拍就该并族、次数标过期,不等下次启动。写法索引没加载时
         // 不动 —— loadTitleForms 自己会在建族前灌一次。
         if titleFormsLoaded { refreshLocalAliases(rebuildFamilies: true) }
+    }
+
+    /// 「歌手来自哪里」卡的数据(collector artistregions.go 写,`ArtistRegions`),键是 Last.fm 时段名。只读。
+    @Published private(set) var artistRegions: [String: ArtistRegions.Period] = [:]
+    private var artistRegionsVersion: Date?
+
+    /// 按文件修改时间判断,没变不读。卡片出现时读一次,之后跟着统计页每 2 分钟那一拍(refreshLocalCoversIfCacheChanged)。
+    func refreshArtistRegionsIfChanged() {
+        let url = LyrimusePaths.configFile(ArtistRegions.fileName)
+        let version = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        // 跟 collector 用同一个账号名比(它按 lastfm_user 取榜单),不是 credentials 优先取的打卡账号。
+        let user = ConfigStore.shared.lastfmUser
+        guard version != artistRegionsVersion, !user.isEmpty else { return }
+        artistRegionsVersion = version
+        let parsed = (try? Data(contentsOf: url)).map { ArtistRegions.parse($0, user: user) } ?? [:]
+        if parsed != artistRegions { artistRegions = parsed }
     }
 
     /// 上一次算出 `localCovers` 用的输入:行的身份序列 + enrich 缓存的版本。
