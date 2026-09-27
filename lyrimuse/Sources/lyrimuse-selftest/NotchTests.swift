@@ -555,6 +555,14 @@ func runNotchTests() {
         expectEqual(A.feedback(for: .notYetSkippable(secondsUntilSkippable: 2), alreadyPromptedAccessibility: false), .none,
                     "自动跳过反馈: 还不能跳不打扰")
 
+        expectEqual(YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: "com.spotify.client"), true,
+                    "门槛: Spotify 桌面版的广告不是浏览器,轮询收手")
+        expectEqual(YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: "com.apple.Safari"), false, "门槛: Safari 照常探")
+        expectEqual(YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: "com.brave.Browser"), false, "门槛: Brave 照常探")
+        expectEqual(YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: nil), false,
+                    "门槛: 还没解析到播放器不算(广告刚开始那一拍),下一拍可能就是浏览器")
+        expectEqual(YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: ""), false, "门槛: 空串同上")
+
         // 后台标签页:临时切过去按、按完切回;用户正在看的那扇窗口不切。
         typealias F = BrowserTabFocus
         expectEqual(F.parse("ALREADY"), .alreadyCurrent, "切标签页: 本来就是当前页")

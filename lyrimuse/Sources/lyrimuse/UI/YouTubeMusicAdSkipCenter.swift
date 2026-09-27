@@ -99,6 +99,11 @@ final class YouTubeMusicAdSkipCenter: ObservableObject {
                 if Task.isCancelled { return }
                 // 每一拍现读:广告刚开始那一拍播放源可能还没解析到浏览器,只读一次会让整条广告都探不到。
                 let bundleID = await MainActor.run { LocalPlaybackSource.shared.lastResolvedBundleID }
+                // 不是浏览器放的广告(Spotify 桌面版之类)没有可按的键,收手,不空转满一整轮。
+                if YouTubeMusicAdSkipper.isKnownNonBrowser(reportedBundleID: bundleID) {
+                    Self.logger.notice("gate: not a browser player (\(bundleID ?? "", privacy: .public)), stop")
+                    return
+                }
                 let state = YouTubeMusicAdSkipper.probeSkippability(reportedBundleID: bundleID)
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return }

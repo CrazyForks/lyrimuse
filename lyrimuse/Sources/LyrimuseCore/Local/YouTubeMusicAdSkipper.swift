@@ -206,6 +206,15 @@ public enum YouTubeMusicAdSkipper {
         return YouTubeMusicAdProbe.shared.cachedBadgeVerdict(forKey: key, now: now) == .ad
     }
 
+    /// 这一拍的播放器**确定不是浏览器**(报了 bundle id、却折不回任何一种浏览器方言,比如 Spotify 桌面版的广告)。
+    /// 门槛轮询看到它就收手:这种广告没有页面、没有跳过键,再探也只是每拍空转一次。bundle id 还没解析到
+    /// (nil / 空)不算 —— 广告刚开始那一拍常这样,下一拍可能就是浏览器。
+    public static func isKnownNonBrowser(reportedBundleID: String?) -> Bool {
+        guard let reportedBundleID, !reportedBundleID.isEmpty else { return false }
+        guard let host = BrowserPositionProbe.probeTargetBundleID(forReported: reportedBundleID), !host.isEmpty else { return true }
+        return BrowserAutomationPermission.family(forBundleID: host) == nil
+    }
+
     /// 跑一次:门槛 → AXPress → 复核。同步、会阻塞(两次 AppleEvent 往返 + 一次 AX 遍历 + `verifyDelay`,正常 ~1.2s,
     /// 极端 6s 超时),调用方放后台;调用方自己保证**同一时刻只跑一份**(`NotchPlayback.skipAdInFlight`)—— 真机日志里
     /// 用户连按几下,几份并行的 run 交错,各自的复核读到的是别人按完的页面。nil = 连门槛脚本都没跑成(不是浏览器 /
