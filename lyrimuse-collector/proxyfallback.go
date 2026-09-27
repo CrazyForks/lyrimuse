@@ -36,8 +36,24 @@ const (
 	// 「每首歌都要把 DNS/TLS 超时白等一遍」,healthcheck 探两首歌从 7s 涨到 29s。没有粘性
 	// 的话这里会原样重演:每个请求先白等 3s 直连再走代理。10 分钟之后重新探一次直连,
 	// 网络恢复了就自动回到直连,不需要重启。
+	//
+	// 这是第一次的窗口;到期重新探直连又失败,窗口翻倍(proxyStickyWindow)。
 	proxyFallbackSticky = 10 * time.Minute
+	// proxyFallbackStickyMax:窗口翻倍的上限。直连在这台机器上是长期被打掉的(Musixmatch 一周 86 次
+	// 「直连失败、代理救回」,每次都先白等 proxyFallbackDirectBudget),固定 10 分钟就是每隔一阵再白等一次;
+	// 一直失败就越等越久,上限之后仍会定期探一次,直连恢复了照样回得来。
+	proxyFallbackStickyMax = 6 * time.Hour
 )
+
+// proxyStickyWindow:第 streak 次连续「直连失败、代理救回」之后走代理多久(10 分钟起,逐次翻倍,封顶
+// proxyFallbackStickyMax)。
+func proxyStickyWindow(streak int) time.Duration {
+	w := proxyFallbackSticky
+	for i := 1; i < streak && w < proxyFallbackStickyMax; i++ {
+		w *= 2
+	}
+	return min(w, proxyFallbackStickyMax)
+}
 
 // proxyFallbackTransport 把上面那条策略包成一个 http.RoundTripper。
 //
@@ -85,6 +101,10 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 	resp, directErr := t.attempt(t.direct, req, proxyFallbackDirectBudget)
 	directElapsed := time.Since(directStart)
 	if directErr == nil {
+		// 窗口到期、重新探直连通了:连续失败次数清零,下次再被打掉从 10 分钟重新算。
+		if t.hadSticky() {
+			t.clearSticky(host)
+		}
 		return resp, nil
 	}
 	proxy := systemProxyURL()
@@ -105,10 +125,10 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 			proxy.Host, proxyErr, time.Since(proxyStart).Round(time.Millisecond))
 		return nil, directErr
 	}
-	t.markSticky(host)
+	window := t.markSticky(host)
 	log.Printf("proxy: %s direct failed (%v, %s), succeeded via system proxy %s (%s), using the proxy for the next %s",
 		host, directErr, directElapsed.Round(time.Millisecond), proxy.Host,
-		time.Since(proxyStart).Round(time.Millisecond), proxyFallbackSticky)
+		time.Since(proxyStart).Round(time.Millisecond), window)
 	return resp, nil
 }
 
@@ -171,11 +191,20 @@ func (t *proxyFallbackTransport) preferProxy(host string) bool {
 	return systemProxyURL() != nil
 }
 
-func (t *proxyFallbackTransport) markSticky(host string) {
+// markSticky 记下「接下来走代理」,返回这次的窗口(按连续失败次数翻倍,见 proxyStickyWindow)。
+func (t *proxyFallbackTransport) markSticky(host string) time.Duration {
+	window := saveProxyFallbackHint(host, true)
 	t.mu.Lock()
-	t.stickyUntil = time.Now().Add(proxyFallbackSticky)
+	t.stickyUntil = time.Now().Add(window)
 	t.mu.Unlock()
-	saveProxyFallbackHint(host, true)
+	return window
+}
+
+// hadSticky:这个进程里走代理的窗口设过、而且已经到期(这一次是到期后重新探直连)。
+func (t *proxyFallbackTransport) hadSticky() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.stickyUntil.IsZero() && !time.Now().Before(t.stickyUntil)
 }
 
 func (t *proxyFallbackTransport) clearSticky(host string) {
@@ -195,8 +224,12 @@ func (t *proxyFallbackTransport) clearSticky(host string) {
 // 这只是一份**提示**,不是权威状态:读到了也仍然要确认代理连得上(preferProxy),读不到最多
 // 多探一次直连。所以两个进程同时写导致丢一条更新是可以接受的,不值得为它上文件锁。
 type proxyFallbackHintFile struct {
-	// Hosts: host -> 最近一次"代理把它救回来了"的 unix 秒。
+	// Hosts: host -> 最近一次"代理把它救回来了"的 unix 秒。老版本只认这一项(按 proxyFallbackSticky 算到期)。
 	Hosts map[string]int64 `json:"hosts"`
+	// Until: host -> 走代理到什么时候(unix 秒);有它就按它,没有退回 Hosts + proxyFallbackSticky。
+	Until map[string]int64 `json:"until,omitempty"`
+	// Streak: host -> 连续几次「直连失败、代理救回」,算下一次的窗口(proxyStickyWindow)。
+	Streak map[string]int `json:"streak,omitempty"`
 }
 
 func proxyFallbackHintPath() string {
@@ -224,35 +257,55 @@ func readProxyFallbackHint() proxyFallbackHintFile {
 }
 
 func loadProxyFallbackHint(host string) bool {
-	at, ok := readProxyFallbackHint().Hosts[host]
+	f := readProxyFallbackHint()
+	if until, ok := f.Until[host]; ok {
+		return time.Now().Before(time.Unix(until, 0))
+	}
+	at, ok := f.Hosts[host]
 	if !ok {
 		return false
 	}
 	return time.Since(time.Unix(at, 0)) < proxyFallbackSticky
 }
 
-func saveProxyFallbackHint(host string, useProxy bool) {
+// saveProxyFallbackHint 记下 / 清掉「这个域名走代理」。useProxy 时连续失败次数 +1、按它算窗口并返回;
+// 清掉时连续次数一并清零。提示文件写不了(没有配置目录)时窗口就是 proxyFallbackSticky。
+func saveProxyFallbackHint(host string, useProxy bool) time.Duration {
+	window := proxyFallbackSticky
 	path := proxyFallbackHintPath()
 	if path == "" {
-		return
+		return window
 	}
 	f := readProxyFallbackHint()
+	if f.Until == nil {
+		f.Until = map[string]int64{}
+	}
+	if f.Streak == nil {
+		f.Streak = map[string]int{}
+	}
 	if useProxy {
-		f.Hosts[host] = time.Now().Unix()
+		now := time.Now()
+		f.Streak[host]++
+		window = proxyStickyWindow(f.Streak[host])
+		f.Hosts[host] = now.Unix()
+		f.Until[host] = now.Add(window).Unix()
 	} else {
 		delete(f.Hosts, host)
+		delete(f.Until, host)
+		delete(f.Streak, host)
 	}
 	raw, err := json.Marshal(f)
 	if err != nil {
-		return
+		return window
 	}
 	// 目录一般早就有了(config.json 就在里面),但不能假定 —— 全新机器上第一次跑到这里
 	// 时它还不存在,os.WriteFile 不会自己建,于是提示**静默**写不下去、跨进程粘性形同虚设
 	// (由 TestProxyFallbackUsesProxyWhenDirectFails 当场抓到)。
 	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
-		return
+		return window
 	}
 	// tmp + rename,临时文件名带进程号 —— 跟 musixmatchSaveTokenFile 同一个理由:并发的
 	// 两个写入方不能互相覆盖同一个 tmp,否则 rename 出去的可能是半份别人的内容。
 	_ = writeFileAtomic(path, raw)
+	return window
 }

@@ -304,6 +304,7 @@ func TestYtmusicExtractVisitorID(t *testing.T) {
 func TestYtmusicEnsureVisitorIDSingleFlight(t *testing.T) {
 	ytmusicVisitorMu.Lock()
 	ytmusicVisitorID = ""
+	ytmusicVisitorFailedAt = time.Time{}
 	ytmusicVisitorMu.Unlock()
 
 	orig := ytmusicDoFetchVisitorID
@@ -355,11 +356,13 @@ func TestYtmusicEnsureVisitorIDSkipsFetchWhenCached(t *testing.T) {
 	}
 }
 
-// 抓取失败(返回空串)不该"poison"住——下一次调用必须能重试,不能因为第一次没抓到
-// 就让这一路永远死掉(进程是长驻的,一次瞬时网络问题不该拖垮整个运行周期)。
+// 抓取失败(返回空串)不该"poison"住——过了 ytmusicVisitorRetryAfter 必须能重试,不能因为一次没抓到
+// 就让这一路永远死掉(进程是长驻的,一次瞬时网络问题不该拖垮整个运行周期)。窗口之内不重抓:
+// 首页卡在重定向循环时一次失败要 4～5 秒,每轮都重抓会把整轮检索拖到截止。
 func TestYtmusicEnsureVisitorIDRetriesAfterFailure(t *testing.T) {
 	ytmusicVisitorMu.Lock()
 	ytmusicVisitorID = ""
+	ytmusicVisitorFailedAt = time.Time{}
 	ytmusicVisitorMu.Unlock()
 
 	orig := ytmusicDoFetchVisitorID
@@ -376,11 +379,75 @@ func TestYtmusicEnsureVisitorIDRetriesAfterFailure(t *testing.T) {
 	if got := ytmusicEnsureVisitorID(context.Background()); got != "" {
 		t.Fatalf("第一次应该失败返回空串,实际 %q", got)
 	}
+	if got := ytmusicEnsureVisitorID(context.Background()); got != "" {
+		t.Fatalf("窗口之内不该重抓,实际 %q", got)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("窗口之内只该抓一次,实际 %d", got)
+	}
+	ytmusicVisitorMu.Lock()
+	ytmusicVisitorFailedAt = time.Now().Add(-ytmusicVisitorRetryAfter - time.Second)
+	ytmusicVisitorMu.Unlock()
 	if got := ytmusicEnsureVisitorID(context.Background()); got != "visitor-B" {
-		t.Fatalf("第二次应该重试成功,实际 %q", got)
+		t.Fatalf("过了窗口应该重试成功,实际 %q", got)
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Fatalf("应该真的抓了两次,实际 %d", got)
+	}
+}
+
+// 首页失败时,在单飞锁上排队的那几个不跟着各抓一次:同时在跑的几首解析只该付一次失败的耗时。
+func TestYtmusicEnsureVisitorIDQueuedCallersSkipAfterFailure(t *testing.T) {
+	ytmusicVisitorMu.Lock()
+	ytmusicVisitorID = ""
+	ytmusicVisitorFailedAt = time.Time{}
+	ytmusicVisitorMu.Unlock()
+
+	orig := ytmusicDoFetchVisitorID
+	defer func() { ytmusicDoFetchVisitorID = orig }()
+	var calls int32
+	ytmusicDoFetchVisitorID = func(ctx context.Context) string {
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(30 * time.Millisecond)
+		return ""
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			ytmusicEnsureVisitorID(context.Background())
+		}()
+	}
+	wg.Wait()
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("%d 个并发调用在首页失败时触发了 %d 次抓取(应为 1)", n, got)
+	}
+}
+
+// 调用方自己取消(一轮检索截止 / 用户停止搜索)不算抓取失败,不能让后面的检索跟着放弃。
+func TestYtmusicEnsureVisitorIDCancelDoesNotBackOff(t *testing.T) {
+	ytmusicVisitorMu.Lock()
+	ytmusicVisitorID = ""
+	ytmusicVisitorFailedAt = time.Time{}
+	ytmusicVisitorMu.Unlock()
+
+	orig := ytmusicDoFetchVisitorID
+	defer func() { ytmusicDoFetchVisitorID = orig }()
+	ytmusicDoFetchVisitorID = func(ctx context.Context) string {
+		if ctx.Err() != nil {
+			return ""
+		}
+		return "visitor-C"
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := ytmusicEnsureVisitorID(cancelled); got != "" {
+		t.Fatalf("已取消的这一轮拿不到,实际 %q", got)
+	}
+	if got := ytmusicEnsureVisitorID(context.Background()); got != "visitor-C" {
+		t.Fatalf("取消不该挡住下一轮,实际 %q", got)
 	}
 }
 

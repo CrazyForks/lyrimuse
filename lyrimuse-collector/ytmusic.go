@@ -97,6 +97,9 @@ var (
 	// ytmusicVisitorMu 只保护下面这一个值本身,不跨 I/O 持有。
 	ytmusicVisitorMu sync.Mutex
 	ytmusicVisitorID string
+	// ytmusicVisitorFailedAt:上一次没抓到 visitor id 的时刻。ytmusicVisitorRetryAfter 之内不再重抓,
+	// 直接当这一轮拿不到。
+	ytmusicVisitorFailedAt time.Time
 
 	// ytmusicVisitorFetchMu 是单飞锁:同一时刻只允许一个 goroutine 真的去抓 visitor id
 	// (GET 首页 + 正则抠 JS 里的 VISITOR_DATA)。这个值理论上没有过期时间(ytmusicapi
@@ -139,10 +142,22 @@ func ytmusicLastFailureReasonNow() string {
 // 的形式——会形成初始化环)。
 var ytmusicDoFetchVisitorID func(ctx context.Context) string
 
+// ytmusicVisitorRetryAfter:没抓到 visitor id 之后多久内不再重抓。首页间歇性陷进重定向循环
+// (err "stopped after 10 redirects")时,一次抓取要 4～5 秒才失败;不记下失败,每一轮检索都重抓一次,
+// 同时在跑的几首解析还在单飞锁上排队各等一次,排在后面的直接拖到 20 秒截止。见 09 章决策 102。
+const ytmusicVisitorRetryAfter = time.Minute
+
 func ytmusicCachedVisitorID() string {
 	ytmusicVisitorMu.Lock()
 	defer ytmusicVisitorMu.Unlock()
 	return ytmusicVisitorID
+}
+
+// ytmusicVisitorFailedRecently:还没有 visitor id,且上一次抓取失败在 ytmusicVisitorRetryAfter 之内。
+func ytmusicVisitorFailedRecently(now time.Time) bool {
+	ytmusicVisitorMu.Lock()
+	defer ytmusicVisitorMu.Unlock()
+	return ytmusicVisitorID == "" && !ytmusicVisitorFailedAt.IsZero() && now.Sub(ytmusicVisitorFailedAt) < ytmusicVisitorRetryAfter
 }
 
 func ytmusicEnsureVisitorID(ctx context.Context) string {
@@ -154,17 +169,24 @@ func ytmusicEnsureVisitorID(ctx context.Context) string {
 	if v := ytmusicCachedVisitorID(); v != "" {
 		return v
 	}
+	// 刚失败过(含在单飞锁上排队等前一个抓完、结果前一个失败了):不再抓一次。
+	if ytmusicVisitorFailedRecently(time.Now()) {
+		return ""
+	}
 	var v string
 	if ytmusicDoFetchVisitorID != nil {
 		v = ytmusicDoFetchVisitorID(ctx)
 	} else {
 		v = ytmusicFetchVisitorID(ctx)
 	}
+	ytmusicVisitorMu.Lock()
 	if v != "" {
-		ytmusicVisitorMu.Lock()
 		ytmusicVisitorID = v
-		ytmusicVisitorMu.Unlock()
+	} else if ctx.Err() == nil {
+		// 调用方自己取消 / 超时不算抓取失败:那是这一轮不要了,不该让后面的检索跟着放弃。
+		ytmusicVisitorFailedAt = time.Now()
 	}
+	ytmusicVisitorMu.Unlock()
 	return v
 }
 
