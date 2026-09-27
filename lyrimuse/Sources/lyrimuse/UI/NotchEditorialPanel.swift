@@ -9,7 +9,7 @@ import SwiftUI
 /// `.screenSaver` 层级的非激活面板上位置与层级都不可靠。层级、跨 Space、截屏隐藏跟灵动岛窗口一致。
 ///
 /// 它算展开态的一部分:指针在浮框上时卡片保持展开(`onHover` 回报给控制器,跟卡片自己的悬停合并判定),
-/// 卡片一收起浮框就关(控制器在收起那一刻叫 `close(ifOwner:)`)。另外再点一次专辑名、点浮框和灵动岛以外的
+/// 卡片一收起浮框就关(控制器在收起那一刻叫 `close(ifOwner:)`)。另外点灵动岛上任何地方、点浮框和灵动岛以外的
 /// 地方、换歌、灵动岛窗口藏起来也关。再点同一类(又点专辑名)= 关;点另一类(开着专辑、点歌手)= 换内容。
 @MainActor
 final class NotchEditorialPanel {
@@ -24,6 +24,13 @@ final class NotchEditorialPanel {
     private var ownerWindow: NSWindow?
     private var onHover: ((Bool) -> Void)?
     private var monitors: [Any] = []
+    /// 按下灵动岛那一刻关掉的是哪一类、什么时候。按钮在**松手**时才触发 `toggle`,而浮框在按下时就关了 ——
+    /// 不记这一笔,再点同一个专辑名会变成"按下关、松手又开"。
+    private var closedByOwnerClick: (kind: EditorialCard.Kind, at: Date)?
+    /// 按下到松手之间最多隔多久还算同一下点击。
+    private static let clickWindow: TimeInterval = 1.0
+    /// 那一笔只对**这一下**点击有效:下一次按下就清掉(先点空白关掉、紧接着又点专辑名,是要重新打开)。
+    private var pendingClickMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
 
     private init() {}
@@ -32,11 +39,32 @@ final class NotchEditorialPanel {
     /// `onHover`:指针进出浮框;关掉时也会回报一次 false。
     func toggle(card: EditorialCard, cardFrame: NSRect, owner: NSWindow,
                 onHover: @escaping (Bool) -> Void) {
+        if let closed = closedByOwnerClick {
+            forgetOwnerClick()
+            // 这一下的按下已经把浮框关了:点的是同一类就到此为止(= 关),另一类照常换内容。
+            if closed.kind == card.kind, Date().timeIntervalSince(closed.at) < Self.clickWindow { return }
+        }
         let sameSpot = panel != nil && ownerWindow === owner
         let sameKind = shownKind == card.kind
         close()
         if sameSpot && sameKind { return }
         show(card: card, cardFrame: cardFrame, owner: owner, onHover: onHover)
+    }
+
+    private func rememberOwnerClick(_ kind: EditorialCard.Kind, eventTime: TimeInterval) {
+        forgetOwnerClick()
+        closedByOwnerClick = (kind, Date())
+        // 按时间戳认出「这一下自己的按下」,只有之后的按下才清掉。
+        pendingClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if event.timestamp != eventTime { MainActor.assumeIsolated { self?.forgetOwnerClick() } }
+            return event
+        }
+    }
+
+    private func forgetOwnerClick() {
+        closedByOwnerClick = nil
+        if let monitor = pendingClickMonitor { NSEvent.removeMonitor(monitor) }
+        pendingClickMonitor = nil
     }
 
     /// 卡片收起时由控制器叫:只关这扇窗自己开的那一个。
@@ -107,8 +135,8 @@ final class NotchEditorialPanel {
             }
             .store(in: &cancellables)
 
-        // 点在别的 App 上:关。点在本 App 别的窗口上:关;点在浮框自己或灵动岛上不关 ——
-        // 专辑名 / 歌手名那一下由 toggle 自己处理,在这里关掉会变成"关了又立刻开"。
+        // 点在别的 App 上:关。点在本 App 别的窗口上、或灵动岛上任何地方:关;点在浮框自己身上不关。
+        // 点的若正是专辑名 / 歌手名,松手时的 toggle 靠 closedByOwnerClick 认出"刚关的就是这一类",不再重开。
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated { self?.close() }
         }) {
@@ -117,7 +145,11 @@ final class NotchEditorialPanel {
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if event.window !== self.panel, event.window !== self.ownerWindow { self.close() }
+                guard event.window !== self.panel else { return }
+                if event.window === self.ownerWindow, let kind = self.shownKind {
+                    self.rememberOwnerClick(kind, eventTime: event.timestamp)
+                }
+                self.close()
             }
             return event
         }) {

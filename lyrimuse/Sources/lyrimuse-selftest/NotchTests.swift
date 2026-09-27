@@ -1191,6 +1191,14 @@ func runNotchTests() {
                     "简介契约: 指针停在浮框上时卡片不收")
         expectEqual(controller.contains("NotchEditorialPanel.shared.close(ifOwner: window)"), true,
                     "简介契约: 卡片收起就关浮框,不单独留在屏幕上")
+        let panelSrc = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lyrimuse/UI/NotchEditorialPanel.swift"), encoding: .utf8)) ?? ""
+        expectEqual(panelSrc.contains("guard event.window !== self.panel else { return }"), true,
+                    "简介契约: 点灵动岛任何地方都关浮框,只有点浮框自己不关")
+        expectEqual(panelSrc.contains("if closed.kind == card.kind, Date().timeIntervalSince(closed.at) < Self.clickWindow { return }"), true,
+                    "简介契约: 再点同一个专辑名 / 歌手名 = 关(按下已经关掉,松手不重开)")
+        expectEqual(panelSrc.contains("if event.timestamp != eventTime { MainActor.assumeIsolated { self?.forgetOwnerClick() } }"), true,
+                    "简介契约: 那笔记录只对这一下点击有效(先点空白、再点专辑名要能重新打开)")
         expectEqual(controller.contains("map { visible, album, artist in visible && (album || artist) }"), true,
                     "简介契约: 灵动岛开着、头部画歌手名或专辑名时才登记预取")
         expectEqual(stage.contains("func toggleEditorial(_ kind: EditorialCard.Kind) {}"), true,
