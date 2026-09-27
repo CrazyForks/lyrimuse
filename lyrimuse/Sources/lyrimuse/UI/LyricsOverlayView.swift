@@ -2126,6 +2126,9 @@ struct WrapLayout: Layout {
     /// 可选:把"文字实际占据的矩形"写到这里,给鼠标命中判定用(见 WrapContentRectSink)。
     /// 不传就完全不参与,布局行为逐位不变。
     var contentRectSink: WrapContentRectSink? = nil
+    /// 每个子视图前面能不能断行(见 `WrapLayoutMath.rows` 的 breakBefore)。nil = 处处能断。
+    /// 由文本决定,文本已经在 contentKey 里,所以不另进缓存 key。
+    var breakBefore: [Bool]? = nil
 
     // 量一次子视图尺寸就存住,别每次调用都重量一遍。
     //
@@ -2173,7 +2176,8 @@ struct WrapLayout: Layout {
             return rows
         }
         let rows = WrapLayoutMath.rows(
-            sizes: cache.sizes, maxWidth: maxWidth, horizontalSpacing: horizontalSpacing)
+            sizes: cache.sizes, maxWidth: maxWidth, horizontalSpacing: horizontalSpacing,
+            breakBefore: breakBefore)
         cache.rows = rows
         cache.rowsWidth = maxWidth
         cache.rowsSpacing = horizontalSpacing

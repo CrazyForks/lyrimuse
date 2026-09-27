@@ -138,12 +138,17 @@ public enum MusicPlaybackController {
     /// (歌名+歌手+专辑,专辑空退两字段),删匹配的第一条 —— delete 作用在 library
     /// playlist 上就是从资料库整个移除(区别于从普通歌单移除)。没匹配时脚本报错→
     /// 返回 false。Apple Music 专属,调用方约定同上;不要在主线程调用。
+    ///
+    /// `expectedName`:点下去那一刻界面上的歌名。脚本跑起来时 Music 的当前曲目已经换了(切歌、
+    /// 队列自动往下走)就不删 —— 不然删掉的是用户根本没选的那首。nil = 不校验。
     @discardableResult
-    public static func removeCurrentTrackFromLibrary() -> Bool {
+    public static func removeCurrentTrackFromLibrary(expectedName: String? = nil) -> Bool {
         runAppleScriptCapturing(#"""
         tell application "Music"
             set t to current track
             set tName to name of t
+        """# + currentTrackNameGuard(expectedName) + #"""
+
             set tArtist to artist of t
             set tAlbum to album of t
             set matches to {}
@@ -199,11 +204,30 @@ public enum MusicPlaybackController {
     /// 「减少推荐」。UI 里的 Suggest Less 就是老的 Dislike,AppleScript 属性一直叫
     /// `disliked`(iTunes 12.5 起,实机验证可写)。Apple Music 专属,
     /// 调用方约定同上;不要在主线程调用。
+    ///
+    /// `expectedName`:同 `removeCurrentTrackFromLibrary`,当前曲目已经换了就不改。
     @discardableResult
-    public static func setDisliked(_ value: Bool) -> Bool {
-        runAppleScriptCapturing(
-            #"tell application "Music" to set disliked of current track to \#(value)"#
-        ) != nil
+    public static func setDisliked(_ value: Bool, expectedName: String? = nil) -> Bool {
+        runAppleScriptCapturing(#"""
+        tell application "Music"
+            set t to current track
+            set tName to name of t
+        """# + currentTrackNameGuard(expectedName) + #"""
+
+            set disliked of t to \#(value)
+            return "ok"
+        end tell
+        """#) != nil
+    }
+
+    /// 接在 `set tName to name of t` 后面的一行(自带前置换行:多行字面量的最后一行不带换行符,
+    /// 后半段字面量以空行开头):歌名对不上就报错,脚本到此为止、返回 nil。
+    /// AppleScript 的字符串比较默认不分大小写。歌名是外部数据,拼进去之前转义引号 / 反斜杠。
+    static func currentTrackNameGuard(_ expectedName: String?) -> String {
+        guard let name = expectedName, !name.isEmpty else { return "" }
+        let escaped = name.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\n    if tName is not \"\(escaped)\" then error \"current track changed\""
     }
 
     /// 「减少推荐」当前值(只读,给菜单状态行回显用)。nil = 查不出来。

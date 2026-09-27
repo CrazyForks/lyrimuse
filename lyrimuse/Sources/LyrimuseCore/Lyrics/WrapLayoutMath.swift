@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// 逐字歌词那个自动换行容器的**几何计算**。不认识 SwiftUI —— 把结果喂给
 /// `subviews[i].place(...)` 是 UI 层那个 Layout 壳子的事(见 WrapLayout)。
@@ -33,9 +34,18 @@ public enum WrapLayoutMath {
     /// 会被压缩——`!indices.isEmpty` 那个条件就是干这个的:一行还空着的时候永远先放进去
     /// 再说。这一条正是"长歌词行变成一串省略号"那个 bug 的修法,别在这里加"太宽就跳过"
     /// 之类的判断。
+    ///
+    /// `breakBefore`:第 i 项前面能不能断行(`breakOpportunities(texts:)` 按文本算)。nil = 处处能断,
+    /// 即原来的逐项贪心。给了的话,不能断开的相邻几项当成一块整体换行 —— 逐字歌词的英文常按音节切
+    /// (「beau」「ti」「ful」),逐项贪心会把一个词拆到两行。一块本身就比 maxWidth 宽时退回块内逐项断,
+    /// 规则同上:不丢、不压。
     public static func rows(
-        sizes: [CGSize], maxWidth: CGFloat, horizontalSpacing: CGFloat
+        sizes: [CGSize], maxWidth: CGFloat, horizontalSpacing: CGFloat, breakBefore: [Bool]? = nil
     ) -> [Row] {
+        if let breakBefore, breakBefore.count == sizes.count, breakBefore.dropFirst().contains(false) {
+            return clusteredRows(sizes: sizes, maxWidth: maxWidth,
+                                 horizontalSpacing: horizontalSpacing, breakBefore: breakBefore)
+        }
         var rows: [Row] = []
         var indices: [Int] = []
         var width: CGFloat = 0
@@ -57,6 +67,59 @@ public enum WrapLayoutMath {
             rows.append(Row(indices: indices, width: width, height: height))
         }
         return rows
+    }
+
+    private static func clusteredRows(
+        sizes: [CGSize], maxWidth: CGFloat, horizontalSpacing: CGFloat, breakBefore: [Bool]
+    ) -> [Row] {
+        var rows: [Row] = []
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+        func flush() {
+            guard !indices.isEmpty else { return }
+            rows.append(Row(indices: indices, width: width, height: height))
+            indices = []
+            width = 0
+            height = 0
+        }
+        func append(_ i: Int) {
+            width += (indices.isEmpty ? 0 : horizontalSpacing) + sizes[i].width
+            height = max(height, sizes[i].height)
+            indices.append(i)
+        }
+        var start = 0
+        while start < sizes.count {
+            var end = start + 1
+            while end < sizes.count, !breakBefore[end] { end += 1 }
+            let clusterWidth = sizes[start..<end].reduce(CGFloat(0)) { $0 + $1.width }
+                + CGFloat(end - start - 1) * horizontalSpacing
+            if !indices.isEmpty, width + horizontalSpacing + clusterWidth > maxWidth { flush() }
+            if indices.isEmpty, clusterWidth > maxWidth {
+                // 一整块独占一行都放不下:块内逐项贪心。
+                for i in start..<end {
+                    if !indices.isEmpty, width + horizontalSpacing + sizes[i].width > maxWidth { flush() }
+                    append(i)
+                }
+            } else {
+                for i in start..<end { append(i) }
+            }
+            start = end
+        }
+        flush()
+        return rows
+    }
+
+    /// 每一项前面能不能断行:前一项以空白 / 连字符结尾、这一项以空白开头,或两边挨着的是汉字 / 假名
+    /// (中日文逐字切,字与字之间本来就能断)。第 0 项恒 true。别的文字(英文音节、韩文一个词里的
+    /// 几个音节)挨在一起就不断。
+    public static func breakOpportunities(texts: [String]) -> [Bool] {
+        texts.indices.map { i in
+            guard i > 0 else { return true }
+            guard let p = texts[i - 1].unicodeScalars.last, let c = texts[i].unicodeScalars.first else { return true }
+            if p.properties.isWhitespace || c.properties.isWhitespace || p == "-" { return true }
+            return CharacterSet.hanLike.contains(p) || CharacterSet.hanLike.contains(c)
+        }
     }
 
     /// 换行之后整块占多大。宽度直接取给定的 maxWidth(容器给多少用多少),高度是各行行高

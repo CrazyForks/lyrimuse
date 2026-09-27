@@ -96,9 +96,13 @@ final class WrappedKaraokeRowsView: NSView {
             }
             itemWidths = widths
             let sizes = widths.map { CGSize(width: $0, height: pitch) }
+            // 按组折行时一组本来就是一个词;逐字时英文按音节切,不能在词中间断(见 WrapLayoutMath.rows)。
+            let breakBefore = spec.groups == nil
+                ? WrapLayoutMath.breakOpportunities(texts: spec.words.map(\.text)) : nil
             if let width {
                 wrapWidth = max(1, width - 2 * inset)
-                rows = WrapLayoutMath.rows(sizes: sizes, maxWidth: wrapWidth, horizontalSpacing: 0)
+                rows = WrapLayoutMath.rows(sizes: sizes, maxWidth: wrapWidth, horizontalSpacing: 0,
+                                           breakBefore: breakBefore)
                 size = CGSize(width: width, height: CGFloat(rows.count) * pitch + 2 * inset)
             } else {
                 // 没有宽度限制 = 在问「不折行要多宽」(`DuetStageInsetLayout` 拿它量自然宽),铺成一行如实作答。

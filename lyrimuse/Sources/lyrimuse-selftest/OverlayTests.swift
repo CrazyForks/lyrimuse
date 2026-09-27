@@ -765,6 +765,43 @@ func runOverlayTests() {
         // 空输入不该炸，也不该造出一个空行。
         expectEqual(WrapLayoutMath.rows(sizes: [], maxWidth: 100, horizontalSpacing: 0).count, 0,
                     "WrapLayout: 空输入没有行")
+
+        // 逐字歌词的英文按音节切:只在词边界断,一个词不拆到两行。
+        let syllables = ["beau", "ti", "ful ", "girl"]
+        let breaks = WrapLayoutMath.breakOpportunities(texts: syllables)
+        expectEqual(breaks, [true, false, false, true], "WrapLayout: 音节之间不能断,空白后能断")
+        // 「a beautiful」:逐项贪心会排成 [a beau ti][ful],按词排是 [a][beautiful]。
+        let wordLead = WrapLayoutMath.breakOpportunities(texts: ["a ", "beau", "ti", "ful"])
+        expectEqual(rowIndices(WrapLayoutMath.rows(sizes: [sz(20), sz(30), sz(20), sz(30)], maxWidth: 90,
+                                                   horizontalSpacing: 0, breakBefore: wordLead)),
+                    [[0], [1, 2, 3]], "WrapLayout: 装不下整词时整词换行")
+        expectEqual(rowIndices(WrapLayoutMath.rows(sizes: [sz(30), sz(20), sz(30), sz(30)], maxWidth: 90,
+                                                   horizontalSpacing: 0, breakBefore: breaks)),
+                    [[0, 1, 2], [3]], "WrapLayout: 按词折行,不在音节中间断")
+        expectEqual(rowIndices(WrapLayoutMath.rows(sizes: [sz(10), sz(30), sz(20), sz(30)], maxWidth: 50,
+                                                   horizontalSpacing: 0,
+                                                   breakBefore: [true, true, false, false])),
+                    [[0], [1, 2], [3]], "WrapLayout: 一个词独占一行都放不下时退回逐项断")
+        // 中文逐字、中英混排:汉字两侧都能断。
+        expectEqual(WrapLayoutMath.breakOpportunities(texts: ["你", "好", "a", "b", "-", "c"]),
+                    [true, true, true, false, false, true], "WrapLayout: 汉字两侧能断,连字符后能断")
+
+        // 长音强调:一个词的几个 token 都绕整词中心放大,放大后首尾仍然相接(不互相压住)。
+        do {
+            let widths = [10.0, 30.0]
+            let xs = LyricsWordEmphasis.scaleAnchorXs(widths: widths)
+            expectEqual(xs, [2.0, 1.0 / 3.0], "emphasis: 锚点都落在整词中心")
+            let scale = 1.07
+            func scaled(_ start: Double, _ w: Double, _ ax: Double) -> (Double, Double) {
+                let pivot = start + ax * w
+                return (pivot + (start - pivot) * scale, pivot + (start + w - pivot) * scale)
+            }
+            let first = scaled(0, widths[0], xs[0])
+            let second = scaled(widths[0], widths[1], xs[1])
+            expectEqual(abs(first.1 - second.0) < 1e-9, true, "emphasis: 放大后相邻 token 首尾相接")
+            expectEqual(LyricsWordEmphasis.scaleAnchorXs(widths: [0, 20]), [0.5, 0.5],
+                        "emphasis: 零宽 token 取 0.5")
+        }
         // 没有宽度约束时的兜底尺寸:全部铺成一行,宽 = 各宽之和 + (n-1) 个间距,高 = 最高那个。
         expectEqual(WrapLayoutMath.unconstrainedSize(sizes: [sz(30, 10), sz(40, 24), sz(20, 12)], horizontalSpacing: 5),
                     CGSize(width: 100, height: 24), "WrapLayout: 无约束尺寸 = 宽之和 + 间距,高取最大")

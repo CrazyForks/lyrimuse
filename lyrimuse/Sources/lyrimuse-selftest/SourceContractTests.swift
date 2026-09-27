@@ -1522,7 +1522,7 @@ func runSourceContractTests() {
             // 迷你换句不做动画、逐字不上浮(07 章决策 42)。
             expectEqual(lwv.contains("MiniLyricsReel.transition"), false,
                         "迷你歌词: 换句不做动画,新的一句直接替上来")
-            expectEqual(lwv.contains("rises: false\n            )"), true,
+            expectEqual(lwv.contains("字一抬一抬只显得在晃。\n                rises: false,"), true,
                         "迷你歌词: 逐字填色不上浮(完整布局照旧上浮)")
             // 迷你长句处理:滚动档的当前行走悬浮歌词那条图层版跟唱滚动,不走 MarqueeText 包 SwiftUI 填色。
             expectEqual(lwv.contains("OverlayScrollingLyricRow("), true,
@@ -1568,7 +1568,7 @@ func runSourceContractTests() {
             }
             expectEqual(lwv.contains("window.animationBehavior = .none"), true,
                         "歌词窗口: 打开 / 关闭没有系统缩放淡入淡出")
-            expectEqual(lwv.contains("window.setFrame(restore, display: false, animate: false)")
+            expectEqual(lwv.contains("window.setFrame(target, display: false, animate: false)")
                         && lwv.contains("window.setFrame(f, display: true, animate: false)"), true,
                         "歌词窗口: 进出迷你的 setFrame 都是 animate: false")
             expectEqual(lwv.contains("NSAnimationContext.runAnimationGroup"), false,
@@ -1590,7 +1590,7 @@ func runSourceContractTests() {
                         "歌词窗口: 尺寸变化只在不延后时提交")
             expectEqual(lwv.contains("lyricsColumnWidth = w") || lwv.contains("lyricsViewportHeight = h"), false,
                         "歌词窗口: 别改回尺寸一变就直接写字号依据")
-            expectEqual(lwv.contains("guard let window else { return }\n        isSwitchingForm = true"), true,
+            expectEqual(lwv.contains("guard let window, !isFullScreenActive, !isNativeFullScreenTransition else { return }\n        isSwitchingForm = true"), true,
                         "歌词窗口: 进出迷你一开始就进入切换态")
             // 播控排两侧只放随机 / 循环,够不到就空着占位;Last.fm 喜欢只进「⋯」菜单(07 章决策 54)。
             expectEqual(lwv.contains("LastfmLoveTransportButton"), false,

@@ -30,6 +30,9 @@ private final class WindowPlayback: ObservableObject {
     @Published private(set) var currentGapIndex: Int?
     @Published private(set) var allLines: [LyricsWindowLine] = []
     @Published private(set) var lyricsGapMarkers: [LyricsGapMarker] = []
+    /// 同一批间奏点按 index 建好的字典,跟 lyricsGapMarkers 同一拍更新(那边发通知)。列表每行都要查一次,
+    /// 在视图里现建的话每行都是一次整表重建。
+    private(set) var lyricsGapMarkersByIndex: [Int: LyricsGapMarker] = [:]
     @Published private(set) var currentLineFillSettled = true
     @Published private(set) var artworkData: Data?
     @Published private(set) var artworkImage: NSImage?
@@ -82,8 +85,9 @@ private final class WindowPlayback: ObservableObject {
     /// 歌词文字色(完整 / 迷你各一套)。`.auto` 之外的三档不再问背景亮度,见 LyricsWindowTextColorMode。
     @Published private(set) var textColorMode: LyricsWindowTextColorMode = .auto
     @Published private(set) var miniTextColorMode: LyricsWindowTextColorMode = .auto
-    private(set) var textColor = AppSettings.defaultLyricsWindowTextColorFallback
-    private(set) var miniTextColor = AppSettings.defaultLyricsWindowTextColorFallback
+    // 要 @Published:只改颜色时没有别的字段跟着变,不发通知窗口就不重画,颜色要等下一次换行才生效。
+    @Published private(set) var textColor = AppSettings.defaultLyricsWindowTextColorFallback
+    @Published private(set) var miniTextColor = AppSettings.defaultLyricsWindowTextColorFallback
     // 迷你自己那套外观(跟上面完整那组同名同结构,各存各的)。
     @Published private(set) var miniBackgroundMode: LyricsWindowBackgroundMode = .artwork
     @Published private(set) var miniBackgroundColorHex = AppSettings.defaultLyricsWindowBackgroundColorHex
@@ -114,7 +118,11 @@ private final class WindowPlayback: ObservableObject {
             p.$scrollLineIndex.removeDuplicates().sink { [weak self] in self?.scrollLineIndex = $0 },
             p.$currentGapIndex.removeDuplicates().sink { [weak self] in self?.currentGapIndex = $0 },
             p.$allLines.removeDuplicates().sink { [weak self] in self?.allLines = $0 },
-            p.$lyricsGapMarkers.removeDuplicates().sink { [weak self] in self?.lyricsGapMarkers = $0 },
+            p.$lyricsGapMarkers.removeDuplicates().sink { [weak self] markers in
+                // 先写字典再写 @Published:通知发出去时字典已经是新的。index 按理不重复,重复了留第一个,不崩。
+                self?.lyricsGapMarkersByIndex = Dictionary(markers.map { ($0.index, $0) }, uniquingKeysWith: { a, _ in a })
+                self?.lyricsGapMarkers = markers
+            },
             p.$currentLineFillSettled.removeDuplicates().sink { [weak self] in self?.currentLineFillSettled = $0 },
             p.$artworkData.removeDuplicates().sink { [weak self] in self?.artworkData = $0 },
             p.$artworkImage.removeDuplicates(by: { $0 === $1 })
@@ -335,12 +343,20 @@ private final class LyricsWindowController: ObservableObject {
     private var savedFrame: NSRect?
     private var escapeMonitor: Any?
     private var closeObserver: NSObjectProtocol?
+    private var terminateObserver: NSObjectProtocol?
     private var resignKeyObserver: NSObjectProtocol?
     private var becomeKeyObserver: NSObjectProtocol?
     private var enterFullScreenObserver: NSObjectProtocol?
     private var exitFullScreenObserver: NSObjectProtocol?
     private var nativeFullScreenEscapeMonitor: Any?
     private var fullScreenCapabilityObserver: NSObjectProtocol?
+    /// 原生全屏进 / 出的动画期间(will… 到 did…)。这段时间窗口在一路放大缩小,
+    /// isNativeFullScreen 却要到 didEnter 才置位 —— 不单独挡的话,过渡中的尺寸会被当成用户拖出来的存下。
+    private var isNativeFullScreenTransition = false
+    private var fullScreenTransitionObservers: [NSObjectProtocol] = []
+    /// 进 / 出失败只有 delegate 回调(windowDidFailToEnterFullScreen),没有通知;挂不上 delegate
+    /// (SwiftUI 管着),就按时兜底复位,免得标记卡住、从此一次都不存。
+    private var fullScreenTransitionResetTask: Task<Void, Never>?
     private var frameObserver: NSObjectProtocol?
     private var resizeObserver: NSObjectProtocol?
     private var liveResizeStartObserver: NSObjectProtocol?
@@ -371,8 +387,17 @@ private final class LyricsWindowController: ObservableObject {
         persistFrameTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
+            self?.persistFrameTask = nil
             self?.persistFrame()
         }
+    }
+
+    /// 还在去抖的那一次当场存掉:拖完 400ms 内关窗或 ⌘Q,不补这一下最后的位置就丢了。
+    private func flushPendingPersistFrame() {
+        guard let task = persistFrameTask else { return }
+        task.cancel()
+        persistFrameTask = nil
+        persistFrame()
     }
 
     /// 存一次。**伪全屏/原生全屏期间不存**,**迷你期间只存迷你尺寸、不碰完整窗口那份 frame** ——
@@ -380,7 +405,7 @@ private final class LyricsWindowController: ObservableObject {
     /// 想要的窗口大小:退出全屏再开就是一扇满屏的窗;迷你那边更隐蔽,下次打开会是一扇迷你大小、
     /// 却**不在**迷你模式的窗,看着像"窗口自己缩水了"。两份各存各的键。
     private func persistFrame() {
-        guard let window, !isActive, !isNativeFullScreen else { return }
+        guard let window, !isActive, !isNativeFullScreen, !isNativeFullScreenTransition else { return }
         // 窗口还没真正上屏时 frame 可能是 SwiftUI 给的中间值,不足为据。
         guard window.isVisible else { return }
         let defaults = UserDefaults.standard
@@ -435,7 +460,9 @@ private final class LyricsWindowController: ObservableObject {
     /// 别改回 `setFrame(animate: true)` / `NSAnimationContext`:缩放动画每一帧都会按新尺寸把
     /// 整张歌词列表重排一遍,几版补救(先放大后切布局、动画期间冻结字号)都没能让它顺。
     func toggleMini() {
-        guard let window else { return }
+        // 全屏(含进出的过渡)时不切:对一扇全屏窗 setFrame,退出全屏后系统会把它摆回全屏前的
+        // frame,迷你状态和窗口尺寸就对不上了。按钮那边同样置灰。
+        guard let window, !isFullScreenActive, !isNativeFullScreenTransition else { return }
         isSwitchingForm = true
         if isMini {
             // 置顶状态回到进迷你之前那样(迷你默认置顶,见下面进迷你那一支)。
@@ -445,7 +472,17 @@ private final class LyricsWindowController: ObservableObject {
             frameBeforeMini = nil
             // 先在迷你布局下把 frame 摆到位,再切完整布局:反过来的话完整布局会先按迷你那点
             // 尺寸排一帧(挤成一团)再跳到大窗。迷你那档尺寸下限(300×110)不挡放大。
-            if let restore { window.setFrame(restore, display: false, animate: false) }
+            if let restore {
+                // 迷你期间可能拔了屏 / 改了分辨率:夹进它此刻所在(或最靠近)的那块屏,不往空处摆。
+                func overlap(_ s: NSScreen) -> CGFloat {
+                    let r = s.frame.intersection(restore)
+                    return r.isNull ? 0 : r.width * r.height
+                }
+                let best = NSScreen.screens.max { overlap($0) < overlap($1) }
+                let screen = best.flatMap { overlap($0) > 0 ? $0 : nil } ?? window.screen ?? NSScreen.main
+                let target = screen.map { WindowFrameFit.clamp(restore, into: $0.visibleFrame) } ?? restore
+                window.setFrame(target, display: false, animate: false)
+            }
             isMini = false
             updateTrafficLightVisibility()
             DispatchQueue.main.async { [weak self] in self?.isSwitchingForm = false }
@@ -710,6 +747,7 @@ private final class LyricsWindowController: ObservableObject {
             forName: NSWindow.willCloseNotification, object: window, queue: .main
         ) { [weak self] note in
             MainActor.assumeIsolated {
+                self?.flushPendingPersistFrame()
                 self?.forceExit()
                 self?.coverageMonitor?.stop()
                 self?.coverageMonitor = nil
@@ -717,6 +755,13 @@ private final class LyricsWindowController: ObservableObject {
                 // 留一条指向已释放窗口的死项。
                 if let win = note.object as? NSWindow { NSApp.removeWindowsItem(win) }
             }
+        }
+        // 退出 App 时窗口不一定先收到 willClose。
+        if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
+        terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushPendingPersistFrame() }
         }
         if let resignKeyObserver { NotificationCenter.default.removeObserver(resignKeyObserver) }
         resignKeyObserver = NotificationCenter.default.addObserver(
@@ -754,6 +799,36 @@ private final class LyricsWindowController: ObservableObject {
                 }
             }
         }
+        for observer in fullScreenTransitionObservers { NotificationCenter.default.removeObserver(observer) }
+        let beginTransition: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isNativeFullScreenTransition = true
+                self.persistFrameTask?.cancel()
+                self.fullScreenTransitionResetTask?.cancel()
+                self.fullScreenTransitionResetTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
+                    self?.isNativeFullScreenTransition = false
+                }
+            }
+        }
+        let endTransition: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.fullScreenTransitionResetTask?.cancel()
+                self?.isNativeFullScreenTransition = false
+            }
+        }
+        fullScreenTransitionObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main, using: beginTransition),
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willExitFullScreenNotification, object: window, queue: .main, using: beginTransition),
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didEnterFullScreenNotification, object: window, queue: .main, using: endTransition),
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main, using: endTransition),
+        ]
         if let exitFullScreenObserver { NotificationCenter.default.removeObserver(exitFullScreenObserver) }
         exitFullScreenObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main
@@ -881,11 +956,13 @@ private final class LyricsWindowController: ObservableObject {
         // attach 里挂的观察者一个不落地摘掉(新加观察者时这里同步加一行)。
         for observer in [closeObserver, resignKeyObserver, becomeKeyObserver, enterFullScreenObserver,
                          exitFullScreenObserver, fullScreenCapabilityObserver, frameObserver, resizeObserver,
-                         liveResizeStartObserver, liveResizeEndObserver, occlusionObserver].compactMap({ $0 }) {
+                         liveResizeStartObserver, liveResizeEndObserver, occlusionObserver,
+                         terminateObserver].compactMap({ $0 }) + fullScreenTransitionObservers {
             NotificationCenter.default.removeObserver(observer)
         }
         // coverageMonitor 随本对象释放,自己的 deinit 会停表。
         persistFrameTask?.cancel()
+        fullScreenTransitionResetTask?.cancel()
     }
 }
 
@@ -1025,7 +1102,8 @@ struct LyricsWindowView: View {
     @State private var showsListenHistory = false
     /// 自绘滚动指示条的数据(offset/内容高):收在小 model 里、只有指示条子视图订阅 ——
     /// 滚动期间逐帧的 preference 更新不能拖着整窗 body 陪跑(性能纪律同 WindowVolumeCapsule)。
-    @StateObject private var scrollMetrics = LyricsScrollMetricsModel()
+    /// 用 @State 持有而不是 @StateObject:后者会让整窗 body 也订阅它,滚动时每帧跟着重算。
+    @State private var scrollMetrics = LyricsScrollMetricsModel()
     /// 窗口面不可见期间是否发生过需要滚动的换行/间奏切换(见 isSurfaceVisible 的 onChange)。
     @State private var scrollPendingWhileHidden = false
     /// 简介面板里的歌词来源(EnrichCacheReader 异步查,面板打开时取一次)。
@@ -1482,7 +1560,7 @@ struct LyricsWindowView: View {
         // 口白换成台名:那不是广告,台名就是此刻"在放什么"的答案(同完整布局)。
         if let station = radioTalkStation { return [.init(field: .title, value: station.name)] }
         return playback.miniHeaderFields.visibleParts(
-            title: playback.title, artist: playback.artist, album: playback.displayAlbum)
+            title: playback.title, artist: playback.displayArtist, album: playback.displayAlbum)
     }
 
     /// 顶部文字最多两行:第一样独占第一行,其余几样用「 — 」合成第二行(Apple Music 迷你播放器
@@ -1560,14 +1638,24 @@ struct LyricsWindowView: View {
     @ViewBuilder
     private var miniTimeRow: some View {
         if miniShowsTimeRow, let total = playback.currentDurationMs {
-            TimelineView(miniClockSchedule) { ctx in
-                let posMs = miniScrubFraction.map { Int($0 * Double(total)) }
-                    ?? miniPositionMs(now: ctx.date)
-                Text(NotchTimeFormat.mmss(ms: posMs) + " / " + NotchTimeFormat.mmss(ms: total))
-                    .font(.system(size: Self.miniTimeFontSize).monospacedDigit())
-                    .foregroundStyle(miniSecondaryColor)
+            // 只有在放、窗口看得见时才挂秒表;暂停时数字本来不动,看不见时走也是白走。
+            // 两种情况都画一次当下的值,恢复播放 / 重新可见时 body 会重算、回到秒表这一支。
+            if playback.anchor != nil, windowController.isSurfaceVisible {
+                TimelineView(miniClockSchedule) { ctx in
+                    miniTimeText(posMs: miniScrubFraction.map { Int($0 * Double(total)) }
+                        ?? miniPositionMs(now: ctx.date), totalMs: total)
+                }
+            } else {
+                miniTimeText(posMs: miniScrubFraction.map { Int($0 * Double(total)) }
+                    ?? miniPositionMs(now: Date()), totalMs: total)
             }
         }
+    }
+
+    private func miniTimeText(posMs: Int, totalMs: Int) -> some View {
+        Text(NotchTimeFormat.mmss(ms: posMs) + " / " + NotchTimeFormat.mmss(ms: totalMs))
+            .font(.system(size: Self.miniTimeFontSize).monospacedDigit())
+            .foregroundStyle(miniSecondaryColor)
     }
 
     /// 时间那一行此刻摆不摆。抽出来是因为上面那一组要先知道"右边到底有没有文字",
@@ -1602,7 +1690,7 @@ struct LyricsWindowView: View {
     @ViewBuilder
     private func miniLyrics(fontSize: CGFloat) -> some View {
         VStack(spacing: fontSize * 0.34) {
-            if let gap = miniCurrentGap {
+            if let gap = miniCurrentGap, !playback.isRadioTalkBreak {
                 // 间奏:三颗呼吸点**顶替**当前行的位置(完整布局是把它插在滚动列表里对应那一行
                 // 之后,迷你只有"当前"这一格,所以是顶替不是插入)。点亮算法/呼吸曲线走跟悬浮歌词、
                 // 完整布局同一个 LyricsGapDotsView,比例也照完整那份(点 0.32 字号、间距 0.3)。
@@ -1620,7 +1708,7 @@ struct LyricsWindowView: View {
                         + PlaybackCoordinator.shared.currentLyricsOffsetMs
                 }
                 .frame(height: fontSize * 0.5)
-            } else if miniCurrentLine == nil, !playback.hasLyricsContent {
+            } else if playback.isRadioTalkBreak || (miniCurrentLine == nil && !playback.hasLyricsContent) {
                 // 没歌词时不留一片空白:那会让人以为窗口坏了。
                 //
                 // 文案走完整布局那套 `emptyStateSpec`,别在这儿另写一句 —— 它分了「没有在播放 /
@@ -1635,9 +1723,10 @@ struct LyricsWindowView: View {
             }
             // 当前行 + 下一行。控制条浮出来时下一行**照常显示**(它下面那格已经给控制条预留好了,
             // 见 miniDeckReserve);悬停进出不许摘掉或挪动它 —— 摘掉是一次真重排,当前行会上下弹。
+            // 口白期间 allLines 还是上一首的,当前行 / 下一行都不给(完整布局的同款闸见 rightPane)。
             MiniLyricsReel(
-                current: miniCurrentGap == nil ? miniCurrentLine : nil,
-                next: miniNextLine,
+                current: miniCurrentGap == nil && !playback.isRadioTalkBreak ? miniCurrentLine : nil,
+                next: playback.isRadioTalkBreak ? nil : miniNextLine,
                 fontSize: fontSize,
                 fontFamily: activeFontFamily,
                 color: miniPrimaryColor,
@@ -1649,7 +1738,8 @@ struct LyricsWindowView: View {
                 isPlaying: playback.isPlayingNow && windowController.isSurfaceVisible,
                 fillSettled: playback.currentLineFillSettled,
                 reduceMotion: reduceMotion,
-                displayScale: displayScale
+                displayScale: displayScale,
+                pausedMs: pausedFillKey
             )
             .equatable()
             .allowsHitTesting(false)
@@ -1928,6 +2018,13 @@ struct LyricsWindowView: View {
             offsetMs: PlaybackCoordinator.shared.currentLyricsOffsetMs)
     }
 
+    /// 暂停时逐字填色的时间基准(冻结位置 + 歌词偏移),播放中 nil。只用来让当前行在暂停中
+    /// 拖进度 / 调偏移时重画,见 KaraokeWordText.pausedMs。
+    private var pausedFillKey: Int? {
+        guard !playback.isPlayingNow, let paused = playback.pausedPositionMs else { return nil }
+        return paused &+ PlaybackCoordinator.shared.currentLyricsOffsetMs
+    }
+
     private var miniNextLine: LyricsWindowLine? {
         MiniLyricsSelection.nextIndex(currentLineIndex: playback.currentLineIndex,
                                       lineCount: playback.allLines.count)
@@ -2129,6 +2226,18 @@ struct LyricsWindowView: View {
                             .allowsHitTesting(false)
                             .onAppear { moreAnchorRect = r }
                             .onChange(of: r) { _, v in moreAnchorRect = v }
+                    } else {
+                        // 按钮没了(停播、窗口拖窄成单列):快照清零,挂在它上面的几块面板一并关掉 ——
+                        // 不清的话面板悬在旧位置,按钮回来时还会自己弹出来。
+                        Color.clear
+                            .allowsHitTesting(false)
+                            .onAppear {
+                                moreAnchorRect = .zero
+                                showsMoreMenu = false
+                                showsInfoPanel = false
+                                editorialPanel = nil
+                                showsChartsPanel = false
+                            }
                     }
                 }
                 .overlay {
@@ -2168,6 +2277,8 @@ struct LyricsWindowView: View {
                                 .transition(.opacity)
                             trackInfoPanel
                                 .fixedSize()
+                                // 开着面板换了歌:不重取的话来源和链接还是上一首的。
+                                .onChange(of: moreMenuTrackIdentity) { _ in loadInfoPanelDetails() }
                                 .padding(.leading, moreAnchorRect.maxX)
                                 .padding(.bottom, max(8, geo.size.height - moreAnchorRect.minY + 8))
                                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
@@ -2266,6 +2377,9 @@ struct LyricsWindowView: View {
                                 .padding(.bottom, max(8, geo.size.height - r.minY + 8))
                                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomTrailing)))
                         }
+                    } else if showsTranslationMenu {
+                        // 按钮没了(理由同「⋯」那块):关掉,别等按钮回来时自己弹出来。
+                        Color.clear.allowsHitTesting(false).onAppear { showsTranslationMenu = false }
                     }
                 }
                 // 音频输出面板(AirPlay 键弹出):同「⋯」菜单的窗级自绘玻璃
@@ -2289,6 +2403,8 @@ struct LyricsWindowView: View {
                                 .padding(.top, max(8, buttonBottom + 8))
                                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
+                    } else if showsOutputMenu {
+                        Color.clear.allowsHitTesting(false).onAppear { showsOutputMenu = false }
                     }
                 }
             }
@@ -2532,6 +2648,11 @@ struct LyricsWindowView: View {
                     if let intro = gapMarker(-1), let firstID = playback.allLines.first?.id {
                         gapDotsRow(intro, id: "\(firstID)-intro", centered: centered)
                     }
+                    // 背景深浅与文字色每行都一样,在循环外算一次:纯色 / 渐变档要解析色值、算亮度,
+                    // 半透明时还要查桌面亮度,放进循环就是每行三遍。
+                    let rowOnArtwork = hasArtworkBackground
+                    let rowTextColor = lyricTextColor
+                    let rowSecondaryColor = lyricSecondaryTextColor
                     ForEach(Array(playback.allLines.enumerated()), id: \.element.id) { index, item in
                         // .equatable():没有它,**每一行**都会跟着整页 body 重算一遍 —— 稳定播放期间主线程
                         // 曾有 ~22% 的时间耗在 NSHostingView.layout → ViewGraphRootValueUpdater.render 里,
@@ -2559,6 +2680,8 @@ struct LyricsWindowView: View {
                             // 终态(锚位行 top2% 亮度 255 = 已染色),正是"滚到位时该清晰但未染色"的反面。
                             fillSettled: index == playback.currentLineIndex
                                 && playback.currentLineFillSettled,
+                            // 只给当前行:暂停时拖进度 / 调偏移,这一行得重画填色,别的行是全色,不受影响。
+                            pausedMs: item.id == activeID ? pausedFillKey : nil,
                             fontSize: lyricFontSize,
                             romaFontSize: romaFontSize,
                             translationFontSize: translationFontSize,
@@ -2566,11 +2689,11 @@ struct LyricsWindowView: View {
                             duetInsetUnit: duetInsetUnit,
                             centered: centered,
                             wordRise: wordRise,
-                            onArtwork: hasArtworkBackground,
+                            onArtwork: rowOnArtwork,
                             // 行自己不再从 onArtwork 推文字色 —— 那等于把「文字颜色」那颗设置绕过去。
                             // 颜色在窗口层解析好再传进来(`.auto` 档解析出来的就是老的那两个值)。
-                            textColor: lyricTextColor,
-                            secondaryColor: lyricSecondaryTextColor,
+                            textColor: rowTextColor,
+                            secondaryColor: rowSecondaryColor,
                             showRomanization: playback.showRomanization,
                             showTranslation: playback.showTranslation,
                             reduceMotion: reduceMotion,
@@ -2745,7 +2868,9 @@ struct LyricsWindowView: View {
                         // `reduceMotion` 是这一面最后一道闸:总闸(用户开关 / 低电量)已经在
                         // PlaybackCoordinator 拦过,那两个不是视图环境值。
                         if !reduceMotion, let file = playback.motionCoverFile {
-                            MotionCoverView(file: file, isPlaying: playback.isPlayingSmoothed)
+                            // 窗口被整扇盖住 / 在别的桌面时也停:看不见的视频照样占解码和合成。
+                            MotionCoverView(file: file,
+                                            isPlaying: playback.isPlayingSmoothed && windowController.isSurfaceVisible)
                                 .transition(.opacity)
                         }
                     }
@@ -2910,10 +3035,12 @@ struct LyricsWindowView: View {
                     // 串行链:连点两下(减少→撤销)若各自独立 detached,执行序没保证,
                     // 可能 false 先落、true 后落,终态与 UI 相反。
                     let previous = suggestLessSerialTask
+                    // 带上点下去那一刻的歌名:排队 / 等授权期间换了歌,就不去改下一首的「减少推荐」。
+                    let expectedTitle = playback.title
                     suggestLessSerialTask = Task.detached(priority: .userInitiated) {
                         await previous?.value
                         guard await MusicAutomationPermission.checkAppleMusicSafely(askIfNeeded: true) else { return }
-                        MusicPlaybackController.setDisliked(newValue)
+                        MusicPlaybackController.setDisliked(newValue, expectedName: expectedTitle)
                     }
                 }
                 menuDivider
@@ -3138,6 +3265,8 @@ struct LyricsWindowView: View {
     private func removeCurrentTrackFromLibraryFromMenu() {
         libraryAddState = .removing
         let generation = moreMenuStateGeneration
+        // 删除不可撤销:等授权弹窗期间换了歌,删掉的就是下一首。脚本里按这个歌名再核一次。
+        let expectedTitle = playback.title
         Task.detached(priority: .userInitiated) {
             guard await MusicAutomationPermission.checkAppleMusicSafely(askIfNeeded: true) else {
                 await MainActor.run {
@@ -3145,7 +3274,7 @@ struct LyricsWindowView: View {
                 }
                 return
             }
-            let commandOK = MusicPlaybackController.removeCurrentTrackFromLibrary()
+            let commandOK = MusicPlaybackController.removeCurrentTrackFromLibrary(expectedName: expectedTitle)
             let verified = MusicPlaybackController.currentTrackIsInLibrary()
             await MainActor.run {
                 guard generation == moreMenuStateGeneration else { return }
@@ -3225,6 +3354,11 @@ struct LyricsWindowView: View {
             editorialPanel = nil
             showsInfoPanel = true
         }
+        loadInfoPanelDetails()
+    }
+
+    /// 简介面板里跟曲目走的两样:歌词来源、各平台链接。打开时取一次,开着时换歌再取一次。
+    private func loadInfoPanelDetails() {
         // 歌词来源与各平台链接都在 enrich 缓存里,在主线程直接读(理由同 moreMenu 那处:EnrichCacheReader
         // 只许在主线程用),缓存已加载时是 µs 级。
         let artist = playback.artist, title = playback.title, album = playback.album
@@ -3476,7 +3610,8 @@ struct LyricsWindowView: View {
             return String(format: "%d:%02d", s / 60, s % 60)
         }
         return VStack(alignment: .leading, spacing: 6) {
-            InfoPanelRow(label: L10n.t("歌名"), value: playback.title, onArtwork: hasArtworkBackground)
+            // 跟左栏同一个歌名口径:广告期间不把广告词当歌名。
+            InfoPanelRow(label: L10n.t("歌名"), value: displayTitle, onArtwork: hasArtworkBackground)
             if !playback.displayArtist.isEmpty {
                 InfoPanelRow(label: L10n.t("歌手"), value: playback.displayArtist, onArtwork: hasArtworkBackground)
             }
@@ -3784,6 +3919,8 @@ struct LyricsWindowView: View {
                     .frame(width: Self.windowActionIconWidth)
             }
             .help(L10n.t(showsMiniLayout ? "退出迷你尺寸" : "进入迷你尺寸"))
+            // 全屏时不能切(见 toggleMini)。
+            .disabled(windowController.isFullScreenActive)
         }
         .buttonStyle(WindowActionButtonStyle(onArtwork: hasArtworkBackground))
         // 图标跟着背景走:.clear 玻璃是透明的,背后是深色的模糊封面时 .secondary 会暗到
@@ -3913,15 +4050,9 @@ struct LyricsWindowView: View {
 
     // ---- 间奏「•••」(Apple Music 歌词页同款) ------------------------------------
 
-    /// 间奏点按 index 建好的字典 —— gapMarker 被列表每行调一次,线性扫是 O(N×M);
-    /// markers 只在换歌时变,这里作为计算属性每次 body 建一次 O(M)(M 通常个位数),
-    /// 仍远优于 N×M。
-    private var gapMarkersByIndex: [Int: LyricsGapMarker] {
-        Dictionary(uniqueKeysWithValues: playback.lyricsGapMarkers.map { ($0.index, $0) })
-    }
-
+    /// 列表每行调一次。字典在 WindowPlayback 里随间奏点一起建好(换歌时才变),这里只查。
     private func gapMarker(_ index: Int) -> LyricsGapMarker? {
-        gapMarkersByIndex[index]
+        playback.lyricsGapMarkersByIndex[index]
     }
 
     /// 间奏活跃时滚动定位用的行 id(跟列表里 gapDotsRow 的 .id 拼法保持一致)。
@@ -4301,6 +4432,8 @@ private struct LyricsLineRow: View, Equatable {
     /// 当前行的填色是否已定格(行尾/间奏停表):传值给 KaraokeLineText 停掉粗时钟 +
     /// isLive 判定 —— 非当前行恒 false(见调用点注释)。
     let fillSettled: Bool
+    /// 暂停时当前行的时间基准(冻结位置 + 歌词偏移),其余情况 nil。见 KaraokeWordText.pausedMs。
+    var pausedMs: Int? = nil
     let fontSize: CGFloat
     let romaFontSize: CGFloat
     let translationFontSize: CGFloat
@@ -4326,13 +4459,15 @@ private struct LyricsLineRow: View, Equatable {
     let onTap: () -> Void
 
     static func == (a: LyricsLineRow, b: LyricsLineRow) -> Bool {
-        // item 只比 id:id 里带了曲目标识 + 行下标(见 LyricsWindowLine),同 id 必然同内容。
-        a.item.id == b.item.id
+        // item 比整行而不只比 id:id 只保证同一首、同一份歌词正文,译文 / 罗马音 / 逐字是后补进来的,
+        // 补进来时 id 不变,只比 id 这一行就不重画。
+        a.item == b.item
             && a.distance == b.distance
             && a.isActive == b.isActive
             && a.isHovered == b.isHovered
             && a.isPlaying == b.isPlaying
             && a.fillSettled == b.fillSettled
+            && a.pausedMs == b.pausedMs
             && a.fontSize == b.fontSize
             && a.romaFontSize == b.romaFontSize
             && a.translationFontSize == b.translationFontSize
@@ -4517,7 +4652,8 @@ private struct LyricsLineRow: View, Equatable {
                 reduceMotion: reduceMotion,
                 displayScale: displayScale,
                 rowAlignment: rowAlignment,
-                rises: wordRise
+                rises: wordRise,
+                pausedMs: pausedMs
             )
         } else {
             Text(item.line.plainText ?? "")
@@ -4579,6 +4715,8 @@ private struct MiniLyricsReel: View, Equatable {
     let fillSettled: Bool
     let reduceMotion: Bool
     let displayScale: CGFloat
+    /// 暂停时的时间基准,只交给当前行(见 KaraokeWordText.pausedMs)。
+    var pausedMs: Int? = nil
 
     /// 下一行相对当前行的大小(原来下一行字号 = 当前行 × 0.62)。
     static let nextScale: CGFloat = 0.62
@@ -4737,7 +4875,8 @@ private struct MiniLyricsReel: View, Equatable {
                 displayScale: displayScale,
                 rowAlignment: .center,
                 // 迷你窗不做逐字上浮:两行挤在一小块里,字一抬一抬只显得在晃。
-                rises: false
+                rises: false,
+                pausedMs: row.role == .current ? pausedMs : nil
             )
             .multilineTextAlignment(.center)
         } else {
@@ -4797,6 +4936,8 @@ private struct KaraokeLineText: View {
     var rowAlignment: WrapLayout.RowAlignment = .leading
     /// 正在唱的字要不要上浮(完整布局要、迷你不要)。
     var rises: Bool = true
+    /// 暂停时的时间基准,原样交给每个字(见 KaraokeWordText.pausedMs)。
+    var pausedMs: Int? = nil
 
     /// WrapLayout 的内容身份:行文本/字号/字体族/罗马音形态都没变时,
     /// 布局回合跳过整行 CoreText 重新测宽(见 WrapLayout.Cache 守卫注释)。
@@ -4859,6 +5000,27 @@ private struct KaraokeLineText: View {
         return ms >= start - margin && ms <= end + margin
     }
 
+    /// 每个 token 放大时围绕的点,换算成它自己的单位坐标:同一个词的几个 token 都绕**整词中心**放大,
+    /// 拼起来就是整词放大;各绕各的中心的话,相邻音节放大后互相压住,交界处的辉光叠成两倍亮。
+    /// 宽度用跟 SwiftUI 那层同一个字体解析(`NSFont.overlayFont`)现量,只量要强调的 token。
+    private func emphasisAnchors(_ spans: [LyricsWordEmphasis.Span?]) -> [UnitPoint] {
+        var out = [UnitPoint](repeating: .center, count: words.count)
+        guard spans.contains(where: { $0 != nil }) else { return out }
+        let font = NSFont.overlayFont(familyName: fontFamily, size: fontSize, weight: .bold)
+        var i = 0
+        while i < words.count {
+            guard let span = spans[i] else { i += 1; continue }
+            var end = i + 1
+            while end < words.count, spans[end] == span { end += 1 }
+            let widths = (i..<end).map { Double(MenuBarMarqueeRenderer.width(of: words[$0].text, font: font)) }
+            for (k, x) in LyricsWordEmphasis.scaleAnchorXs(widths: widths).enumerated() {
+                out[i + k] = UnitPoint(x: x, y: 0.5)
+            }
+            i = end
+        }
+        return out
+    }
+
     /// 每个 token 所属的长音强调词。只有会上浮的完整布局才做(迷你版不上浮,也不强调),见 07 章决策 61。
     private var emphasisSpans: [LyricsWordEmphasis.Span?] {
         guard rises, !reduceMotion else { return Array(repeating: nil, count: words.count) }
@@ -4867,7 +5029,10 @@ private struct KaraokeLineText: View {
 
     @ViewBuilder
     private func lineContent(coarseDate: Date, coarseMs: Int) -> some View {
-        WrapLayout(rowAlignment: rowAlignment, contentKey: lineLayoutKey) {
+        // 按组排时一组就是一个词,处处能断;逐字排时英文按音节切,只在词边界断(见 WrapLayoutMath.rows)。
+        WrapLayout(rowAlignment: rowAlignment, contentKey: lineLayoutKey,
+                   breakBefore: groups?.isEmpty == false
+                       ? nil : WrapLayoutMath.breakOpportunities(texts: words.map(\.text))) {
             if let groups, !groups.isEmpty {
                 // 一组一列:上面这一组的字各自逐字填色,下面标这一组的读音,列宽取
                 // 两者更宽的那个 —— 主文字的间距因此被读音撑开,跟 Apple 一样。
@@ -4886,7 +5051,8 @@ private struct KaraokeLineText: View {
                                                 // 非活跃行定格全填色、不上浮,跟下面无词组那条分支一致(非活跃行也走这条
                                                 // 分支,见 LyricsLineRow.mainText)。
                                                 forceFilled: !isActive,
-                                                lineSettled: fillSettled)
+                                                lineSettled: fillSettled,
+                                                pausedMs: pausedMs)
                             }
                         }
                         // 这一行已经在走逐词罗马音(外层 groups 非空),每一组都要占住这一行读音的高度,
@@ -4908,7 +5074,8 @@ private struct KaraokeLineText: View {
                             reduceMotion: reduceMotion, displayScale: displayScale,
                             rises: false, // 读音不跟着抬,只有正文的字会浮起来
                             forceFilled: !isActive,
-                            lineSettled: fillSettled
+                            lineSettled: fillSettled,
+                            pausedMs: pausedMs
                         )
                         .lineLimit(1)
                         .fixedSize()
@@ -4918,6 +5085,7 @@ private struct KaraokeLineText: View {
                 }
             } else {
                 let spans = emphasisSpans
+                let anchors = emphasisAnchors(spans)
                 ForEach(words.indices, id: \.self) { i in
                     KaraokeWordText(word: words[i], base: base, isPlaying: isPlaying,
                                     isLive: isLive(words[i], atMs: coarseMs, emphasis: spans[i]), staticDate: coarseDate,
@@ -4929,7 +5097,9 @@ private struct KaraokeLineText: View {
                                     // 外层 lineOpacity 负责压暗。
                                     forceFilled: !isActive,
                                     lineSettled: fillSettled,
-                                    emphasis: spans[i])
+                                    emphasis: spans[i],
+                                    emphasisAnchor: anchors[i],
+                                    pausedMs: pausedMs)
                 }
             }
         }
@@ -4977,6 +5147,12 @@ private struct KaraokeWordText: View {
     /// 这个 token 所属的长音强调词(LyricsWordEmphasis),nil = 不强调。强调在词唱完时归零,
     /// 早于整行定格,所以定格和非当前行都直接不画强调。
     var emphasis: LyricsWordEmphasis.Span? = nil
+    /// 强调放大的锚点(见 KaraokeLineText.emphasisAnchors),不强调时用不上。
+    var emphasisAnchor: UnitPoint = .center
+    /// 暂停时的时间基准(冻结位置 + 歌词偏移),播放中 nil。画面不直接用它(下面照样读协调器),
+    /// 它只是让这个字"输入变了":暂停时两级时钟都停着,暂停中拖进度 / 调偏移若不改任何输入,
+    /// 这个字就不重算,填色停在拖之前的位置。
+    var pausedMs: Int? = nil
 
     /// 强调辉光的模糊半径,按字号取比例。
     private static let emphasisGlowRadiusEm: CGFloat = 0.12
@@ -5068,7 +5244,7 @@ private struct KaraokeWordText: View {
                 .foregroundStyle(WordKaraokeGradient.palette(fg: base)
                     .style(left: fraction - band, right: fraction + band))
                 // 长音强调的放大与辉光都是渲染期效果,不参与布局。
-                .scaleEffect(emp.scale)
+                .scaleEffect(emp.scale, anchor: emphasisAnchor)
                 .shadow(color: base.opacity(emp.glow), radius: emp.glow > 0 ? fontSize * Self.emphasisGlowRadiusEm : 0)
                 // .offset 是渲染期位移,不参与布局 —— 字抬起来不会把整行的排版推歪。
                 .offset(y: lift - extraLift)
@@ -5575,12 +5751,14 @@ private struct LyricsScrollIndicator: View {
                 let thumbH = min(trackH, max(40, trackH * viewH / content))
                 let maxScroll = content - viewH
                 let f = maxScroll > 0 ? min(1, max(0, metrics.offsetY / maxScroll)) : 0
+                // 不在深色背景上时用 .primary:浅色纯色 / 渐变背景上白色的条子几乎看不见。
+                let ink = onArtwork ? Color.white : Color.primary
                 ZStack(alignment: .top) {
                     Capsule()
-                        .fill(Color.white.opacity(onArtwork ? 0.08 : 0.10))
+                        .fill(ink.opacity(onArtwork ? 0.08 : 0.10))
                         .frame(width: 6, height: trackH)
                     Capsule()
-                        .fill(Color.white.opacity(onArtwork ? 0.30 : 0.35))
+                        .fill(ink.opacity(onArtwork ? 0.30 : 0.35))
                         .frame(width: 12, height: thumbH)
                         .offset(y: (trackH - thumbH) * f)
                 }
@@ -6152,11 +6330,13 @@ private struct InfoPanelListeningRows: View {
                 if let span = stats.nowPlayingSpan, span.total > 0 {
                     if let first = span.first {
                         InfoPanelRow(label: L10n.t("首次听"),
-                                     value: first.formatted(date: .abbreviated, time: .omitted), onArtwork: onArtwork)
+                                     value: first.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: L10n.locale)),
+                                     onArtwork: onArtwork)
                     }
                     if let last = span.last {
                         InfoPanelRow(label: L10n.t("上次听"),
-                                     value: last.formatted(.relative(presentation: .named)), onArtwork: onArtwork)
+                                     value: last.formatted(Date.RelativeFormatStyle(presentation: .named, locale: L10n.locale)),
+                                     onArtwork: onArtwork)
                     }
                 }
             }
@@ -6178,6 +6358,10 @@ private struct InfoPanelListeningRows: View {
 /// 欢迎态(停播页)的 Last.fm 统计块(系列 #2/#3/#4):今日/本周计数、那年今日、迷你
 /// 热力图。没连账号整块缺席,欢迎态与原版逐像素一致。
 private struct IdleLastfmSection: View {
+    /// 上一次带着拉每日计数的时刻。存在类型上而不是视图里:欢迎态每暂停 / 停播一次就重新出现一次,
+    /// 视图自己的计数每次都从 0 开始,等于每出现一次就全量拉一次。
+    @MainActor private static var lastDailyCountsRefresh: Date?
+    private static let dailyCountsRefreshInterval: TimeInterval = 3600
     @ObservedObject private var stats = LastfmStatsService.shared
 
     /// 「本周」跟设置页 / 待机页那个「近 7 天」**同一个口径**(自然日对齐的日桶,见
@@ -6230,13 +6414,17 @@ private struct IdleLastfmSection: View {
                 // 欢迎态可能一挂几小时,只靠 onAppear 一次会让"今天 N 首"越挂越旧 ——
                 // 3 分钟轮一次;baseline/onThisDay 自带 TTL,重复调用是空操作。
                 // refreshDailyCounts 只有单飞**没有 TTL**(每次都真发请求+落盘,审阅 #7),
-                // 热力图按天变化,这里每 20 轮(约 1 小时)才带它一次。
-                var tick = 0
+                // 热力图按天变化,这里最多一小时带它一次(跨欢迎态的多次出现也算在一起)。
                 while !Task.isCancelled {
                     stats.refreshBaseline()
                     stats.refreshOnThisDay()
-                    if tick % 20 == 0 { stats.refreshDailyCounts() }
-                    tick += 1
+                    let now = Date()
+                    // 还是空的(刚连上 Last.fm)就不等这一小时。
+                    let due = Self.lastDailyCountsRefresh.map { now.timeIntervalSince($0) >= Self.dailyCountsRefreshInterval } ?? true
+                    if due || stats.dailyCounts.isEmpty {
+                        Self.lastDailyCountsRefresh = now
+                        stats.refreshDailyCounts()
+                    }
                     try? await Task.sleep(nanoseconds: 180_000_000_000)
                 }
             }
@@ -6447,15 +6635,22 @@ private struct ChartsPanelView: View {
                 title = ""
                 artist = entry.name
             }
+            // 查不到 / 没有对应页面时响一声:点了之后什么都不发生,分不清是没找到还是还在找。
             guard let item = await MusicCatalogSearch.resolve(
-                title: title, artist: artist, storefront: storefront) else { return }
+                title: title, artist: artist, storefront: storefront) else {
+                await MainActor.run { NSSound.beep() }
+                return
+            }
             let https: String?
             switch kind {
             case .tracks: https = item.trackViewUrl
             case .albums: https = item.collectionViewUrl ?? item.trackViewUrl
             case .artists: https = item.artistViewUrl
             }
-            guard let url = MusicCatalogSearch.musicSchemeURL(https) else { return }
+            guard let url = MusicCatalogSearch.musicSchemeURL(https) else {
+                await MainActor.run { NSSound.beep() }
+                return
+            }
             // Music.app 没在跑时先等它真正启动完,理由见 openCatalogPage 同一处注释。
             await MusicAutomationPermission.ensureMusicAppRunning()
             await MainActor.run { NSWorkspace.shared.open(url) }

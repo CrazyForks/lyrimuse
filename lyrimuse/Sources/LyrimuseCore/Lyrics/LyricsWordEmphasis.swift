@@ -59,6 +59,18 @@ public enum LyricsWordEmphasis {
         return out
     }
 
+    /// 一个词拆成几个 token 时,每个 token 放大要围绕的点(token 自己的单位横坐标,0 = 左缘、1 = 右缘,
+    /// 可以落在自身之外)。全都围绕整词的中心,各自放大后首尾仍然相接,拼起来就是整词放大。
+    /// 宽度为 0 的 token 给 0.5。
+    public static func scaleAnchorXs(widths: [Double]) -> [Double] {
+        let center = widths.reduce(0, +) / 2
+        var x = 0.0
+        return widths.map { w in
+            defer { x += w }
+            return w > 0 ? (center - x) / w : 0.5
+        }
+    }
+
     /// 这个词够不够格:时长够长、没有中日韩文字、字母数在 `letterRange` 内。
     public static func isEligible(text: String, durationMs: Int) -> Bool {
         guard durationMs >= minDurationMs, !containsCJK(text) else { return false }
