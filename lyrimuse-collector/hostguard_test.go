@@ -705,3 +705,52 @@ func TestHostGuardCircuitOpenDoesNotHoldSource(t *testing.T) {
 		t.Fatalf("熔断不该连累同源备用主机: %v", err)
 	}
 }
+
+// 歌词源回 503 / 429:暂停这个主机的后台请求(一轮里记成跳过),前台照发;暂停期过后再被限流升一档,
+// 暂停期里接着被拒不升档,安静够久从第一档重来。
+func TestHostGuardLyricSourceThrottlePausesBackground(t *testing.T) {
+	g, c := newTestGuard(hostRate{perSec: 100, burst: 100})
+	bg := withBackgroundOutbound(context.Background())
+	observe := func(status int) {
+		g.observe(mustReq(t, context.Background(), http.MethodGet, "https://lrclib.net/api/get"), status, "")
+	}
+	observe(http.StatusServiceUnavailable)
+	if until, paused := g.backgroundPausedUntil("lrclib.net"); !paused || until.Sub(c.now()) != time.Minute {
+		t.Fatalf("第一次 503 暂停 1 分钟: paused=%v until=%v", paused, until)
+	}
+	roundCtx, round := withLyricSourceRound(bg)
+	if err := g.admit(mustReq(t, roundCtx, http.MethodGet, "https://lrclib.net/api/search")); !errors.Is(err, errHostGuarded) {
+		t.Fatalf("暂停期里后台请求该拦下: %v", err)
+	}
+	if got := round.skippedSources(); len(got) != 1 || got[0] != "lrclib" {
+		t.Fatalf("被拦下的一轮要记 lrclib 跳过(不能当成没有歌词): %v", got)
+	}
+	if err := g.admit(mustReq(t, context.Background(), http.MethodGet, "https://lrclib.net/api/get")); err != nil {
+		t.Fatalf("前台请求不受后台暂停影响: %v", err)
+	}
+	if err := g.admit(mustReq(t, bg, http.MethodGet, "https://music.163.com/api/x")); err != nil {
+		t.Fatalf("别的歌词源后台照发: %v", err)
+	}
+	c.add(30 * time.Second)
+	observe(http.StatusServiceUnavailable)
+	if until, _ := g.backgroundPausedUntil("lrclib.net"); until.Sub(c.now()) != 30*time.Second {
+		t.Fatalf("暂停期里再被拒不升档、不延长: 还剩 %v", until.Sub(c.now()))
+	}
+	c.add(31 * time.Second)
+	if err := g.admit(mustReq(t, bg, http.MethodGet, "https://lrclib.net/api/get")); err != nil {
+		t.Fatalf("暂停期过了后台照发: %v", err)
+	}
+	observe(http.StatusTooManyRequests)
+	if until, _ := g.backgroundPausedUntil("lrclib.net"); until.Sub(c.now()) != 2*time.Minute {
+		t.Fatalf("暂停期过后再被限流升到 2 分钟: %v", until.Sub(c.now()))
+	}
+	c.add(2*time.Minute + 11*time.Minute)
+	observe(http.StatusServiceUnavailable)
+	if until, _ := g.backgroundPausedUntil("lrclib.net"); until.Sub(c.now()) != time.Minute {
+		t.Fatalf("安静超过最长一档后从 1 分钟重来: %v", until.Sub(c.now()))
+	}
+	observe(http.StatusInternalServerError)
+	if _, paused := g.backgroundPausedUntil("music.163.com"); paused {
+		t.Fatal("没被限流的主机不暂停")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -155,7 +156,19 @@ type hostGuard struct {
 	health map[string]*endpointHealth
 	// sourceHeld:"歌词源|bg" 或 "歌词源|fg" → 暂停放行到的时刻,见 hostGuardSourceHold。
 	sourceHeld map[string]time.Time
+	// bgPause:歌词源主机 → 后台请求暂停到的时刻与已升到的级数,见 noteLyricSourceThrottled。
+	bgPause map[string]*lyricSourceBackgroundPause
 }
+
+type lyricSourceBackgroundPause struct {
+	until time.Time
+	level int
+}
+
+// lyricSourceBackgroundPauseSchedule:歌词源回 503 / 429 后,这个主机的后台请求停多久;暂停期过后再被限流升一档。
+// 接口熔断(endpointTripAfter)只数**连续**的 5xx,而限流常常是成功和 503 交替(批量补歌词时请求量翻几倍、
+// 一部分被拒),熔断攒不满;这一道只管后台档,正在播的那首照常查。
+var lyricSourceBackgroundPauseSchedule = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute}
 
 // endpointHealth 是一个端点的熔断状态。两种失败分开计:fails 数 5xx,被这个端点的任何非 5xx
 // 响应清零;rejects 数响应体拒绝,只被调用方的 reportEndpointAccepted 清零 —— 拒绝码是装在 200
@@ -184,6 +197,7 @@ func newHostGuard(now func() time.Time) *hostGuard {
 		heldLogged:        map[string]time.Time{},
 		health:            map[string]*endpointHealth{},
 		sourceHeld:        map[string]time.Time{},
+		bgPause:           map[string]*lyricSourceBackgroundPause{},
 	}
 }
 
@@ -282,6 +296,15 @@ func (g *hostGuard) admit(req *http.Request) error {
 	}
 
 	lane := outboundLaneOf(ctx)
+	if source != "" && lane == laneBackground {
+		if until, paused := g.backgroundPausedUntil(host); paused {
+			g.logHeld(host, "background requests paused after "+source+" rate-limited us, until "+until.Format("15:04:05"))
+			if round != nil {
+				round.markSkipped(source)
+			}
+			return errHostGuarded
+		}
+	}
 	if source != "" && g.sourceHeldNow(source, lane) {
 		if round != nil {
 			round.markSkipped(source)
@@ -460,6 +483,9 @@ func (g *hostGuard) observe(req *http.Request, status int, retryAfter string) {
 		g.noteEndpointHealthy(guardEndpointKey(req.URL))
 	}
 	if lyricSourceForHost(guardHost(req.URL)) != "" {
+		if status == http.StatusServiceUnavailable || status == http.StatusTooManyRequests {
+			g.noteLyricSourceThrottled(guardHost(req.URL))
+		}
 		return
 	}
 	switch {
@@ -470,6 +496,41 @@ func (g *hostGuard) observe(req *http.Request, status int, retryAfter string) {
 		delete(g.blocked, guardEndpointKey(req.URL))
 		g.mu.Unlock()
 	}
+}
+
+// noteLyricSourceThrottled:歌词源主机回了 503 / 429,暂停它的后台请求一档(见 lyricSourceBackgroundPauseSchedule)。
+// 已经在暂停期里就不动(同一批在途请求一起被拒只算一次);上一次暂停结束后又安静了超过最长一档,从第一档重新算。
+func (g *hostGuard) noteLyricSourceThrottled(host string) {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	p := g.bgPause[host]
+	if p == nil {
+		p = &lyricSourceBackgroundPause{}
+		g.bgPause[host] = p
+	}
+	if now.Before(p.until) {
+		return
+	}
+	longest := lyricSourceBackgroundPauseSchedule[len(lyricSourceBackgroundPauseSchedule)-1]
+	if !p.until.IsZero() && now.Sub(p.until) > longest {
+		p.level = 0
+	}
+	d := lyricSourceBackgroundPauseSchedule[min(p.level, len(lyricSourceBackgroundPauseSchedule)-1)]
+	p.level++
+	p.until = now.Add(d)
+	slog.Warn("lyric source rate-limited, pausing background requests", "host", host, "for", d.String())
+}
+
+// backgroundPausedUntil:这个主机的后台请求此刻是不是在暂停期里。
+func (g *hostGuard) backgroundPausedUntil(host string) (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	p := g.bgPause[host]
+	if p == nil || !g.now().Before(p.until) {
+		return time.Time{}, false
+	}
+	return p.until, true
 }
 
 // block 把端点窗口延到 now+d;已经在更晚的窗口里就不缩短。共享名单里的主机顺带写进
