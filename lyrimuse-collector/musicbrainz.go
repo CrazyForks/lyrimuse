@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -359,12 +360,9 @@ const musicbrainzMinScore = 90
 // 任何一步失败/没有结果都返回空字符串,不重试、不报错——这条路径只是 canonical_artist
 // 解析链路的第一层,查不到时 resolveTrackEnrichment 现有的网易云/QQ 逻辑会接手。
 func lookupMusicBrainzChineseAlias(ctx context.Context, rawArtist string) string {
-	if err := musicbrainzThrottle(ctx); err != nil {
-		return ""
-	}
 	var search mbSearchResponse
 	searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(rawArtist) + "&fmt=json&limit=5"
-	if err := mbGetJSON(ctx, searchURL, &search); err != nil || len(search.Artists) == 0 {
+	if err := mbGetJSONShared(ctx, searchURL, &search); err != nil || len(search.Artists) == 0 {
 		return ""
 	}
 	top := search.Artists[0]
@@ -372,12 +370,9 @@ func lookupMusicBrainzChineseAlias(ctx context.Context, rawArtist string) string
 		return ""
 	}
 
-	if err := musicbrainzThrottle(ctx); err != nil {
-		return ""
-	}
 	var withAliases mbArtistWithAliases
 	aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(top.ID) + "?inc=aliases&fmt=json"
-	if err := mbGetJSON(ctx, aliasURL, &withAliases); err != nil {
+	if err := mbGetJSONShared(ctx, aliasURL, &withAliases); err != nil {
 		return ""
 	}
 	return pickChineseAlias(withAliases.Aliases, withAliases.Country)
@@ -709,12 +704,9 @@ func cachedMusicBrainzCanonicalName(rawArtist string) string {
 // TestRetryArtistIdentitiesGenericMusicBrainzReverseDirection 只好事后另发一个探针
 // 请求去猜 MB 活没活着,而探针和真查询各有各的运气,CI 上连红六次(见那条测试的头注)。
 func lookupMusicBrainzArtistAliases(ctx context.Context, raw string) ([]string, error) {
-	if err := musicbrainzThrottle(ctx); err != nil {
-		return nil, err
-	}
 	var search mbSearchResponse
 	searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(raw) + "&fmt=json&limit=5"
-	if err := mbGetJSON(ctx, searchURL, &search); err != nil {
+	if err := mbGetJSONShared(ctx, searchURL, &search); err != nil {
 		return nil, err
 	}
 	if len(search.Artists) == 0 {
@@ -726,12 +718,9 @@ func lookupMusicBrainzArtistAliases(ctx context.Context, raw string) ([]string, 
 	}
 	// 不再在这里因为"主名==本地标签"就提前返回,理由见函数头注——那个短路会让
 	// 方大同这类"MB 主名本身就是本地标签"的歌手永远够不到下面的别名列表。
-	if err := musicbrainzThrottle(ctx); err != nil {
-		return nil, err
-	}
 	var withAliases mbArtistWithAliases
 	aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(top.ID) + "?inc=aliases&fmt=json"
-	if err := mbGetJSON(ctx, aliasURL, &withAliases); err != nil {
+	if err := mbGetJSONShared(ctx, aliasURL, &withAliases); err != nil {
 		return nil, err
 	}
 	primary := withAliases.Name
@@ -803,9 +792,18 @@ func mbAliasCandidatesForRetry(primary string, aliases []mbAlias, raw string) []
 }
 
 func mbGetJSON(ctx context.Context, url string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := mbGetBody(ctx, url)
 	if err != nil {
 		return err
+	}
+	return json.Unmarshal(body, v)
+}
+
+// mbGetBody 发一次 GET、返回 200 的响应体。不排 musicbrainzThrottle,调用方自己排。
+func mbGetBody(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
 	// MusicBrainz 要求所有调用方在 User-Agent 里标明身份(应用名+版本+联系方式),不带
 	// 这个头容易被限流/拒绝,见上面 Rate Limiting 文档链接。
@@ -813,11 +811,92 @@ func mbGetJSON(ctx context.Context, url string, v any) error {
 	client := &http.Client{Timeout: 6 * time.Second}
 	resp, err := doHTTPTracked(client, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("musicbrainz %s: status %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("musicbrainz %s: status %d", url, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(v)
+	return io.ReadAll(io.LimitReader(resp.Body, mbResponseMaxBytes))
+}
+
+// 歌手查询的响应缓存:同一个网址在 mbResponseTTL 内只真正请求一次。
+//
+// 找中文名(lookupMusicBrainzChineseAlias)和找别名(lookupMusicBrainzArtistAliases)对同一位
+// 歌手发的是**完全相同**的两个请求(按名字搜、再取别名),而两条路径的结果缓存各管各的
+// (artistAliasCache / mbPrimaryNameCache),互相用不上;MusicBrainz 限速 1.1 秒一次,
+// 每位新歌手就白排两个队。两条路径都走 mbGetJSONShared,第二条直接拿第一条的响应。
+// 见 11 章决策 33。
+//
+// 只存 200 的响应体;没查成的不存 —— 跟两条路径"没查成不写结果缓存"同一个口径,
+// 一次偶发 503 不该在 TTL 内挡住重试。只在内存里,不落盘。
+const (
+	mbResponseTTL      = 30 * time.Minute
+	mbResponseMaxItems = 256
+	mbResponseMaxBytes = 4 << 20
+)
+
+type mbCachedResponse struct {
+	body []byte
+	at   time.Time
+}
+
+var (
+	mbResponseMu    sync.Mutex
+	mbResponseCache = map[string]mbCachedResponse{}
+	// mbFetchBody 是真正发请求的那一步,单测替换它来数请求次数。
+	mbFetchBody = mbGetBody
+)
+
+func mbCachedBody(url string, now time.Time) ([]byte, bool) {
+	mbResponseMu.Lock()
+	defer mbResponseMu.Unlock()
+	c, ok := mbResponseCache[url]
+	if !ok || now.Sub(c.at) >= mbResponseTTL {
+		return nil, false
+	}
+	return c.body, true
+}
+
+// mbStoreBody 存一份响应。满了先清过期的,还满就丢最旧的那一条。
+func mbStoreBody(url string, body []byte, now time.Time) {
+	mbResponseMu.Lock()
+	defer mbResponseMu.Unlock()
+	if len(mbResponseCache) >= mbResponseMaxItems {
+		oldestURL, oldestAt := "", now
+		for u, c := range mbResponseCache {
+			if now.Sub(c.at) >= mbResponseTTL {
+				delete(mbResponseCache, u)
+				continue
+			}
+			if c.at.Before(oldestAt) {
+				oldestURL, oldestAt = u, c.at
+			}
+		}
+		if len(mbResponseCache) >= mbResponseMaxItems && oldestURL != "" {
+			delete(mbResponseCache, oldestURL)
+		}
+	}
+	mbResponseCache[url] = mbCachedResponse{body: body, at: now}
+}
+
+// mbGetJSONShared:缓存命中就直接解码,不排 musicbrainzThrottle、不发请求;没命中才排队、
+// 请求、解码成功后存下。排队时 ctx 被取消,返回的就是 ctx.Err()(跟直接调 musicbrainzThrottle
+// 时一样)。
+func mbGetJSONShared(ctx context.Context, url string, v any) error {
+	if body, ok := mbCachedBody(url, time.Now()); ok {
+		return json.Unmarshal(body, v)
+	}
+	if err := musicbrainzThrottle(ctx); err != nil {
+		return err
+	}
+	body, err := mbFetchBody(ctx, url)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, v); err != nil {
+		return err
+	}
+	mbStoreBody(url, body, time.Now())
+	return nil
 }
