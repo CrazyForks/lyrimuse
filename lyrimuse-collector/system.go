@@ -766,6 +766,9 @@ func getAutoDetectedState(ctx context.Context) (map[string]any, bool) {
 		if state, ok := stateAfterFocusLost(ctx, nil); ok {
 			return state, true
 		}
+		if state, ok := stateWhileChannelBroken(ctx, nil); ok {
+			return state, true
+		}
 		return nil, false
 	}
 	switch classifyAutoDetected(bundleID) {
@@ -793,6 +796,10 @@ func getAutoDetectedState(ctx context.Context) (map[string]any, bool) {
 		// 还没被信任的播放器)——先看上一份被接受的播放器自己还在不在放(见 focusfallback.go),
 		// 问不到才按"没有可报告的正在播放"处理。
 		if state, ok := stateAfterFocusLost(ctx, nil); ok {
+			return state, true
+		}
+		// media-control 通道坏了时它对谁都回 null,落在这一支(见 mediacontrolchannel.go)。
+		if state, ok := stateWhileChannelBroken(ctx, nil); ok {
 			return state, true
 		}
 		return map[string]any{}, true
@@ -888,6 +895,9 @@ func getMultiSelectedState(ctx context.Context) (map[string]any, bool) {
 		if state, ok := stateAfterFocusLost(ctx, accepted); ok {
 			return state, true
 		}
+		if state, ok := stateWhileChannelBroken(ctx, accepted); ok {
+			return state, true
+		}
 		return nil, false
 	}
 	if !accepted[bundleID] {
@@ -896,6 +906,10 @@ func getMultiSelectedState(ctx context.Context) (map[string]any, bool) {
 			// 这次选中的子集里、也没被信任过——不能把它当成"正在播放"。先看上一份被接受的
 			// 播放器自己还在不在放(见 focusfallback.go),问不到才按"没有可关心的正在播放"处理。
 			if state, ok := stateAfterFocusLost(ctx, accepted); ok {
+				return state, true
+			}
+			// media-control 通道坏了时它对谁都回 null(bundleID 为空),见 mediacontrolchannel.go。
+			if state, ok := stateWhileChannelBroken(ctx, accepted); ok {
 				return state, true
 			}
 			return map[string]any{}, true
@@ -956,18 +970,22 @@ func fetchRawMediaControlState(ctx context.Context) (map[string]any, string, boo
 	// --micros 给出精确到微秒的锚点时间戳(不带它恒无小数秒),见 applyMicros。
 	out, err := exec.CommandContext(ctx, bin, "get", "--now", "--no-artwork", "--micros").Output()
 	if err != nil {
+		noteMediaControlExec(false, false)
 		return nil, "", false
 	}
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "null" {
 		// 没有任何 App 在报告 Now Playing——跟 getAppleMusicState 的"null"分支同一种
 		// 语义,交给调用方(poller.go 的 poll())走既有的 nullStreak 渐进清空逻辑。
+		noteMediaControlExec(true, true)
 		return map[string]any{}, "", true
 	}
 	var raw mediaControlRawState
 	if err := json.Unmarshal(out, &raw); err != nil {
+		noteMediaControlExec(false, false)
 		return nil, "", false
 	}
+	noteMediaControlExec(true, false)
 	// 必须紧跟解码:下面的酷狗署名修复第一个就要读 Duration。
 	raw.applyMicros()
 	noteUnfamiliarMediaType(raw.MediaType, raw.Title)

@@ -2119,6 +2119,20 @@ func runPlaybackPositionTests() {
                     "直查名单: 空 bundle id(.auto 就是空)不能匹配到任何播放器")
         expectEqual(M.directQueryPlayer(forBundleID: nil), nil, "直查名单: 没有 bundle id 就没有通路")
 
+        // media-control 通道坏了时直问谁、什么时候算坏了(snapshotWhileChannelBroken)。
+        expectEqual(M.channelFallbackCandidates(selected: [.auto]), [.appleMusic, .spotify],
+                    "通道坏了: 自动识别两家都问,Apple Music 在前")
+        expectEqual(M.channelFallbackCandidates(selected: [.spotify, .qqMusic]), [.spotify],
+                    "通道坏了: 多选只问勾了的、有 AppleScript 字典的那几家")
+        expectEqual(M.channelFallbackCandidates(selected: [.qqMusic, .netease, .kugou]), [],
+                    "通道坏了: 只勾了没有 AppleScript 的播放器时无路可退")
+        expectEqual(M.channelLooksBroken(execFailures: M.channelExecFailThreshold - 1, testFailed: false), false,
+                    "通道坏了: 偶发几次子进程报错不算")
+        expectEqual(M.channelLooksBroken(execFailures: M.channelExecFailThreshold, testFailed: false), true,
+                    "通道坏了: 连续报错到阈值算坏")
+        expectEqual(M.channelLooksBroken(execFailures: 0, testFailed: true), true,
+                    "通道坏了: get 照常退出、自检失败也算坏 —— 系统更新后常见的就是这种")
+
         // 正常路径:被接受的快照是谁报的,开关就跟谁走。
         expectEqual(M.nextFocusFallbackPlayer(current: nil, acceptedBundleID: am,
                                               fallbackSucceeded: nil), .appleMusic,

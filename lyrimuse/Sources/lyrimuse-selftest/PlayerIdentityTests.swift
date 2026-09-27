@@ -133,8 +133,9 @@ func runPlayerIdentityTests() {
             expectEqual(controller.contains("focusFallback: MediaControlClient.focusControlTarget())"), true,
                         "控制分派(契约): dispatch 按焦点回退目标分派")
             expectEqual(client.contains("fallbackViaAppleScript = viaAppleScript")
-                        && client.contains("fallbackActive && fallbackViaAppleScript ? lastAcceptedDirectQueryPlayer : nil"), true,
-                        "控制分派(契约): 只有经 AppleScript 回退问到的播放器才改发 AppleScript")
+                        && client.contains("if fallbackActive && fallbackViaAppleScript { return lastAcceptedDirectQueryPlayer }")
+                        && client.contains("return channelFallbackPlayer"), true,
+                        "控制分派(契约): 只有经 AppleScript 问到的播放器(焦点回退 / 通道坏了时直问)才改发 AppleScript")
             expectEqual(adProbe.contains("if Self.notFoundSuppresses(notedKey: notFoundKey, notedAt: notFoundAt, key: key, now: Date())")
                         && adProbe.contains("if reading == nil, notFound {"), true,
                         "NOTFOUND 免探期(契约): kickIfNeeded 查免探期、只在 NOTFOUND 时记")

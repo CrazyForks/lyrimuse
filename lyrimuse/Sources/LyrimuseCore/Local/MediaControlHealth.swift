@@ -16,10 +16,9 @@ import OSLog
 // `adaptedSnapshot` 里把位置与曲目信息整份换成 AppleScript 那份);只有「恰好只勾
 // Apple Music、没勾自动识别」才连"谁在放"都不问它。所以这条通道坏掉时 Apple Music 用户同样会受影响。
 //
-// 只做**诊断**、不做降级这一点仍然成立,但理由换了:Apple Music 的降级已经在
-// `MediaControlClient.appleMusicSnapshotAfterFocusLost` 里做了(通道坏 / 焦点被抢一视同仁,
-// 见那个函数的头注),不归这里管;而 QQ 音乐/网易云确实没有任何替代路径可退,查出来也只能
-// 如实告诉用户。所以这里不设 fallback,只置一个标志供 UI/诊断导出显示。
+// 结论除了给 UI / 诊断导出显示,还交给 `MediaControlClient.setChannelTestFailed`:通道坏了时播放读取改为
+// 直问还开着的 Apple Music / Spotify(见 `MediaControlClient.snapshotWhileChannelBroken`)。降级本身在那边做,
+// 这里只下结论。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐 / KKBOX 没有替代路径可退,查出来也只能如实告诉用户。
 @MainActor
 public final class MediaControlHealth: ObservableObject {
     public static let shared = MediaControlHealth()
@@ -101,6 +100,7 @@ public final class MediaControlHealth: ObservableObject {
         isChecking = false
         if let result, result.succeeded {
             state = .healthy
+            MediaControlClient.setChannelTestFailed(false)
             Self.logger.info("media-control channel healthy")
             return
         }
@@ -117,6 +117,8 @@ public final class MediaControlHealth: ObservableObject {
             return
         }
         state = .unavailable(message: message)
+        // 播放读取据此改为直问 Apple Music / Spotify,见 MediaControlClient.snapshotWhileChannelBroken。
+        MediaControlClient.setChannelTestFailed(true)
         Self.logger.error("media-control channel unavailable: \(message, privacy: .public)")
     }
 

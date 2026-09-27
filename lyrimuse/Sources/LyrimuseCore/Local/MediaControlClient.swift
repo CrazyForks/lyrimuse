@@ -530,7 +530,9 @@ public enum MediaControlClient {
             guard let candidate, players.contains(candidate) else { return nil }
             return snapshotAfterFocusLost()
         }
-        guard let (snapshot, bundleID) = fetchRawMediaControlSnapshot() else { return fallback() }
+        guard let (snapshot, bundleID) = fetchRawMediaControlSnapshot() else {
+            return fallback() ?? snapshotWhileChannelBroken(players: players)
+        }
         if !acceptedBundleIDs.contains(bundleID) {
             guard TrustedPlayers.isTrusted(bundleID) else {
                 setSnapshotFailure(.playerNotSelected)
@@ -640,13 +642,14 @@ public enum MediaControlClient {
         return fallbackActive ? lastAcceptedDirectQueryPlayer : nil
     }
 
-    /// 焦点被别的 App 占着、屏上这首是经 AppleScript 回退问到的那个播放器 —— 播放控制要直接发给它。
-    /// media-control 的控制指令作用于系统焦点,这时发出去落在占用者(网页视频)身上。
-    /// 经 per-client 探针回退的不算:那说明它的 AppleScript 这时就不通。
+    /// 焦点被别的 App 占着、或 media-control 通道坏了,屏上这首是经 AppleScript 问到的那个播放器 —— 播放控制要
+    /// 直接发给它。media-control 的控制指令作用于系统焦点,焦点被占时发出去落在占用者(网页视频)身上,通道坏了时
+    /// 根本发不出去。经 per-client 探针回退的不算:那说明它的 AppleScript 这时就不通。
     public static func focusControlTarget() -> PlaybackPlayer? {
         appleMusicFocusLock.lock()
         defer { appleMusicFocusLock.unlock() }
-        return fallbackActive && fallbackViaAppleScript ? lastAcceptedDirectQueryPlayer : nil
+        if fallbackActive && fallbackViaAppleScript { return lastAcceptedDirectQueryPlayer }
+        return channelFallbackPlayer
     }
 
     private static func setFocusFallbackPlayer(_ value: PlaybackPlayer?) {
@@ -751,6 +754,106 @@ public enum MediaControlClient {
         return snapshot
     }
 
+    // MARK: - media-control 通道坏了时直问 Apple Music / Spotify
+
+    /// 连续这么多次 media-control 子进程报错就按通道坏了处理。
+    public static let channelExecFailThreshold = 3
+    /// 下面四个受 `appleMusicFocusLock` 保护。
+    private static var channelExecFailures = 0
+    private static var channelTestFailed = false
+    /// 本进程读到过一份真快照。之后 `test` 的失败不再算数:通道已经证明能用,自检偶发失败不该把读取切到直问。
+    private static var channelSeenSnapshot = false
+    /// 通道坏了期间屏上这首经 AppleScript 问自哪个播放器(nil = 没在靠直问取数)。播放控制看它,见 `focusControlTarget`。
+    private static var channelFallbackPlayer: PlaybackPlayer?
+
+    /// `MediaControlHealth` 落定结论时调:`media-control test` 失败 = 通道坏了。系统更新弄坏私有 MediaRemote
+    /// 通道后,`get` 常常照常退出、对谁都回 null,光看子进程退出码认不出来,要靠这条。
+    public static func setChannelTestFailed(_ failed: Bool) {
+        appleMusicFocusLock.lock()
+        channelTestFailed = failed && !channelSeenSnapshot
+        appleMusicFocusLock.unlock()
+    }
+
+    private static func noteChannelExec(succeeded: Bool) {
+        appleMusicFocusLock.lock()
+        channelExecFailures = succeeded ? 0 : channelExecFailures + 1
+        appleMusicFocusLock.unlock()
+    }
+
+    /// 真读到了一份快照:通道好了。直问期间记下的播放器一并撤掉,不然播放控制还会绕开 media-control 发给它
+    /// (`focusControlTarget`),哪怕用户已经换到别的播放器。
+    private static func noteChannelReadSnapshot() {
+        appleMusicFocusLock.lock()
+        channelTestFailed = false
+        channelSeenSnapshot = true
+        let wasFallingBack = channelFallbackPlayer != nil
+        channelFallbackPlayer = nil
+        appleMusicFocusLock.unlock()
+        if wasFallingBack {
+            logger.notice("media-control channel usable again; back on media-control")
+        }
+    }
+
+    /// 此刻是否按通道坏了处理。纯函数,selftest 覆盖。
+    public static func channelLooksBroken(execFailures: Int, testFailed: Bool) -> Bool {
+        execFailures >= channelExecFailThreshold || testFailed
+    }
+
+    /// 通道坏了时按顺序问谁:勾了「自动识别」两家都问,否则只问勾了的。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐 / KKBOX
+    /// 没有 AppleScript 字典,按 bundle id 直查系统的那条路(`NowPlayingClientsProbe`)也是 MediaRemote,跟着一起坏,
+    /// 不在其列。纯函数,selftest 覆盖。
+    public static func channelFallbackCandidates(selected: Set<PlaybackPlayer>) -> [PlaybackPlayer] {
+        let order: [PlaybackPlayer] = [.appleMusic, .spotify]
+        if selected.contains(.auto) { return order }
+        return order.filter(selected.contains)
+    }
+
+    /// media-control 通道坏了(`channelLooksBroken`)时,直接问还开着的 Apple Music / Spotify:在放的优先,都没在放取
+    /// 第一个暂停着的。没开着的不问(不 fork osascript,也不会对从不用它的人弹自动化授权)。
+    ///
+    /// `snapshotAfterFocusLost` 那条回退只在「上一份被接受的快照」存在时才走,通道一启动就坏的话开关永远点不亮,
+    /// 播放器停一次也会关掉,这条补的是它。collector 侧同一件事在 mediacontrolchannel.go,两侧口径一致。
+    private static func snapshotWhileChannelBroken(players: Set<PlaybackPlayer>) -> MediaControlSnapshot? {
+        appleMusicFocusLock.lock()
+        let broken = channelLooksBroken(execFailures: channelExecFailures, testFailed: channelTestFailed)
+        let wasActive = channelFallbackPlayer
+        appleMusicFocusLock.unlock()
+        guard broken else {
+            if wasActive != nil {
+                setChannelFallbackPlayer(nil)
+                logger.notice("media-control channel usable again; back on media-control")
+            }
+            return nil
+        }
+        var paused: (PlaybackPlayer, MediaControlSnapshot)?
+        var chosen: (PlaybackPlayer, MediaControlSnapshot)?
+        for player in channelFallbackCandidates(selected: players) {
+            guard !NSRunningApplication.runningApplications(withBundleIdentifier: player.bundleIdentifier).isEmpty
+            else { continue }
+            let snapshot = player == .appleMusic ? fetchAppleMusicSnapshot() : fetchSpotifySnapshot()
+            guard let snapshot else { continue }
+            if snapshot.playing == true {
+                chosen = (player, snapshot)
+                break
+            }
+            if paused == nil { paused = (player, snapshot) }
+        }
+        let picked = chosen ?? paused
+        setChannelFallbackPlayer(picked?.0)
+        guard let (player, snapshot) = picked else { return nil }
+        if wasActive != player {
+            let name = player.bundleIdentifier
+            logger.notice("media-control channel broken; reading \(name, privacy: .public) via AppleScript")
+        }
+        return snapshot
+    }
+
+    private static func setChannelFallbackPlayer(_ value: PlaybackPlayer?) {
+        appleMusicFocusLock.lock()
+        channelFallbackPlayer = value
+        appleMusicFocusLock.unlock()
+    }
+
     private static func fetchAutoDetectedSnapshot() -> MediaControlSnapshot? {
         // 闸门 = 内置播放器 + 用户显式信任的未知播放器(见 TrustedPlayers)。
         // 跟 collector 的 isAcceptedPlayerBundleID 是同一套语义,两侧必须同时改。
@@ -760,7 +863,7 @@ public enum MediaControlClient {
         // 而前者下 Music.app 往往还在放。理由与收敛性见那个函数的头注。
         guard let (snapshot, bundleID) = fetchRawMediaControlSnapshot() else {
             // 失败原因已由 fetchRawMediaControlSnapshot 记下,别在这里覆盖掉。
-            return snapshotAfterFocusLost()
+            return snapshotAfterFocusLost() ?? snapshotWhileChannelBroken(players: [.auto])
         }
         guard TrustedPlayers.isAccepted(bundleID) else {
             setSnapshotFailure(.focusHeldByOtherApp)
@@ -1710,8 +1813,10 @@ public enum MediaControlClient {
             r.succeeded
         else {
             setSnapshotFailure(.mediaControlUnavailable)
+            noteChannelExec(succeeded: false)
             return nil
         }
+        noteChannelExec(succeeded: true)
         let data = r.stdout
         // 没有任何 App 在报告 Now Playing 时,media-control 输出字面量 "null",
         // 退出码仍是 0——JSONDecoder 对着 "null" 解码 RawPayload 会失败,走
@@ -1722,6 +1827,8 @@ public enum MediaControlClient {
             setSnapshotFailure(.nobodyReporting)
             return nil
         }
+        // 真读到了一份快照:通道是好的,自检留下的「坏了」也作废。
+        noteChannelReadSnapshot()
         // 把"此刻系统在报谁"原样记一笔 —— **在过闸之前**。设置页那张"检测到未知播放器"
         // 的卡片要的正是被闸挡掉的那些:过了闸的本来就能看见,挡掉的才需要提示用户。
         //

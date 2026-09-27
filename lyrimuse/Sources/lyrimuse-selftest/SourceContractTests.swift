@@ -432,8 +432,8 @@ func runSourceContractTests() {
         if let mcc = code(sourcesRoot.appendingPathComponent("LyrimuseCore/Local/MediaControlClient.swift")) {
             expectEqual(mcc.contains("case PlaybackPlayer.spotify.bundleIdentifier:"), true,
                         "Spotify/AppleScript: adaptedSnapshot 要认 Spotify 这一支,不然它还走 media-control")
-            expectEqual(count(mcc, "fetchSpotifySnapshot()"), 3,
-                        "Spotify/AppleScript: 1 处定义 + 2 个消费点(adaptedSnapshot 与 snapshotAfterFocusLost),现 \(count(mcc, "fetchSpotifySnapshot()")) 处")
+            expectEqual(count(mcc, "fetchSpotifySnapshot()"), 4,
+                        "Spotify/AppleScript: 1 处定义 + 3 个消费点(adaptedSnapshot、snapshotAfterFocusLost、snapshotWhileChannelBroken),现 \(count(mcc, "fetchSpotifySnapshot()")) 处")
             expectEqual(mcc.contains("duration: t.duration() / 1000"), true,
                         "Spotify/AppleScript: Spotify 的 duration 是毫秒,脚本里必须除 1000")
         } else {
