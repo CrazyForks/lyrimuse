@@ -30,6 +30,8 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
     static let stallSettleDelay: TimeInterval = 0.5
     static let calibrationRetry: TimeInterval = 5
     static let calibrationMaxAttempts = 3
+    /// 同一件事试满 `calibrationMaxAttempts` 次还没成,之后隔这么久再试一次,不放弃(连着卡顿时前几次常被打断)。
+    static let calibrationBackoff: TimeInterval = 30
 
     /// 播放事件回调(暂停 = true 表示这一下可能让播放停了)。在私有队列上调用。
     public nonisolated(unsafe) static var onPlaybackEvent: (@Sendable (_ pause: Bool) -> Void)?
@@ -54,6 +56,9 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
     private var calibrating = false
     /// 这首(曲目 + 开播时刻)试过几次、上次是什么时候。
     private var calibrationAttempts: (key: String, count: Int, lastAt: Date)?
+    /// 自记时层:这首第一次落到自记时的时刻,以及已经按界面对过表的那件事(曲目键 + 最近一次卡顿)。
+    private var timerSeen: (key: String, at: Date)?
+    private var timerCalibratedKey: String?
     private let calibrationQueue = DispatchQueue(label: "me.yudaotor.lyrimuse.amazon-music-ui")
 
     public init(path: String = AmazonMusicLogWatcher.defaultPath) {
@@ -77,7 +82,8 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
     /// 这一拍的位置。`pauseObservedAt` 是 stream watcher 记下的最近一次暂停时刻(自记时层用它把暂停落在
     /// 真正发生的那一刻,而不是这一拍轮询的时刻)。
     public func reading(trackKey: String, metadataTimestamp: Date?, playing: Bool, pauseObservedAt: Date?,
-                        now: Date, pid: pid_t? = nil, duration: Double? = nil) -> AmazonMusicPlayhead.Reading {
+                        now: Date, pid: pid_t? = nil, duration: Double? = nil,
+                        artist: String? = nil, title: String? = nil) -> AmazonMusicPlayhead.Reading {
         queue.sync { drain(live: true) }
         lock.lock()
         defer { lock.unlock() }
@@ -98,7 +104,71 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
             Self.logger.notice("amazon music clock: position from \(r.source.rawValue, privacy: .public)")
         }
         if r.source == .log, playing, let pid { scheduleCalibrationLocked(pid: pid, duration: duration, metadataTimestamp: metadataTimestamp, now: now) }
+        if r.source == .selfTimer, playing, let pid {
+            scheduleTimerCalibrationLocked(pid: pid, duration: duration, trackKey: trackKey, artist: artist, title: title, now: now)
+        }
         return r
+    }
+
+    /// 同一件事已经试了 `count` 次、上次在 `lastAt`,现在能不能再试:前 `calibrationMaxAttempts` 次隔 `calibrationRetry`,
+    /// 之后隔 `calibrationBackoff`,不放弃。纯函数。
+    public static func mayRetryCalibration(count: Int, lastAt: Date, now: Date) -> Bool {
+        now.timeIntervalSince(lastAt) >= (count < calibrationMaxAttempts ? calibrationRetry : calibrationBackoff)
+    }
+
+    private func mayAttemptLocked(_ key: String, now: Date) -> Bool {
+        if let a = calibrationAttempts, a.key == key {
+            guard Self.mayRetryCalibration(count: a.count, lastAt: a.lastAt, now: now) else { return false }
+            calibrationAttempts = (key, a.count + 1, now)
+        } else {
+            calibrationAttempts = (key, 1, now)
+        }
+        return true
+    }
+
+    // MARK: - 自记时层的界面对表(lock 里调)
+
+    /// 日志对不上这首(Amazon 重写 / 轮转了日志、它自己重启过)时位置落到自记时,自记时看不见卡顿,也不知道这之前的暂停,
+    /// 最容易错。界面上的播放时间就是真值:落到自记时 `calibrationDelay` 之后对一次表,之后每次卡顿平息再对一次
+    /// (卡顿行照样出现在日志里,只是认不出是哪一首)。对上就把自记时整个换成界面给的位置,并写给 collector。
+    private func scheduleTimerCalibrationLocked(pid: pid_t, duration: Double?, trackKey: String, artist: String?, title: String?, now: Date) {
+        if timerSeen?.key != trackKey { timerSeen = (trackKey, now) }
+        guard !calibrating, let seen = timerSeen, now.timeIntervalSince(seen.at) >= Self.calibrationDelay,
+              state.lastStallAt.map({ now.timeIntervalSince($0) >= Self.stallSettleDelay }) ?? true else { return }
+        let key = "timer:" + trackKey + "#" + String(max(state.lastStallAt?.timeIntervalSince1970 ?? 0, seen.at.timeIntervalSince1970))
+        guard timerCalibratedKey != key, mayAttemptLocked(key, now: now) else { return }
+        calibrating = true
+        let stallBefore = state.lastStallAt
+        calibrationQueue.async { [self] in
+            let result = AmazonMusicUIProbe.sampleOrigin(pid: pid, duration: duration) { [self] in
+                lock.lock()
+                defer { lock.unlock() }
+                return timer?.trackKey == trackKey
+            }
+            lock.lock()
+            calibrating = false
+            let now = Date()
+            guard case .success(let origin) = result, timer?.trackKey == trackKey, timer?.since != nil,
+                  state.lastStallAt == stallBefore else {
+                lock.unlock()
+                if case .failure(let f) = result {
+                    Self.logger.notice("amazon music clock: self-timer calibration failed: \(f.reason.rawValue, privacy: .public)")
+                }
+                return
+            }
+            let position = max(0, now.timeIntervalSince1970 - origin)
+            let before = timer?.position(at: now) ?? 0
+            timer = AmazonMusicPlayhead.SelfTimer(trackKey: trackKey, base: position, since: now)
+            timerCalibratedKey = key
+            lock.unlock()
+            Self.logger.notice("amazon music clock: self-timer set from the screen: \(before, format: .fixed(precision: 2))s -> \(position, format: .fixed(precision: 2))s")
+            if let artist, let title {
+                AmazonMusicLeadFile.write(.init(trackID: "", startedAtMs: 0, leadSecs: 0,
+                                                writtenAtMs: Int64(now.timeIntervalSince1970 * 1000),
+                                                artist: artist, title: title, positionSecs: position))
+            }
+            Self.onPlaybackEvent?(false)
+        }
     }
 
     // MARK: - 自动连播提前量的界面校准(lock 里调)
@@ -109,12 +179,7 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
               state.lastStallAt.map({ now.timeIntervalSince($0) >= Self.stallSettleDelay }) ?? true else { return }
         // 卡顿之后的那次重新校准另算次数(键带上最近一次卡顿的时刻)。
         let key = id + "@" + String(startedAt.timeIntervalSince1970) + "#" + String(state.lastStallAt?.timeIntervalSince1970 ?? 0)
-        if let a = calibrationAttempts, a.key == key {
-            guard a.count < Self.calibrationMaxAttempts, now.timeIntervalSince(a.lastAt) >= Self.calibrationRetry else { return }
-            calibrationAttempts = (key, a.count + 1, now)
-        } else {
-            calibrationAttempts = (key, 1, now)
-        }
+        guard mayAttemptLocked(key, now: now) else { return }
         calibrating = true
         let stallBefore = state.lastStallAt
         let timelineOrigin = AmazonMusicPlayhead.engineTimelinePosition(state, at: now).map { now.addingTimeInterval(-$0) }
@@ -269,12 +334,29 @@ public struct AmazonMusicLeadRecord: Codable, Equatable, Sendable {
     public var startedAtMs: Int64
     public var leadSecs: Double
     public var writtenAtMs: Int64
+    /// 自记时层按界面对的表:这一首(歌手 + 歌名,collector 按它认)在 `writtenAtMs` 那一刻的真实位置。提前量那种记录不带。
+    public var artist: String?
+    public var title: String?
+    public var positionSecs: Double?
+
+    public init(trackID: String, startedAtMs: Int64, leadSecs: Double, writtenAtMs: Int64,
+                artist: String? = nil, title: String? = nil, positionSecs: Double? = nil) {
+        self.trackID = trackID
+        self.startedAtMs = startedAtMs
+        self.leadSecs = leadSecs
+        self.writtenAtMs = writtenAtMs
+        self.artist = artist
+        self.title = title
+        self.positionSecs = positionSecs
+    }
 
     enum CodingKeys: String, CodingKey {
         case trackID = "track_id"
         case startedAtMs = "started_at_ms"
         case leadSecs = "lead_secs"
         case writtenAtMs = "written_at_ms"
+        case artist, title
+        case positionSecs = "position_secs"
     }
 }
 

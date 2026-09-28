@@ -325,6 +325,10 @@ type amazonLeadRecord struct {
 	StartedAtMs int64   `json:"started_at_ms"`
 	LeadSecs    float64 `json:"lead_secs"`
 	WrittenAtMs int64   `json:"written_at_ms"`
+	// 自记时层按界面对的表(同 Swift 侧):这一首在 WrittenAtMs 那一刻的真实位置,按歌手 + 歌名认。提前量那种记录不带。
+	Artist       string  `json:"artist,omitempty"`
+	Title        string  `json:"title,omitempty"`
+	PositionSecs float64 `json:"position_secs,omitempty"`
 }
 
 // amazonLeadStartTolerance:App 记的开播时刻(实时读到的那一刻)与这边(行首秒 + 0.5)最多差多少还算同一次开播。
@@ -336,18 +340,44 @@ func setAmazonLeadPath(path string) { amazonLeadPath = path }
 
 // amazonLeadFor:这首 App 按界面校准出的提前量(自动连播开的头,或卡顿后重新校准的);对不上返回 0。
 func amazonLeadFor(s amazonPlayheadState) float64 {
-	if amazonLeadPath == "" {
-		return 0
-	}
-	data, err := os.ReadFile(amazonLeadPath)
-	if err != nil {
-		return 0
-	}
-	var rec amazonLeadRecord
-	if json.Unmarshal(data, &rec) != nil {
+	rec, ok := readAmazonLeadRecord()
+	if !ok {
 		return 0
 	}
 	return amazonLeadApplies(rec, s)
+}
+
+func readAmazonLeadRecord() (amazonLeadRecord, bool) {
+	var rec amazonLeadRecord
+	if amazonLeadPath == "" {
+		return rec, false
+	}
+	data, err := os.ReadFile(amazonLeadPath)
+	if err != nil || json.Unmarshal(data, &rec) != nil {
+		return rec, false
+	}
+	return rec, true
+}
+
+// amazonTimerRecordMaxAge:App 按界面对的表多久之内还拿来用。它写下之后我们下一拍(两秒内)就读到,放宽到一分钟。
+const amazonTimerRecordMaxAge = time.Minute
+
+// amazonTimerRecordAppliedMs:最近一次用过的那条记录的写入时刻,同一条只用一次(之后自记时照常走、照常扣暂停)。
+var amazonTimerRecordAppliedMs int64
+
+// amazonTimerFromRecord 纯函数:App 按界面给这一首对了表(见 Swift 侧 scheduleTimerCalibrationLocked),自记时正在走、
+// 同一首、记录新鲜而且没用过,就把自记时换成记录里的位置加上写下之后过去的时间。返回新的自记时和是否用上了。
+func amazonTimerFromRecord(t amazonSelfTimer, rec amazonLeadRecord, artist, title string, appliedMs int64, now time.Time) (amazonSelfTimer, bool) {
+	if rec.PositionSecs <= 0 || rec.Artist != artist || rec.Title != title || rec.WrittenAtMs <= appliedMs || t.since.IsZero() {
+		return t, false
+	}
+	written := time.UnixMilli(rec.WrittenAtMs)
+	age := now.Sub(written)
+	if age < 0 || age > amazonTimerRecordMaxAge {
+		return t, false
+	}
+	t.base, t.since = rec.PositionSecs+age.Seconds(), now
+	return t, true
 }
 
 // amazonLeadApplies 纯函数:记录是不是这一首这一次开播的。
@@ -573,6 +603,12 @@ func applyAmazonMusicClock(s *snapshot, now time.Time) bool {
 	metadataTS := s.MetadataTS
 	amazonAdvanceClockLocked(metadataTS)
 	amazonClockTimer = advanceAmazonSelfTimer(amazonClockTimer, s.key(), metadataTS, s.Playing, now)
+	if rec, ok := readAmazonLeadRecord(); ok {
+		if t, used := amazonTimerFromRecord(amazonClockTimer, rec, s.Artist, s.Title, amazonTimerRecordAppliedMs, now); used {
+			amazonClockTimer, amazonTimerRecordAppliedMs = t, rec.WrittenAtMs
+			log.Printf("amazon music clock: self-timer set from the App's screen reading: %.2fs", t.position(now))
+		}
+	}
 	r := amazonReadingFor(amazonClockTail.state, amazonClockTail.ok && amazonClockTail.seen, amazonClockTimer, metadataTS, now)
 	if r.staleMetadata {
 		return false

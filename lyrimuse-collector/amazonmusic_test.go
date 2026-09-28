@@ -424,3 +424,31 @@ func TestAmazonReplayStart(t *testing.T) {
 		t.Errorf("整份日志都没有开播,照旧只读末尾: %d", got)
 	}
 }
+
+// App 按界面给自记时对的表:同一首、自记时在走、记录新鲜且没用过才用,位置 = 记录里的 + 写下之后过去的时间。
+func TestAmazonTimerFromRecord(t *testing.T) {
+	now := amazonAt("030000", 0)
+	running := amazonSelfTimer{trackKey: "Beautiful Things|Benson Boone|X", base: 3300, since: amazonAt("020000", 0)}
+	rec := amazonLeadRecord{WrittenAtMs: amazonAt("025958", 0).UnixMilli(), Artist: "Benson Boone", Title: "Beautiful Things", PositionSecs: 42}
+	got, ok := amazonTimerFromRecord(running, rec, "Benson Boone", "Beautiful Things", 0, now)
+	if !ok || !amazonNear(got.position(now), 44) {
+		t.Fatalf("按界面对表: ok=%v pos=%.2f", ok, got.position(now))
+	}
+	if _, ok := amazonTimerFromRecord(running, rec, "Benson Boone", "Other Song", 0, now); ok {
+		t.Error("别的歌不用")
+	}
+	if _, ok := amazonTimerFromRecord(running, rec, "Benson Boone", "Beautiful Things", rec.WrittenAtMs, now); ok {
+		t.Error("同一条只用一次")
+	}
+	if _, ok := amazonTimerFromRecord(running, rec, "Benson Boone", "Beautiful Things", 0, now.Add(2*time.Minute)); ok {
+		t.Error("太旧不用")
+	}
+	paused := running
+	paused.since = time.Time{}
+	if _, ok := amazonTimerFromRecord(paused, rec, "Benson Boone", "Beautiful Things", 0, now); ok {
+		t.Error("自记时停着(暂停)不用:记录是放着的时候量的")
+	}
+	if got := amazonLeadApplies(rec, amazonPlayheadState{trackID: "asin://B0TESTAAA1"}); got != 0 {
+		t.Error("自记时那种记录不当提前量用")
+	}
+}

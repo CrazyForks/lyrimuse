@@ -245,6 +245,28 @@ func runAmazonMusicTests() {
                     "Amazon 自记时: 第一次见到就是暂停着的,按时间戳到现在估一个停着的位置")
     }
 
+    // ---- 校准重试:前三次隔 5 秒,之后隔 30 秒,不放弃 ----
+    do {
+        typealias W = AmazonMusicLogWatcher
+        let t0 = at("030000")
+        expectEqual(W.mayRetryCalibration(count: 1, lastAt: t0, now: t0.addingTimeInterval(5)), true, "Amazon 校准: 头几次隔 5 秒再试")
+        expectEqual(W.mayRetryCalibration(count: 1, lastAt: t0, now: t0.addingTimeInterval(4)), false, "Amazon 校准: 不到 5 秒不试")
+        expectEqual(W.mayRetryCalibration(count: 3, lastAt: t0, now: t0.addingTimeInterval(10)), false, "Amazon 校准: 试满三次后不再 5 秒一试")
+        expectEqual(W.mayRetryCalibration(count: 7, lastAt: t0, now: t0.addingTimeInterval(30)), true, "Amazon 校准: 之后每 30 秒还试,不放弃")
+    }
+
+    // ---- 写给 collector 的记录:字段名同 Go 侧 amazonLeadRecord 的 json tag ----
+    do {
+        let rec = AmazonMusicLeadRecord(trackID: "", startedAtMs: 0, leadSecs: 0, writtenAtMs: 5,
+                                        artist: "Benson Boone", title: "Beautiful Things", positionSecs: 42)
+        let obj = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(rec))) as? [String: Any]
+        expectEqual(Set(obj?.keys.map { $0 } ?? []), Set(["track_id", "started_at_ms", "lead_secs", "written_at_ms", "artist", "title", "position_secs"]),
+                    "Amazon 记录: 自记时对表那种带上歌手 / 歌名 / 位置,字段名同 Go 侧")
+        let lead = AmazonMusicLeadRecord(trackID: "asin://B0TESTAAA1", startedAtMs: 1, leadSecs: 1.5, writtenAtMs: 2)
+        let leadObj = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(lead))) as? [String: Any]
+        expectEqual(leadObj?["position_secs"] == nil && leadObj?["artist"] == nil, true, "Amazon 记录: 提前量那种不带这几项")
+    }
+
     // ---- 重放起点:开播后暂停得久,开播行被推到末尾那段之前 ----
     do {
         let start = "260928:122914      Browser INFO in Harley : DT:M [Filter.cpp:157] End of stream reached\n" +
