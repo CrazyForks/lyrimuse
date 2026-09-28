@@ -80,7 +80,11 @@ struct LyricsWindowPreviewStage: View {
             ? CGSize(width: LyricsWindowMiniMetrics.size.width, height: Self.miniPreviewHeight)
             : Self.contentSize
     }
-    private var scale: CGFloat { Self.previewWidth / contentSize.width }
+    /// 完整尺寸缩到内容列那么宽;迷你按 1:1 画、在内容列里居中 —— 放大到列宽的话 420 宽的迷你窗
+    /// 会被画成约 600 宽,比用户桌面上那扇真窗大一截,预览就不是"它真打开的样子"了。
+    private var scale: CGFloat { mini ? 1 : Self.previewWidth / contentSize.width }
+    /// 舞台(缩放后)的宽高。
+    private var stageWidth: CGFloat { contentSize.width * scale }
     private var previewHeight: CGFloat { contentSize.height * scale }
 
     /// 圆角跟设置卡片同一档(`settingsCardBackground` 用的也是 continuous),让它在这一页里
@@ -110,7 +114,7 @@ struct LyricsWindowPreviewStage: View {
                 headerHotspot(headerRect)
             }
         }
-        .frame(width: Self.previewWidth, height: previewHeight, alignment: .topLeading)
+        .frame(width: stageWidth, height: previewHeight, alignment: .topLeading)
         .onChange(of: mini) { _, isMini in
             if !isMini { headerPopoverShown = false }
         }
@@ -132,7 +136,7 @@ struct LyricsWindowPreviewStage: View {
             .scaleEffect(scale, anchor: .topLeading)
             // scaleEffect 是渲染期变换、**不改变布局尺寸**,所以要再套一层缩小后的 frame 把
             // 版面占位收回来,否则这一块会按原尺寸占位、把下面的卡片全顶到屏幕外。
-            .frame(width: Self.previewWidth, height: previewHeight, alignment: .topLeading)
+            .frame(width: stageWidth, height: previewHeight, alignment: .topLeading)
             .clipShape(shape)
             // 一条发丝描边,理由同 settingsCardBackground:窗口自己的背景是模糊封面,亮暗随歌
             // 变化,没有描边时边界时有时无。
