@@ -528,13 +528,26 @@ func TestTopArtistsDigestPushesTopTenInOrder(t *testing.T) {
 func TestTopArtistsDigestSkips(t *testing.T) {
 	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.Local)
 
-	t.Run("没配中继", func(t *testing.T) {
-		useTopArtistSeams(t)
+	t.Run("没配中继:只预热身份、不推", func(t *testing.T) {
+		// 身份缓存是唯一的联网填充入口(歌手榜合并、地区卡、平台页、App 歌手页都读它),不能挂在网页推送后面。
+		warmed := useTopArtistSeams(t)
 		f := useFakeLastfmRead(t, topArtistsRoute(3))
 		p := &poller{}
 		p.topArtistsDigest(now, topArtistsEnv(""))
-		if f.count() != 0 {
-			t.Error("没配中继不该取数")
+		if f.count() != 1 {
+			t.Errorf("没配中继也要取一次榜单来预热身份,取了 %d 次", f.count())
+		}
+		select {
+		case n := <-warmed:
+			if n != 3 {
+				t.Errorf("应当拿整份榜单去预热,得到 %d 条", n)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("没配中继时没有预热身份")
+		}
+		p.topArtistsDigest(now.Add(time.Hour), topArtistsEnv(""))
+		if f.count() != 1 {
+			t.Errorf("一天内不该再取,取了 %d 次", f.count())
 		}
 	})
 	t.Run("磁盘上一天内推过", func(t *testing.T) {
@@ -621,7 +634,9 @@ func TestDeezerArtistAvatar(t *testing.T) {
 		wantPic    string
 		wantDef    bool
 	}{
-		{"找到", `{"data":[{"picture_medium":"https://dz/p.jpg"}]}`, 200, "https://dz/p.jpg", true},
+		{"找到", `{"data":[{"name":"周杰倫","picture_medium":"https://dz/p.jpg"}]}`, 200, "https://dz/p.jpg", true},
+		{"第一条是别人,认名字对得上的", `{"data":[{"name":"周杰","picture_medium":"https://dz/x.jpg"},{"name":"周杰伦","picture_medium":"https://dz/p.jpg"}]}`, 200, "https://dz/p.jpg", true},
+		{"都不是这个人", `{"data":[{"name":"别人","picture_medium":"https://dz/x.jpg"}]}`, 200, "", true},
 		{"查无此人", `{"data":[]}`, 200, "", true},
 		{"服务端出错", `{}`, 500, "", false},
 		{"响应解不开", `garbage`, 200, "", false},
@@ -633,7 +648,7 @@ func TestDeezerArtistAvatar(t *testing.T) {
 			t.Errorf("%s: got (%q,%v)", c.name, pic, def)
 		}
 	}
-	if gotQuery.Get("q") != "周杰倫" || gotQuery.Get("limit") != "1" {
+	if gotQuery.Get("q") != "周杰倫" || gotQuery.Get("limit") != "5" {
 		t.Errorf("查询参数不对: %v", gotQuery)
 	}
 }

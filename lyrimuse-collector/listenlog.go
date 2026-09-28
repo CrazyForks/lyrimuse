@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -186,8 +187,47 @@ func readListenLog() []listenLogLine {
 	return readListenLogAt(path)
 }
 
+// listenLogReceiptTimestamps:收听日志里带 Last.fm 提交回执("s")的时间戳 —— 本机(回填、重发队列)确实写进了
+// Last.fm 的那些。日志没配置时返回空表。
+func listenLogReceiptTimestamps() map[int64]bool {
+	out := map[int64]bool{}
+	for _, l := range readListenLog() {
+		if l.T == "s" && l.UTS > 0 {
+			out[l.UTS] = true
+		}
+	}
+	return out
+}
+
 // readListenLogAt 同 readListenLog,但不碰 listenLogMu:给已经持有 listenLogMu 与文件锁的整份重写用。
 func readListenLogAt(path string) []listenLogLine {
+	raws := readListenLogRawAt(path)
+	out := make([]listenLogLine, 0, len(raws))
+	bad := 0
+	for _, r := range raws {
+		if !r.parsed {
+			bad++
+			continue
+		}
+		out = append(out, r.line)
+	}
+	if bad > 0 {
+		log.Printf("listen log: skipped %d unparseable line(s)", bad)
+	}
+	return out
+}
+
+// listenLogRawLine:收听日志里的一行,连同它在磁盘上的原始字节。
+type listenLogRawLine struct {
+	raw    []byte
+	line   listenLogLine
+	parsed bool
+}
+
+// readListenLogRawAt 按行读出原始字节(空行跳过),每行顺手解一次。给整份重写(压缩、delete-listen)用:
+// 重写只挑行、不改行 —— 原样写回原始字节,解不开的行(断电留下的半截)和新版本多出来的字段都不会在重写时
+// 悄悄丢掉,守住文件头「永不改已写下的字节」那条约定。
+func readListenLogRawAt(path string) []listenLogRawLine {
 	if path == "" {
 		return nil
 	}
@@ -197,27 +237,53 @@ func readListenLogAt(path string) []listenLogLine {
 	}
 	defer f.Close()
 
-	var out []listenLogLine
+	var out []listenLogRawLine
 	sc := bufio.NewScanner(f)
 	// 默认 64KB 上限对单行 JSON 绰绰有余,但显式给足,免得某天有超长专辑名把整份日志读断。
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	bad := 0
 	for sc.Scan() {
-		raw := sc.Bytes()
-		if len(raw) == 0 {
+		b := sc.Bytes()
+		if len(b) == 0 {
 			continue
 		}
-		var line listenLogLine
-		if err := json.Unmarshal(raw, &line); err != nil {
-			bad++
-			continue
-		}
-		out = append(out, line)
-	}
-	if bad > 0 {
-		log.Printf("listen log: skipped %d unparseable line(s)", bad)
+		r := listenLogRawLine{raw: append([]byte(nil), b...)}
+		r.parsed = json.Unmarshal(b, &r.line) == nil
+		out = append(out, r)
 	}
 	return out
+}
+
+// rewriteListenLogAt 用这些行整份替换收听日志(临时文件 + 改名,中途失败不动原文件)。调用方持有 listenLogMu
+// 与跨进程文件锁(lockListenLogFile)。
+func rewriteListenLogAt(path string, lines []listenLogRawLine) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open temp file: %w", err)
+	}
+	w := bufio.NewWriter(f)
+	for _, l := range lines {
+		if _, err := w.Write(append(l.raw, '\n')); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("write temp file: %w", err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("flush temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	// tmp+rename:跟 persistedTTLSet.save 同一个套路,中途崩溃不会留下半份日志。
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("replace log: %w", err)
+	}
+	return nil
 }
 
 // compactListenLog 行数超上限时丢掉最旧的那批。启动时调一次,见常量注释。
@@ -229,36 +295,13 @@ func compactListenLog() {
 	}
 	unlock := lockListenLogFile(listenLogPath)
 	defer unlock()
-	lines := readListenLogAt(listenLogPath)
+	lines := readListenLogRawAt(listenLogPath)
 	if len(lines) <= listenLogMaxLines {
 		return
 	}
 	keep := lines[len(lines)-listenLogKeepLines:]
-	tmp := listenLogPath + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		slog.Error("listen log: compact open failed", "err", err)
-		return
-	}
-	w := bufio.NewWriter(f)
-	for _, line := range keep {
-		data, err := json.Marshal(line)
-		if err != nil {
-			continue
-		}
-		w.Write(append(data, '\n'))
-	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		slog.Error("listen log: compact flush failed", "err", err)
-		return
-	}
-	f.Close()
-	// tmp+rename:跟 persistedTTLSet.save 同一个套路,中途崩溃不会留下半份日志。
-	if err := os.Rename(tmp, listenLogPath); err != nil {
-		os.Remove(tmp)
-		slog.Error("listen log: compact rename failed", "err", err)
+	if err := rewriteListenLogAt(listenLogPath, keep); err != nil {
+		slog.Error("listen log: compact failed", "err", err)
 		return
 	}
 	log.Printf("listen log: compacted %d lines -> %d", len(lines), len(keep))

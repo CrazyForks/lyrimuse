@@ -276,6 +276,20 @@ func coverContentSkewed(img image.Image) bool {
 	return diff/longer > deviceArtworkMaxAspectSkew
 }
 
+// coverContentLetterboxed:裁掉纯色边之后不是正方形,**而且**形状是「补边」—— 一个轴两侧都被裁、另一个轴一点没裁
+// (汽水那张是上下白边、内容占满全宽)。只看长宽比的话,纯色底上一个居中的宽标志 / 文字(极简封面)四边都会被裁,
+// 同样判成长方形,于是正确的设备封面被让位给远程那张不知道对不对的(QQ 挂错过)。这一支不比对身份,判据得收紧。
+func coverContentLetterboxed(img image.Image) bool {
+	if !coverContentSkewed(img) {
+		return false
+	}
+	b := img.Bounds()
+	r := trimUniformBorder(img).Bounds()
+	verticalBars := r.Min.Y > b.Min.Y && r.Max.Y < b.Max.Y && r.Min.X == b.Min.X && r.Max.X == b.Max.X
+	horizontalBars := r.Min.X > b.Min.X && r.Max.X < b.Max.X && r.Min.Y == b.Min.Y && r.Max.Y == b.Max.Y
+	return verticalBars || horizontalBars
+}
+
 // croppedImage 是 image.Image 的只读裁切视图(不拷像素)。不用各具体类型自带的 SubImage:
 // 解码器给出的类型不止一种,不是每种都有。
 type croppedImage struct {
@@ -427,7 +441,7 @@ func deviceCoverDecision(
 	// 身份"的证据 —— 远程候选自己是正常的方形封面就让位。指纹在这里帮不上:这类图的构图跟正方形
 	// 原封面不同,同一张专辑实测距离 28,离阈值 10 很远。《Immortal》那一档不受影响:那张设备图
 	// 是正常的正方形,走不进这一支。
-	if coverContentSkewed(deviceImg) && !coverContentSkewed(cand) {
+	if coverContentLetterboxed(deviceImg) && !coverContentSkewed(cand) {
 		return false, "设备封面是补边的长方形图,改用远程候选"
 	}
 	if coverImagesLikelySame(deviceImg, cand) {

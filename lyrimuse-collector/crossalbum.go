@@ -118,6 +118,9 @@ func adoptCrossAlbumSiblingLyrics(key string, e *enrichEntry) bool {
 		d.Path = lyricsDecisionPathCrossAlbumReuse
 		d.ReusedFrom = sib
 		e.LyricsDecisionApplied = &d
+	} else {
+		// 兄弟那条没有决策记录:自己那份旧的已经描述不了现在的正文,换成只标明复用来源的最小记录(见 crossalbumcli.go 同一处)。
+		e.LyricsDecisionApplied = &lyricsDecision{Path: lyricsDecisionPathCrossAlbumReuse, ReusedFrom: sib}
 	}
 	return true
 }

@@ -17,6 +17,8 @@ func setUpLyricsDirSwitchTest(t *testing.T) (oldDir, newDir string) {
 	savedDir, savedCache, savedPath, savedDefault := lyricsDir(), enrichCache, enrichPath, defaultLyricsDir
 	savedReady := lyricsDirSwitchReady.Load()
 	t.Cleanup(func() {
+		// 热重读起的搬家 goroutine 先等它跑完,再把全局状态换回去(它还在读写 enrichCache / lyricsDir)。
+		featuresReloadWork.Wait()
 		enrichMu.Lock()
 		setLyricsDir(savedDir)
 		enrichCache = savedCache

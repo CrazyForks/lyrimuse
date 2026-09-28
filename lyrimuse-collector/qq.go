@@ -553,7 +553,15 @@ func qqSingerAvatar(name string) (string, bool) {
 	if len(items) == 0 {
 		return "", true // 服务端明确说没有这个歌手
 	}
-	pic := items[0].Pic
+	// 只认名字对得上的那条:建议列表的第一条常常是别人(「Wanting」第一条是无关歌手「婉婷」,见
+	// qqArtistCanonicalName 头注),头像又要缓存 14 天。都对不上就当这边没有,交给 Deezer 那条腿。
+	pic := ""
+	for _, it := range items {
+		if avatarNameMatches(name, it.Name) {
+			pic = it.Pic
+			break
+		}
+	}
 	if pic == "" {
 		return "", true
 	}

@@ -61,6 +61,13 @@ func artworkRelayKey() string {
 	return strings.TrimRight(u, "/")
 }
 
+// artworkConfirmFilePath 在锁里取确认记录的路径:上传 goroutine 会读它,测试收尾会改它。
+func artworkConfirmFilePath() string {
+	artworkConfirmMu.Lock()
+	defer artworkConfirmMu.Unlock()
+	return artworkConfirmPath
+}
+
 // artworkConfirmFile 是落盘形态。relay 一起存:换中继时整份作废(见头注)。
 type artworkConfirmFile struct {
 	Relay     string           `json:"relay"`
@@ -119,12 +126,22 @@ func loadArtworkConfirmed() {
 // markArtworkConfirmed 记下"这个 sha 此刻确认在中继上"。只落到内存,攒够
 // artworkConfirmFlushEvery 张才真写盘;扫描收尾处由 flushArtworkConfirmed 兜底。
 func markArtworkConfirmed(sha string) {
+	markArtworkConfirmedGen(sha, artworkRelayGenNow())
+}
+
+// markArtworkConfirmedGen 同 markArtworkConfirmed,只在中继代次仍是 gen 时才记(在 artworkConfirmMu 里核对,
+// 跟 switchStateRelay 清记录互斥):确认的是哪个中继上有这张图,就只能记在那个中继名下。
+func markArtworkConfirmedGen(sha string, gen uint64) {
 	// 同上那道门。当前所有调用点都已经在"配了中继"的分支里,这里再判一次是为了让
 	// "没配中继 = 这个文件一个字节都不写"成为本文件自己的不变量,不依赖调用方维持。
-	if !artworkRelayConfigured() || artworkConfirmPath == "" || sha == "" {
+	if !artworkRelayConfigured() || artworkConfirmFilePath() == "" || sha == "" {
 		return
 	}
 	artworkConfirmMu.Lock()
+	if artworkRelayGenNow() != gen {
+		artworkConfirmMu.Unlock()
+		return
+	}
 	artworkConfirmAt[sha] = time.Now().Unix()
 	artworkConfirmDirty = true
 	artworkConfirmPend++
@@ -138,7 +155,7 @@ func markArtworkConfirmed(sha string) {
 // flushArtworkConfirmed 把确认记录写盘(tmp + rename,跟 persistedTTLSet.save 同一个套路:
 // 中途崩溃不会留下半份文件)。没有新东西就什么都不做。
 func flushArtworkConfirmed() {
-	if artworkConfirmPath == "" {
+	if artworkConfirmFilePath() == "" {
 		return
 	}
 	artworkConfirmMu.Lock()
@@ -157,14 +174,18 @@ func flushArtworkConfirmed() {
 		snapshot[sha] = at
 	}
 	artworkConfirmDirty, artworkConfirmPend = false, 0
+	// 中继地址在锁里一起取:switchStateRelay 换地址、清记录也在这把锁里,锁外再读的话,这份旧中继的快照
+	// 可能被记到刚换上的新中继名下。
+	relay := artworkRelayKey()
+	path := artworkConfirmPath
 	artworkConfirmMu.Unlock()
 
-	data, err := json.Marshal(artworkConfirmFile{Relay: artworkRelayKey(), Confirmed: snapshot})
+	data, err := json.Marshal(artworkConfirmFile{Relay: relay, Confirmed: snapshot})
 	if err != nil {
 		return
 	}
-	if err := writeFileAtomic(artworkConfirmPath, data); err != nil {
-		slog.Error("save artwork-confirmed cache", "file", filepath.Base(artworkConfirmPath), "err", err)
+	if err := writeFileAtomic(path, data); err != nil {
+		slog.Error("save artwork-confirmed cache", "file", filepath.Base(path), "err", err)
 	}
 }
 
@@ -207,6 +228,9 @@ func switchStateRelay(url, token string) {
 	artworkConfirmDirty, artworkConfirmPend = false, 0
 	artworkUploaded = map[string]bool{}
 	artworkNextRetry = map[string]time.Time{}
+	// 在飞的上传对着的是旧中继:取消掉,重开一个给之后的上传用。
+	artworkUploadCancel()
+	artworkUploadCtx, artworkUploadCancel = context.WithCancel(context.Background())
 	artworkMu.Unlock()
 	artworkConfirmMu.Unlock()
 	log.Printf("artwork relay: relay address changed without a restart, re-confirming covers against the new one")

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -116,10 +117,11 @@ func (c *lastfmCatalogMatcher) decideExtended(ctx context.Context, artist, track
 	if scope.artist {
 		names, partial = c.extNames(ctx, artist, track, durationSecs)
 	}
-	cands, err := c.extCandidates(ctx, artist, track, names, base, scope)
+	cands, candsPartial, err := c.extCandidates(ctx, artist, track, names, base, scope)
 	if err != nil {
 		return lastfmCatalogDecision{}, err
 	}
+	partial = partial || candsPartial
 
 	// 第 1、2 档:编目正规条目,强身份在前。
 	for _, want := range []identityStrength{identityStrong, identityWeak} {
@@ -293,9 +295,14 @@ func (c *lastfmCatalogMatcher) extNames(ctx context.Context, artist, track strin
 }
 
 // extCandidates 对每个名字查一次「这个名字 + 原曲名」和它的曲目表,再按曲名搜一次全站。
-// 请求并发发出(每个都有自己的超时,合计仍受调用方 ctx 管)。任何一路没查成就整体失败。
+// 请求最多 lastfmCatalogExtConcurrency 路同时在飞(每个都有自己的超时,合计仍受调用方 ctx 管)。
+//
+// 没查成分两种:本地出站闸排不上队(errHostRateLimited —— 请求压根没发出去)只算这一路缺了,第二个返回值
+// partial=true,调用方按候选不全处理(同 extNames 的 partial);其余错误(Last.fm 回了限流 / 冷却、网络、超时)
+// 整体失败。合唱多人、别名多的歌名字一多就是十几路,原来全部同时发出,自己就把本地限速队列挤满,
+// 一路被拒整个判定作废、等下次再从头来。
 func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track string, names []extName,
-	base []catalogCandidate, scope matchScope) ([]extCandidate, error) {
+	base []catalogCandidate, scope matchScope) ([]extCandidate, bool, error) {
 	trackKey := lastfmCatalogTitleKey(track)
 	artistKey := lastfmCatalogArtistKey(artist)
 	strengthOf := map[string]identityStrength{}
@@ -308,8 +315,20 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 		mu       sync.Mutex
 		out      []extCandidate
 		firstErr error
+		partial  bool
 		wg       sync.WaitGroup
+		sem      = make(chan struct{}, lastfmCatalogExtConcurrency)
 	)
+	// acquire 拿不到名额(ctx 到期)时返回 false,这一路算没查成。
+	acquire := func() bool {
+		select {
+		case sem <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	release := func() { <-sem }
 	addCand := func(e extCandidate) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -334,10 +353,14 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 	}
 	fail := func(err error) {
 		mu.Lock()
+		defer mu.Unlock()
+		if errors.Is(err, errHostRateLimited) {
+			partial = true
+			return
+		}
 		if firstErr == nil {
 			firstErr = err
 		}
-		mu.Unlock()
 	}
 
 	for _, n := range names {
@@ -348,6 +371,11 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 			if containsCandidate(base, n.name, track) {
 				return // 基础判定已经按这个名字查过原曲名(第一位歌手)
 			}
+			if !acquire() {
+				fail(ctx.Err())
+				return
+			}
+			defer release()
 			p, err := c.probe(ctx, n.name, track)
 			if err != nil {
 				fail(err)
@@ -368,6 +396,11 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 		}()
 		go func() {
 			defer wg.Done()
+			if !acquire() {
+				fail(ctx.Err())
+				return
+			}
+			defer release()
 			rows, err := c.topTracks(ctx, n.name)
 			if err != nil {
 				fail(err)
@@ -388,6 +421,11 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if !acquire() {
+			fail(ctx.Err())
+			return
+		}
+		defer release()
 		rows, err := c.searchTracks(ctx, track)
 		if err != nil {
 			fail(err)
@@ -408,10 +446,13 @@ func (c *lastfmCatalogMatcher) extCandidates(ctx context.Context, artist, track 
 	}()
 	wg.Wait()
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, false, firstErr
 	}
-	return out, nil
+	return out, partial, nil
 }
+
+// lastfmCatalogExtConcurrency:扩展搜索同时在飞的 Last.fm 请求上限。
+const lastfmCatalogExtConcurrency = 2
 
 // searchTracks 调 track.search。返回 error = 没查成。结果只是候选线索,调用方必须按歌手和
 // 曲名折叠键严格过滤(见 extCandidates)。

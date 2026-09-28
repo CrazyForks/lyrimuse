@@ -194,6 +194,7 @@ final class LastfmConnectController: ObservableObject {
                 // 换 session 之前统计认的是哪个账号(口径同 LastfmStatsService 取用户名那一处)。
                 let config = ConfigStore.shared
                 let previousUser = config.lastfmScrobbleUsername.isEmpty ? config.lastfmUser : config.lastfmScrobbleUsername
+                let previousAuthorized = config.lastfmScrobbleUsername
                 ConfigStore.shared.lastfmScrobbleSessionKey = result.sessionKey
                 ConfigStore.shared.lastfmScrobbleUsername = result.username
                 // 换到了新 session key,上一把钥匙的"授权失效"红标(如果有)立刻作废 ——
@@ -208,9 +209,8 @@ final class LastfmConnectController: ObservableObject {
                 // 首次连接就开始后台引导同步,不等用户点进某个 tab ——
                 // 见 LastfmStatsService.ensureFirstSyncBootstrap 的注释。
                 LastfmStatsService.shared.ensureFirstSyncBootstrap()
-                // 桥接用的"用户名"字段自动回填——只在还没手动填过时才带过去,不覆盖用户
-                // 已经显式填的值(理论上极少见:桥接一个跟镜像不同的 Last.fm 账号)。
-                if ConfigStore.shared.lastfmUser.isEmpty {
+                // 桥接 / 统计读的"用户名"(lastfm_user)跟着授权走,判据见 LastfmBridgeUser。
+                if LastfmBridgeUser.shouldAdoptAuthorized(current: ConfigStore.shared.lastfmUser, previousAuthorized: previousAuthorized) {
                     ConfigStore.shared.lastfmUser = result.username
                 }
                 await ConfigStore.shared.save()

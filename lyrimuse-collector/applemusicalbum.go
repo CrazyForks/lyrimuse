@@ -72,10 +72,12 @@ func mergeAlbumTracks(primary, extra []albumTrack) []albumTrack {
 
 // appleCatalogAlbumTracks 等目录锚点给出专辑 id,再取这张专辑的中国区曲目表。取不到返回 nil。
 func appleCatalogAlbumTracks(title, album string) []albumTrack {
-	albumID, ok := appleCatalogAlbumIDFor(title, album)
-	for deadline := time.Now().Add(appleAlbumAnchorWait); !ok && time.Now().Before(deadline); {
+	// Apple Music 自己的同专辑预取:锚点就是它这一首的,不核署名(artist 传空)。
+	albumID, ok := appleCatalogAlbumIDFor("", title, album)
+	// 已经确定立不起锚点的(本地导入的文件、没报专辑名、目录元数据核对不上)不等:锚点不会来,等满只是白白拖住这次预取。
+	for deadline := time.Now().Add(appleAlbumAnchorWait); !ok && !appleCatalogCannotAnchor(title, album) && time.Now().Before(deadline); {
 		time.Sleep(500 * time.Millisecond)
-		albumID, ok = appleCatalogAlbumIDFor(title, album)
+		albumID, ok = appleCatalogAlbumIDFor("", title, album)
 	}
 	if !ok {
 		return nil
@@ -99,6 +101,11 @@ func appleCatalogAlbumTracks(title, album string) []albumTrack {
 		return nil
 	}
 	tracks := appleCatalogTracksByID(ctx, ids, "cn")
+	if len(tracks) == 0 {
+		// 中国区一首都查不回来:锚点是从美区立起来的(外区账号、中国区没上架,见 appleCatalogLookup),
+		// 这时 Music.app 报给系统的是美区那份写法,曲目表也按美区取。
+		tracks = appleCatalogTracksByID(ctx, ids, "us")
+	}
 	if len(tracks) == 0 {
 		return nil
 	}

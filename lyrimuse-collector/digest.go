@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"sort"
 	"strings"
 	"time"
@@ -237,7 +238,8 @@ func lbListensInRange(ctx context.Context, root, user string, fromUnix, toUnix i
 func lbListensBefore(ctx context.Context, root, user string, fromUnix, maxTs int64) ([]lbListenEntry, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	url := fmt.Sprintf("%s/1/user/%s/listens?count=100&min_ts=%d&max_ts=%d", root, user, fromUnix, maxTs)
+	// 用户名进路径段要转义:LB 用户名允许的字符里有路径里有含义的(空格、#、?),原样拼会拉到别的地址或整个 404。
+	url := fmt.Sprintf("%s/1/user/%s/listens?count=100&min_ts=%d&max_ts=%d", root, neturl.PathEscape(user), fromUnix, maxTs)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err

@@ -54,7 +54,15 @@ func runRecheckMotionCoverCLI(args []string) {
 	// 重抓 330 KB 的专辑页(还因为 motionCoverPath 为空而存不下来);而
 	// motionCoverAlbumHasKnownVideo 更是会对全表回 false,下面第②条命中条件直接哑掉。
 	loadMotionCoverCache(filepath.Join(cfgDir, clientName+"-motion-cover-cache.json"))
+	// Apple 目录锚点也要加载:不加载的话 appleCatalogAlbumIDFor 恒为 false、viaAnchor 永远不成立,核验退到
+	// apple_music_url 里那个可能对错版本的专辑 ID,-apply 可能把「没有动态封面」永久写进一条常驻进程本来能靠锚点
+	// 放行的条目。跟文件头注「全量复用生产逻辑」对齐(同 resynclyricscli.go)。
+	loadAppleCatalogCache(filepath.Join(cfgDir, clientName+"-apple-catalog-cache.json"))
 	if !*apply {
+		// 预演同样不写目录缓存。
+		appleCatalogMu.Lock()
+		appleCatalogPath = ""
+		appleCatalogMu.Unlock()
 		// 预演不落任何盘:核验时可能要补抓专辑页(见 motionCoverAlbumArtworkFor),那会写
 		// motion 缓存;常驻实例这时还开着,两边各写各的整份 map 只会互相覆盖。
 		motionCoverMu.Lock()
@@ -76,13 +84,13 @@ func runRecheckMotionCover(apply bool, onlyKey string) int {
 		if e.MotionCoverURL != "" {
 			continue
 		}
-		_, title, album := splitEnrichKey(k)
+		artist, title, album := splitEnrichKey(k)
 		switch {
 		case e.MotionCoverChecked:
 			// ① 查过了、结论是"这条没有"。值得拿它**现在**的封面再问一次:当初比对用的
 			//    可能是一张后来被换掉的封面(见文件头注那个 Prince《Musicology》实测)。
 			keys = append(keys, k)
-		case motionCoverAlbumHasKnownVideo(e, title, album):
+		case motionCoverAlbumHasKnownVideo(e, artist, title, album):
 			// ② 一位结论都没有,而这张专辑**本地缓存里已确认**有动态封面 —— 说明它卡在了
 			//    那条"fresh 的结论落不到这张封面上"的死角里(见
 			//    recheckMotionCoverAgainstCurrentCover 头注)。自动路径现在会自愈,但只在
@@ -171,14 +179,14 @@ func recheckOneMotionCoverKey(ctx context.Context, apply bool, key string) strin
 		fmt.Printf("── %s\n   跳过:缓存里没有这一条\n", key)
 		return "failed"
 	}
-	_, title, album := splitEnrichKey(key)
+	artist, title, album := splitEnrichKey(key)
 	if title == "" {
 		fmt.Printf("── %s\n   跳过:key 不是 \"歌手|歌名|专辑\" 三段\n", key)
 		return "failed"
 	}
 	hadVerdict := e.MotionCoverChecked
 	e.MotionCoverChecked = false
-	e.fillMotionCover(ctx, title, album)
+	e.fillMotionCover(ctx, artist, title, album)
 	fmt.Printf("── %s\n", key)
 	result := "changed"
 	switch {

@@ -55,7 +55,13 @@ func loadLBRetryLocked() []lbRetryItem {
 	}
 	var items []lbRetryItem
 	if json.Unmarshal(data, &items) != nil {
-		slog.Warn("lb retry: queue file unreadable, ignoring", "path", lbRetryPath)
+		// 挪开再当空:原地当空的话,下一次入队会整份覆盖它,里面那些收听就静默没了。
+		aside := lbRetryPath + ".corrupt-" + time.Now().Format("20060102-150405")
+		if err := os.Rename(lbRetryPath, aside); err == nil {
+			slog.Warn("lb retry: queue file unreadable, moved aside", "path", aside)
+		} else {
+			slog.Warn("lb retry: queue file unreadable, ignoring", "path", lbRetryPath, "err", err)
+		}
 		return nil
 	}
 	return items
@@ -83,6 +89,7 @@ func enqueueLBRetry(listenedAt int64, meta lbTrackMeta) {
 	if listenedAt <= 0 {
 		return
 	}
+	meta = lbRetryMeta(meta)
 	lbRetryMu.Lock()
 	defer lbRetryMu.Unlock()
 	items := loadLBRetryLocked()
@@ -97,6 +104,24 @@ func enqueueLBRetry(listenedAt int64, meta lbTrackMeta) {
 	}
 	saveLBRetryLocked(items)
 	log.Printf("lb retry: queued %q - %q (listened_at=%d), %d waiting", meta.ArtistName, meta.TrackName, listenedAt, len(items))
+}
+
+// lbRetryMeta:进队列的那份载荷去掉歌词字段(完成收听本来就不带歌词,submit 发 single 时也会剥)。
+// 不剥的话每条最多多带几 KB,上限 1000 条时队列文件几 MB、每次入队整份重写。拷一份,不动调用方的 map。
+func lbRetryMeta(meta lbTrackMeta) lbTrackMeta {
+	if len(meta.AdditionalInfo) == 0 {
+		return meta
+	}
+	info := make(map[string]any, len(meta.AdditionalInfo))
+	for k, v := range meta.AdditionalInfo {
+		switch k {
+		case "lyrics", "lyrics_tr", "lyrics_roma", "lyrics_yrc":
+			continue
+		}
+		info[k] = v
+	}
+	meta.AdditionalInfo = info
+	return meta
 }
 
 // lbRetrySubmitter 是重发时用的提交函数(生产是 lbClient.submit,测试注入假的)。
@@ -159,6 +184,11 @@ func startLBRetryLoop(ctx context.Context, lb *lbClient) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// 这一刻没有令牌:整轮跳过、条目留着。submit 在没令牌时当「这条路不存在」直接返回 nil,
+			// 交给它的话队列会把每条都当成送达移出去。
+			if lb.apiToken() == "" && !lb.dryRun {
+				continue
+			}
 			processLBRetry(ctx, func(ctx context.Context, listenedAt int64, meta lbTrackMeta) error {
 				return lb.submit(ctx, "single", listenedAt, meta)
 			})

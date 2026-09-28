@@ -12,6 +12,8 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,19 +110,62 @@ func appleCatalogIndexKey(title, album string) string {
 // (一次性子命令里索引是空的,理由见那边注释)。**只认已校验过的锚点**——索引与缓存里的条目
 // 都经过 appleCatalogAnchor 的曲目名/专辑名自校验,所以这里拿到的 ID 是可信的;刻意不提供
 // "拿 artist/album 去搜一个专辑 ID"的退路,理由见 motioncover.go 文件头 1。
-func appleCatalogAlbumIDFor(title, album string) (int64, bool) {
+//
+// artist 是这条记录的本地署名,锚点的署名得对得上它(appleCatalogArtistFits)才算:索引键只有「标题|专辑」,
+// 别人专辑里的同名歌(Bublé《Christmas》和 Bing Crosby《Christmas》里的 White Christmas)会撞到同一个键上,
+// 拿到别人专辑的 ID,而锚点来的 ID 在动态封面那边是免图像校验直接采用的。artist 为空 = 调用方就是 Apple Music
+// 自己那条路(锚点本来就是它这一首的),不核。
+func appleCatalogAlbumIDFor(artist, title, album string) (int64, bool) {
 	appleCatalogMu.Lock()
 	defer appleCatalogMu.Unlock()
 	want := appleCatalogIndexKey(title, album)
-	if t, ok := appleCatalogByTrack[want]; ok && t.AlbumID > 0 {
+	if t, ok := appleCatalogByTrack[want]; ok && t.AlbumID > 0 && appleCatalogArtistFits(artist, t) {
 		return t.AlbumID, true
 	}
-	for _, c := range appleCatalogCache {
-		if c.AlbumID > 0 && appleCatalogIndexKey(c.TrackName, c.AlbumName) == want {
+	for _, c := range appleCatalogCacheByKeyLocked(want) {
+		if c.AlbumID > 0 && appleCatalogArtistFits(artist, c) {
 			return c.AlbumID, true
 		}
 	}
 	return 0, false
+}
+
+// appleCatalogKeyIndex:appleCatalogCache 按"归一标题|归一专辑"分好的桶,给上面和 appleCatalogSearchIdentities
+// 的退化扫描用。原来每次都把整份缓存逐条归一一遍,调用方(trackEnrichment 那一侧)手里还拿着 enrichMu,
+// 缓存大了会拖住所有等 enrichMu 的人。写入点清空它;换了整份 map(加载、单测直接赋值)或条目数变了也整份重建。
+var (
+	appleCatalogKeyIndex    map[string][]appleCatalogTrack
+	appleCatalogKeyIndexOf  uintptr
+	appleCatalogKeyIndexLen int
+)
+
+// appleCatalogCacheByKeyLocked:调用方持有 appleCatalogMu。
+func appleCatalogCacheByKeyLocked(want string) []appleCatalogTrack {
+	id := reflect.ValueOf(appleCatalogCache).Pointer()
+	if appleCatalogKeyIndex == nil || appleCatalogKeyIndexOf != id || appleCatalogKeyIndexLen != len(appleCatalogCache) {
+		idx := make(map[string][]appleCatalogTrack, len(appleCatalogCache))
+		ids := make([]string, 0, len(appleCatalogCache))
+		for k := range appleCatalogCache {
+			ids = append(ids, k)
+		}
+		// 固定顺序:同一个键下有多条时,谁先被选中不随 map 遍历次序变。
+		sort.Strings(ids)
+		for _, k := range ids {
+			c := appleCatalogCache[k]
+			key := appleCatalogIndexKey(c.TrackName, c.AlbumName)
+			idx[key] = append(idx[key], c)
+		}
+		appleCatalogKeyIndex, appleCatalogKeyIndexOf, appleCatalogKeyIndexLen = idx, id, len(appleCatalogCache)
+	}
+	return appleCatalogKeyIndex[want]
+}
+
+// appleCatalogArtistFits:本地署名跟这条目录曲目是不是同一位(曲目署名或专辑署名任一对得上)。本地署名为空不核。
+func appleCatalogArtistFits(local string, t appleCatalogTrack) bool {
+	if strings.TrimSpace(local) == "" {
+		return true
+	}
+	return artistMatches(local, t.ArtistName) || (t.AlbumArtist != "" && artistMatches(local, t.AlbumArtist))
 }
 
 // loadAppleCatalogCache/saveAppleCatalogCache:整份 map 序列化 + 临时文件原子改名,跟
@@ -143,7 +188,18 @@ func loadAppleCatalogCache(path string) {
 	}
 }
 
+// appleCatalogSaveMu / appleStorefrontArtistSaveMu / appleStorefrontTitleSaveMu:这三份缓存各自的「取快照 + 落盘」
+// 串行锁。数据锁只护住取快照那一刻,两个保存方并发时后取快照的可能先写完、再被先取的那份旧快照盖回去;
+// 写失败时 dirty 也已经清掉,改动要等下一次无关改动才有机会落盘。锁顺序:保存锁在外、数据锁在内。
+var (
+	appleCatalogSaveMu          sync.Mutex
+	appleStorefrontArtistSaveMu sync.Mutex
+	appleStorefrontTitleSaveMu  sync.Mutex
+)
+
 func saveAppleCatalogCache() {
+	appleCatalogSaveMu.Lock()
+	defer appleCatalogSaveMu.Unlock()
 	appleCatalogMu.Lock()
 	if !appleCatalogDirty || appleCatalogPath == "" {
 		appleCatalogMu.Unlock()
@@ -158,6 +214,9 @@ func saveAppleCatalogCache() {
 	}
 	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save apple catalog cache", "err", err)
+		appleCatalogMu.Lock()
+		appleCatalogDirty = true
+		appleCatalogMu.Unlock()
 	}
 }
 
@@ -166,21 +225,39 @@ func appleCatalogPlausibleID(trackID int64) bool {
 	return trackID > 0 && trackID < appleCatalogMaxPlausibleID
 }
 
-// appleCatalogLookup 打一次 iTunes lookup。只在**查到了**时返回 ok=true 并写缓存。
-func appleCatalogLookup(trackID int64) (appleCatalogTrack, bool) {
-	u := fmt.Sprintf("https://itunes.apple.com/lookup?id=%d&country=cn", trackID)
+// appleCatalogLookupURL 只为单测可改。
+var appleCatalogLookupURL = "https://itunes.apple.com/lookup"
+
+// appleCatalogLookup 打一次 iTunes lookup。只在**查到了**时返回 ok=true 并写缓存。answered = Apple 这次真的答了
+// (200 且解得开):只有答了、却没有这条曲目,才算「这不是目录 ID」的一次证据;403 / 429、本地出站闸拦下、超时
+// 都只是没问成。
+//
+// 先问中国区;中国区答了、却没有这条,再问美区。外区账号播的是中国区没上架的曲目,只问中国区的话这些曲目
+// 永远立不起锚点(还会被当成「不是目录 ID」计 miss);美区答回来的写法就是外区 Music.app 报给系统的那份,
+// 锚点照样逐字核对本地标签(appleCatalogAnchorVerified),写法对不上立不起,不会拿错。
+func appleCatalogLookup(trackID int64) (t appleCatalogTrack, ok, answered bool) {
+	for _, sf := range []string{"cn", "us"} {
+		if t, ok, answered = appleCatalogLookupIn(trackID, sf); ok || !answered {
+			return t, ok, answered
+		}
+	}
+	return appleCatalogTrack{}, false, true
+}
+
+func appleCatalogLookupIn(trackID int64, storefront string) (t appleCatalogTrack, ok, answered bool) {
+	u := fmt.Sprintf("%s?id=%d&country=%s", appleCatalogLookupURL, trackID, storefront)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
-		return appleCatalogTrack{}, false
+		return appleCatalogTrack{}, false, false
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := doHTTPTracked(&http.Client{Timeout: 5 * time.Second}, req)
 	if err != nil {
-		return appleCatalogTrack{}, false
+		return appleCatalogTrack{}, false, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return appleCatalogTrack{}, false
+		return appleCatalogTrack{}, false, false
 	}
 	var r struct {
 		Results []struct {
@@ -195,7 +272,7 @@ func appleCatalogLookup(trackID int64) (appleCatalogTrack, bool) {
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return appleCatalogTrack{}, false
+		return appleCatalogTrack{}, false, false
 	}
 	for _, it := range r.Results {
 		// wrapperType 必须是 track:同一个 id 空间里还有 collection/artist,
@@ -214,12 +291,13 @@ func appleCatalogLookup(trackID int64) (appleCatalogTrack, bool) {
 		}
 		appleCatalogMu.Lock()
 		appleCatalogCache[fmt.Sprint(trackID)] = t
+		appleCatalogKeyIndex = nil
 		appleCatalogDirty = true
 		appleCatalogMu.Unlock()
 		saveAppleCatalogCache()
-		return t, true
+		return t, true, true
 	}
-	return appleCatalogTrack{}, false
+	return appleCatalogTrack{}, false, true
 }
 
 // appleCatalogTrackCachedOnly 只读缓存,永不发请求——给 poll 主循环用。
@@ -251,10 +329,12 @@ func prefetchAppleCatalogTrack(trackID int64) {
 	appleCatalogMu.Unlock()
 
 	go func() {
-		_, ok := appleCatalogLookup(trackID)
+		_, ok, answered := appleCatalogLookup(trackID)
 		appleCatalogMu.Lock()
 		delete(appleCatalogInflight, trackID)
-		if !ok {
+		// 只有 Apple 真的答了「没有」才计一次:lookup 端点被限流时出站闸会拦上一到五分钟,poll 每 5 秒一拍,
+		// 三次额度十几秒就烧光,这个 ID 在这个进程里就再也不查了(电台权威时长、按 ID 取词、动态封面全没了)。
+		if !ok && answered {
 			appleCatalogMisses[trackID]++
 		}
 		appleCatalogMu.Unlock()
@@ -267,7 +347,11 @@ func prefetchAppleCatalogTrack(trackID int64) {
 // 校验(见文件头 2)要求曲目名和专辑名都对上本地标签。本地没有专辑标签时只校曲目名
 // ——Apple Music 走这条路径时专辑标签为空极罕见,不值得为它整条作废。
 func appleCatalogAnchor(bundleID string, trackID int64, localTrackNumber int, localTitle, localAlbum string) (appleCatalogTrack, bool) {
-	if bundleID != appleMusicBundleID || localTitle == "" || !appleCatalogPlausibleID(trackID) {
+	if bundleID != appleMusicBundleID || localTitle == "" {
+		return appleCatalogTrack{}, false
+	}
+	if !appleCatalogPlausibleID(trackID) {
+		noteAppleCatalogUnanchorable(localTitle, localAlbum)
 		return appleCatalogTrack{}, false
 	}
 	t, ok := appleCatalogTrackCachedOnly(trackID)
@@ -275,6 +359,48 @@ func appleCatalogAnchor(bundleID string, trackID int64, localTrackNumber int, lo
 		prefetchAppleCatalogTrack(trackID)
 		return appleCatalogTrack{}, false
 	}
+	t, ok = appleCatalogAnchorVerified(t, localTrackNumber, localTitle, localAlbum)
+	if !ok {
+		noteAppleCatalogUnanchorable(localTitle, localAlbum)
+	}
+	return t, ok
+}
+
+// appleCatalogUnanchorable:这台机器上已经确定**立不起**目录锚点的"归一标题|归一专辑"(本地导入的文件、
+// 目录元数据核对不上)。给同专辑预取那头的等待用:换曲那一刻它要最多等 appleAlbumAnchorWait 让锚点
+// 就绪,锚点根本不会来的那些曲目每次换曲都白等满这一段。只在进程内记,条目太多整份清掉重来。
+var (
+	appleCatalogUnanchorableMu sync.Mutex
+	appleCatalogUnanchorable   = map[string]bool{}
+)
+
+const appleCatalogUnanchorableMax = 2048
+
+func noteAppleCatalogUnanchorable(title, album string) {
+	if strings.TrimSpace(album) == "" {
+		return
+	}
+	key := appleCatalogIndexKey(title, album)
+	appleCatalogUnanchorableMu.Lock()
+	if len(appleCatalogUnanchorable) >= appleCatalogUnanchorableMax {
+		appleCatalogUnanchorable = map[string]bool{}
+	}
+	appleCatalogUnanchorable[key] = true
+	appleCatalogUnanchorableMu.Unlock()
+}
+
+// appleCatalogCannotAnchor:这首已经确定立不起锚点(没报专辑名的一律立不起,见下面写索引那一处)。
+func appleCatalogCannotAnchor(title, album string) bool {
+	if strings.TrimSpace(album) == "" {
+		return true
+	}
+	appleCatalogUnanchorableMu.Lock()
+	defer appleCatalogUnanchorableMu.Unlock()
+	return appleCatalogUnanchorable[appleCatalogIndexKey(title, album)]
+}
+
+// appleCatalogAnchorVerified:目录元数据已在缓存里,逐项跟本地标签核对,通过了写索引。
+func appleCatalogAnchorVerified(t appleCatalogTrack, localTrackNumber int, localTitle, localAlbum string) (appleCatalogTrack, bool) {
 	// 曲目名用**逐字同名**,不是 lyricTitleAccepted(对抗性复核改)。
 	// 那个函数的第二档会把双方各自 stripParens 之后再比相等 —— 于是同一张专辑上的括号
 	// 兄弟轨互相判等,而专辑名又必然相同,锚点照样"成立",把差 40~47% 的时长当成权威值:
@@ -295,9 +421,12 @@ func appleCatalogAnchor(bundleID string, trackID int64, localTrackNumber int, lo
 	if localTrackNumber > 0 && t.TrackNumber > 0 && localTrackNumber != t.TrackNumber {
 		return appleCatalogTrack{}, false
 	}
-	appleCatalogMu.Lock()
-	appleCatalogByTrack[appleCatalogIndexKey(localTitle, localAlbum)] = t
-	appleCatalogMu.Unlock()
+	// 本地没有专辑标签时不写索引:键会退化成「标题|」,之后任何没报专辑名的同名曲目(MV、别的播放器)都会撞上。
+	if localAlbum != "" {
+		appleCatalogMu.Lock()
+		appleCatalogByTrack[appleCatalogIndexKey(localTitle, localAlbum)] = t
+		appleCatalogMu.Unlock()
+	}
 	return t, true
 }
 
@@ -316,15 +445,17 @@ func appleCatalogAnchor(bundleID string, trackID int64, localTrackNumber int, lo
 func appleCatalogSearchIdentities(artist, title, album string) []string {
 	appleCatalogMu.Lock()
 	t, ok := appleCatalogByTrack[appleCatalogIndexKey(title, album)]
+	if ok && !appleCatalogArtistFits(artist, t) {
+		ok = false // 同名不同人,见 appleCatalogAlbumIDFor
+	}
 	if !ok {
 		// 索引只由播放路径(appleCatalogAnchor)填,而 search-lyrics 是独立的一次性进程 ——
 		// 它 loadAppleCatalogCache 读回来的是 appleCatalogCache,索引仍然是空的。
 		// 对抗性复核指出:不退化的话那次 load 是**空操作**,注释却写着它修好了
 		// "手动搜索名次跟自动决策对不上"。磁盘缓存里本来就有 track_name/album_name,
-		// 扫一遍就够,条目量是"这台机器放过的目录曲目数",线性扫可以接受。
-		want := appleCatalogIndexKey(title, album)
-		for _, c := range appleCatalogCache {
-			if appleCatalogIndexKey(c.TrackName, c.AlbumName) == want {
+		// 按归一键分桶查一遍就够(appleCatalogCacheByKeyLocked)。
+		for _, c := range appleCatalogCacheByKeyLocked(appleCatalogIndexKey(title, album)) {
+			if appleCatalogArtistFits(artist, c) {
 				t, ok = c, true
 				break
 			}
@@ -394,6 +525,8 @@ func loadAppleStorefrontArtistCache(path string) {
 }
 
 func saveAppleStorefrontArtistCache() {
+	appleStorefrontArtistSaveMu.Lock()
+	defer appleStorefrontArtistSaveMu.Unlock()
 	appleStorefrontArtistMu.Lock()
 	if !appleStorefrontArtistDirty || appleStorefrontArtistPath == "" {
 		appleStorefrontArtistMu.Unlock()
@@ -414,6 +547,9 @@ func saveAppleStorefrontArtistCache() {
 	}
 	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save apple storefront artist cache", "err", err)
+		appleStorefrontArtistMu.Lock()
+		appleStorefrontArtistDirty = true
+		appleStorefrontArtistMu.Unlock()
 	}
 }
 
@@ -459,6 +595,8 @@ func loadAppleStorefrontTitleCache(path string) {
 }
 
 func saveAppleStorefrontTitleCache() {
+	appleStorefrontTitleSaveMu.Lock()
+	defer appleStorefrontTitleSaveMu.Unlock()
 	appleStorefrontTitleMu.Lock()
 	if !appleStorefrontTitleDirty || appleStorefrontTitlePath == "" {
 		appleStorefrontTitleMu.Unlock()
@@ -477,6 +615,9 @@ func saveAppleStorefrontTitleCache() {
 	}
 	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save apple storefront title cache", "err", err)
+		appleStorefrontTitleMu.Lock()
+		appleStorefrontTitleDirty = true
+		appleStorefrontTitleMu.Unlock()
 	}
 }
 
@@ -557,10 +698,15 @@ func appleStorefrontIdentitiesAndTitle(ctx context.Context, artist, title, album
 	q := neturl.QueryEscape(artist + " " + album)
 	seen := map[string]bool{normLoose(artist): true}
 	var out []string
-	probed := false // 至少有一个商店真的定位到了专辑、取过它的曲目表
+	probed := false  // 至少有一个商店真的定位到了专辑、取过它的曲目表
+	complete := true // 每个商店都问成了(搜索真的答了、定位到的专辑真的取到了曲目表)
 	for _, country := range appleStorefrontsFor(append([]string{artist, title, album}, lyricSamples...)...) {
 		bestID, bestScore := int64(0), 0
-		rs, _ := itunesSearch(ctx, q, country) // 这条路径有自己的缓存,不看 reached
+		rs, reached := itunesSearch(ctx, q, country)
+		if !reached {
+			complete = false // 被限流 / 冷却 / 网络失败:这个商店没问成,不能当「查过、没有」
+			continue
+		}
 		for _, r := range rs {
 			if sc := albumScore(r.CollectionName, album); sc > bestScore {
 				bestScore, bestID = sc, r.CollectionID
@@ -570,6 +716,10 @@ func appleStorefrontIdentitiesAndTitle(ctx context.Context, artist, title, album
 			continue
 		}
 		tracks := itunesLookupTracks(ctx, bestID, country)
+		if len(tracks) == 0 {
+			complete = false // 定位到了专辑却没取到曲目表:lookup 没问成
+			continue
+		}
 		probed = true
 		hit := appleStorefrontPickTrack(title, durationSecs, tracks)
 		if hit == nil {
@@ -593,14 +743,20 @@ func appleStorefrontIdentitiesAndTitle(ctx context.Context, artist, title, album
 	}
 
 	appleStorefrontArtistMu.Lock()
-	appleStorefrontArtistCache[key] = out
+	// 有商店没问成、又什么都没查到时连内存也不记:记下空结果,这个常驻进程余下的时间里就不会再问了。
+	if len(out) > 0 || complete {
+		appleStorefrontArtistCache[key] = out
+	}
 	// 查空不算脏 —— 空值不落盘,下一个进程还能再试一次,理由同 mbPrimaryNameCache。
 	if len(out) > 0 {
 		appleStorefrontArtistDirty = true
 	}
 	appleStorefrontArtistMu.Unlock()
 	saveAppleStorefrontArtistCache()
-	if probed {
+	// 规范曲名的结论要么是查到了一个(canonicalTitle 非空),要么是每个商店都问成了、确实都跟本地写法一样。
+	// 原产地商店(排在 CN / US 之后)被限流没问成时,空串不能记:那会把「本地写法就是规范的」永久落盘,
+	// 标题反查对这首歌从此失效(日文歌最常见的形状)。
+	if probed && (canonicalTitle != "" || complete) {
 		// 空串也记(含义:查过了,本地写法就是规范的),理由见 appleStorefrontTitleCache 头注。
 		appleStorefrontTitleMu.Lock()
 		appleStorefrontTitleCache[titleKey] = canonicalTitle
@@ -822,11 +978,15 @@ func appleTitleSearchIdentities(ctx context.Context, artist, title string, durat
 	appleTitleSearchIdentityMu.Unlock()
 
 	var out []string
+	allReached := true
 	storefronts := appleStorefrontsFor(artist, title)
 	for _, q := range []string{strings.TrimSpace(artist + " " + title), title} {
 		var results []itunesResult
 		for _, country := range storefronts {
-			rs, _ := itunesSearch(ctx, neturl.QueryEscape(q), country)
+			rs, reached := itunesSearch(ctx, neturl.QueryEscape(q), country)
+			if !reached {
+				allReached = false
+			}
 			results = append(results, rs...)
 		}
 		if out = pickAppleTitleSearchIdentities(results, artist, title, durationSecs); len(out) > 0 {
@@ -836,9 +996,13 @@ func appleTitleSearchIdentities(ctx context.Context, artist, title string, durat
 	if len(out) > 0 {
 		log.Printf("lyrics: apple title-search identities for %q - %q (%.1fs): %v", artist, title, durationSecs, out)
 	}
-	appleTitleSearchIdentityMu.Lock()
-	appleTitleSearchIdentityCache[key] = out
-	appleTitleSearchIdentityMu.Unlock()
+	// 有请求没问成(iTunes 403 之后的冷却期里 itunesSearch 直接返回空)时查空的结果不缓存:不区分「没问成」和
+	// 「确实没有」的话,这首歌的救急身份在这个常驻进程里就一直拿不到了。
+	if len(out) > 0 || allReached {
+		appleTitleSearchIdentityMu.Lock()
+		appleTitleSearchIdentityCache[key] = out
+		appleTitleSearchIdentityMu.Unlock()
+	}
 	return out
 }
 

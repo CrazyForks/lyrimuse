@@ -66,6 +66,8 @@ const (
 	// 正常节奏下第三拍读空恰好满足,不会因为定时器的毫秒级抖动被推迟到第四拍。
 	nullClearMinWait = 2*pollInterval - time.Second
 	submitTimeout    = 15 * time.Second
+	// exitMirrorWait:退出兜底最后等后台 Last.fm 写入收尾的时限(见 run() 的 ctx.Done 分支)。
+	exitMirrorWait = 4 * time.Second
 	// 单次提交超时：playing_now 失败无妨(≤playingNowRefresh 会再发)，快超时保持 poll 循环
 	// 灵敏(暂停/切歌能及时反映)；single(完成收听)丢了就永久少一条，用更长超时并重试。
 	playingNowTimeout = 8 * time.Second

@@ -176,26 +176,26 @@ func TestMotionCoverWorthBackfill(t *testing.T) {
 
 	// ① 已经有了 → 不用补(连锚点都不查)。
 	setMotion(nil)
-	if motionCoverWorthBackfill(filled, title, album) {
+	if motionCoverWorthBackfill(filled, "", title, album) {
 		t.Error("已经有 master 的条目不该再算缺")
 	}
 	// ② 没查过 + 有锚点 → 值得补一次。
-	if !motionCoverWorthBackfill(empty, title, album) {
+	if !motionCoverWorthBackfill(empty, "", title, album) {
 		t.Error("还没查过这张专辑时该算缺,给它一次机会")
 	}
 	// ③ 查过了、这张有 → 算缺(等着被写进这条记录)。
 	setMotion(&motionCover{Master: "https://mvod/x.m3u8", Checked: true})
-	if !motionCoverWorthBackfill(empty, title, album) {
+	if !motionCoverWorthBackfill(empty, "", title, album) {
 		t.Error("缓存里确认这张有动态封面时该算缺")
 	}
 	// ④ 查过了、这张没有 → **不算缺**,这是防白重试的那一半。
 	setMotion(&motionCover{Checked: true})
-	if motionCoverWorthBackfill(empty, title, album) {
+	if motionCoverWorthBackfill(empty, "", title, album) {
 		t.Error(`缓存里标着"查过了没有"时不该算缺,否则七成条目白重试 5 轮`)
 	}
 	// ⑤ 没有已校验的目录锚点(不是 Apple Music 目录曲目)→ 补也补不出来,不算缺。
 	setMotion(nil)
-	if motionCoverWorthBackfill(empty, "查无此歌", "查无此辑") {
+	if motionCoverWorthBackfill(empty, "", "查无此歌", "查无此辑") {
 		t.Error("没有目录锚点时不该算缺")
 	}
 }
@@ -259,26 +259,26 @@ func TestMotionCoverWorthBackfillCheckedAndAppleURL(t *testing.T) {
 		MotionCoverChecked: true,
 		AppleURL:           "https://music.apple.com/cn/album/aim-high/" + albumID + "?i=1",
 	}
-	if motionCoverWorthBackfill(checked, "查无此歌", "查无此辑") {
+	if motionCoverWorthBackfill(checked, "", "查无此歌", "查无此辑") {
 		t.Error("已核对过的记录不该再算缺")
 	}
 
 	// ② 没有目录锚点,但 apple_music_url 里有专辑 ID → 该算缺(这是非 Apple Music 播放器
 	//    唯一的入口)。
 	viaURL := enrichEntry{AppleURL: "https://music.apple.com/cn/album/aim-high/" + albumID + "?i=1"}
-	if !motionCoverWorthBackfill(viaURL, "查无此歌", "查无此辑") {
+	if !motionCoverWorthBackfill(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error("apple_music_url 带专辑 ID 且缓存里确认这张有动态封面时,该算缺")
 	}
 
 	// ③ 同上,但缓存里标着这张没有 → 不算缺(防七成条目白重试)。
 	setMotion(&motionCover{Checked: true})
-	if motionCoverWorthBackfill(viaURL, "查无此歌", "查无此辑") {
+	if motionCoverWorthBackfill(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error(`缓存里"查过了没有"时不该算缺`)
 	}
 
 	// ④ 两条来路都没有 → 不算缺。
 	setMotion(nil)
-	if motionCoverWorthBackfill(enrichEntry{}, "查无此歌", "查无此辑") {
+	if motionCoverWorthBackfill(enrichEntry{}, "", "查无此歌", "查无此辑") {
 		t.Error("既无锚点也无 apple_music_url 时不该算缺")
 	}
 }
@@ -428,29 +428,29 @@ func TestMotionCoverAlbumHasKnownVideo(t *testing.T) {
 
 	// ① 缓存里确认这张有动画 到 是。
 	setMotion(&motionCover{Master: "https://mvod/x.m3u8", Checked: true})
-	if !motionCoverAlbumHasKnownVideo(viaURL, "查无此歌", "查无此辑") {
+	if !motionCoverAlbumHasKnownVideo(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error("缓存里确认这张专辑有动态封面时该回 true")
 	}
 
 	// ② 缓存里确认这张没有 到 否。
 	setMotion(&motionCover{Checked: true})
-	if motionCoverAlbumHasKnownVideo(viaURL, "查无此歌", "查无此辑") {
+	if motionCoverAlbumHasKnownVideo(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error(`缓存里"查过了没有"时该回 false`)
 	}
 
 	// ③ **还没查过 到 否**。这一条是它跟 motionCoverWorthBackfill 的唯一分歧,也是它存在的
 	//    全部理由:那个回 true(该去查),这个回 false(别把它扫进一次性清理)。
 	setMotion(nil)
-	if motionCoverAlbumHasKnownVideo(viaURL, "查无此歌", "查无此辑") {
+	if motionCoverAlbumHasKnownVideo(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error("专辑还没查过时该回 false —— 否则全量扫描会连带抓几千张专辑页")
 	}
-	if !motionCoverWorthBackfill(viaURL, "查无此歌", "查无此辑") {
+	if !motionCoverWorthBackfill(viaURL, "", "查无此歌", "查无此辑") {
 		t.Error("同一状态下 motionCoverWorthBackfill 该回 true(两者的分歧点)")
 	}
 
 	// ④ 两条来路都没有 → 否。
 	setMotion(&motionCover{Master: "https://mvod/x.m3u8", Checked: true})
-	if motionCoverAlbumHasKnownVideo(enrichEntry{}, "查无此歌", "查无此辑") {
+	if motionCoverAlbumHasKnownVideo(enrichEntry{}, "", "查无此歌", "查无此辑") {
 		t.Error("既无锚点也无 apple_music_url 时该回 false")
 	}
 }

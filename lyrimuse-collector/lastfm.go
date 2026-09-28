@@ -56,6 +56,31 @@ type lastfmScrobbler struct {
 	// features().LastfmScrobbleArtistMode == scrobbleArtistSmart 时被 resolveScrobbleTags
 	// 调用;nil(没配只读 api_key)时该档整体退化成原样提交。
 	catalog *lastfmCatalogMatcher
+	// lastSentNP:最近一次 track.updateNowPlaying 实际发出去的歌手 / 曲名(编目匹配、合唱截断之后的那份)。
+	// bridge 判「Last.fm 上的正在播放是不是我们自己的回声」要拿它比:改写过的写法(`鶴` 发成 `The Crane`)
+	// 跟本地标签比永远对不上,自己的回声会被当成 iPhone 在播。
+	lastSentNP atomic.Pointer[sentNowPlaying]
+}
+
+type sentNowPlaying struct {
+	artist, track string
+	at            time.Time
+}
+
+// lastfmSentNPEchoWindow:发出去的正在播放多久之内还当回声认。Last.fm 按 duration 参数挂着,不给时按它自己的
+// 默认;超过这么久还挂着的「正在播放」不会是我们那一条,同一首歌在 iPhone 上真的在放,不能被它挡掉。
+const lastfmSentNPEchoWindow = 15 * time.Minute
+
+// sentNowPlayingAt:now 时刻仍在回声窗口内的、最近一次发出去的正在播放(歌手, 曲名);没有返回空串。nil 接收者安全。
+func (s *lastfmScrobbler) sentNowPlayingAt(now time.Time) (string, string) {
+	if s == nil {
+		return "", ""
+	}
+	v := s.lastSentNP.Load()
+	if v == nil || now.Sub(v.at) > lastfmSentNPEchoWindow {
+		return "", ""
+	}
+	return v.artist, v.track
 }
 
 // newLastfmScrobbler 三者任一为空则不启用(返回 nil,调用方需判空跳过)。
@@ -123,6 +148,11 @@ func (s *lastfmScrobbler) call(ctx context.Context, method string, params map[st
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", clientName)
+	// ctx 在发之前就结束了(进程退出取消了重发循环、编目匹配把时限用光):请求不会离开本机。报成「确定没发」,
+	// 否则 http 那层回的 context canceled 不是 dial 错误,调用方会按「不确定」把这一条永久隔离。
+	if err := ctx.Err(); err != nil {
+		return errors.Join(errLastfmNotSent, err)
+	}
 	resp, err := doHTTPTracked(s.hc, req)
 	if err != nil {
 		return err
@@ -167,7 +197,23 @@ func (s *lastfmScrobbler) call(ctx context.Context, method string, params map[st
 			return &lastfmIgnoredError{Method: method, Reason: ignoredReason(out.Scrobbles.Scrobble)}
 		}
 	}
+	// track.scrobble 的 200 没带回执(代理 / 网关回了个别的页面、body 被截断解不开):这条到底收没收下不知道。
+	// 当成功会把没落库的收听永久记成已发;当成确定没落库又会重发出重复 —— 报一个「请求到了、结果不明」的错,
+	// 调用方按可能已落库那一档处理(留痕、隔离、不自动重发),口径同回执丢失。
+	if method == "track.scrobble" && out.Scrobbles == nil {
+		return &lastfmUnconfirmedError{Method: method}
+	}
 	return nil
+}
+
+// lastfmUnconfirmedError:请求送到了、HTTP 200,但应答里没有回执。不是 *net.OpError,provablyNeverSent 判 false,
+// 各处按「可能已落库」处理。
+type lastfmUnconfirmedError struct {
+	Method string
+}
+
+func (e *lastfmUnconfirmedError) Error() string {
+	return fmt.Sprintf("lastfm %s: 200 without a scrobble receipt", e.Method)
 }
 
 // lastfmIgnoredError:请求到了服务端、服务端**看过并拒收**(HTTP 200 + accepted=0)。
@@ -207,6 +253,9 @@ func ignoredReason(raw json.RawMessage) string {
 	return strings.Join(reasons, "; ")
 }
 
+// errLastfmNotSent:本地就决定不发了(退出兜底的时限在发之前已经用完),请求一个字节都没出去。
+var errLastfmNotSent = errors.New("lastfm write not sent")
+
 // provablyNeverSent 判断这次失败是不是**可以证明请求从没离开本机**。
 //
 // 只有 DNS 解析失败和 dial 阶段失败算数:这两种情况下 TCP 连接根本没建立起来,服务端
@@ -217,6 +266,9 @@ func ignoredReason(raw json.RawMessage) string {
 // 必须用类型断言,不能用 strings.Contains 匹配错误文案:networkobs.go 会重写
 // 出网错误的文案,按字符串判会在它改写之后静默失效。
 func provablyNeverSent(err error) bool {
+	if errors.Is(err, errLastfmNotSent) {
+		return true
+	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return true
@@ -250,7 +302,8 @@ func (e *lastfmAPIError) fatal() bool {
 
 // mayHaveStored:这个错误码下,Last.fm **有可能已经落库、只是回执没回来**。
 //
-// 只有 11(Service Offline)/16(temporarily unavailable) 属于这一档 —— 沿用 runBackfill
+// 只有 8(Operation failed,官方说明是「后端服务出错」)/ 11(Service Offline)/ 16(temporarily unavailable)
+// 属于这一档 —— 8 跟 11 / 16 一样是服务端内部出了事,写到一半失败还是没开始写,回执里分不出来。沿用 runBackfill
 // 头注释里已经定过的口径("Last.fm 可能已经落库而回执丢了,重发是最大的自造重复源"),
 // 不在这里另立一套。其余的服务端明确表过态、**确定没落库**:凭据类(4/9/10/26)、
 // 限流(29)、参数错误等,补提交安全。
@@ -261,7 +314,7 @@ func (e *lastfmAPIError) fatal() bool {
 // mayHaveStored=true 靠。
 func (e *lastfmAPIError) mayHaveStored() bool {
 	switch e.Code {
-	case 11, 16:
+	case 8, 11, 16:
 		return true
 	}
 	return false
@@ -313,8 +366,9 @@ func durationParam(p map[string]string, key string, durationSecs float64) {
 //
 // 匹配到的写法已经是 Last.fm 编目认的那一条,再截一刀就把它变成一个不存在的条目 ——
 // `Hall & Oates / Maneater`(80 万听众的正规合体条目)会被截成 `Hall`,比不改还糟。
-// 所以顺序是:先匹配;匹配上了就用它、不再截断;没匹配上(keep / defer / 查询失败 / 压根
-// 没开匹配)才轮到截断。「只开截断、不开匹配」因此跟旧的 `first` 档逐字等价。
+// 所以顺序是:先匹配;匹配上了就用它、不再截断;判成 keep(原样**就是**编目里那条,见 verdictKeep)同样不截,
+// 道理一样 —— `Hall & Oates` 自己有 mbid 时判 keep,截成 `Hall` 就错了。只有 defer / 查询失败 / 压根没开匹配
+// 才轮到截断。「只开截断、不开匹配」因此跟旧的 `first` 档逐字等价。
 //
 // ## 为什么默认是「原始」
 //
@@ -333,8 +387,8 @@ func resolveScrobbleTags(ctx context.Context, c *lastfmCatalogMatcher, artist, t
 	if catalogDurationUnknown(ctx) {
 		matchDuration = 0
 	}
-	artist, track, matched := c.resolve(ctx, artist, track, matchDuration, scope)
-	if matched || !features().LastfmMatchFirstArtistOnly {
+	artist, track, settled := c.resolve(ctx, artist, track, matchDuration, scope)
+	if settled || !features().LastfmMatchFirstArtistOnly {
 		return artist, track
 	}
 	if first := firstCreditedArtist(artist); first != "" {
@@ -376,6 +430,8 @@ func (s *lastfmScrobbler) updateNowPlaying(ctx context.Context, artist, track, a
 	// duration 让 Last.fm 知道这条"正在播放"该挂多久 —— 不给的话它只能自己猜一个默认
 	// 时长,长曲子会提前掉、短曲子会挂太久。官方文档列了这个参数、标注选填。
 	durationParam(p, "duration", durationSecs)
+	// 发之前记:请求发出去、回执没回来时 Last.fm 那边也可能已经挂上了。
+	s.lastSentNP.Store(&sentNowPlaying{artist: artist, track: track, at: time.Now()})
 	return s.call(ctx, "track.updateNowPlaying", p)
 }
 
@@ -564,21 +620,40 @@ func lastfmRecent(ctx context.Context, user, apiKey string) (page lastfmRecentPa
 		return lastfmRecentPage{}, false
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("lastfmRecent: status %d", resp.StatusCode)
-		return lastfmRecentPage{}, false
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		log.Printf("lastfmRecent: read response: %v", err)
 		return lastfmRecentPage{}, false
 	}
+	// 错误体先认(Last.fm 常以 200 + {"error":N} 回错,非 200 时 body 里也是它),再看状态码。
 	page, err = parseLastfmRecent(body)
+	var apiErr *lastfmAPIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Code == 29 {
+			lastfmRecentRateLimitedUntil.Store(time.Now().Add(lastfmRecentRateLimitBackoff).UnixNano())
+		}
+		log.Printf("lastfmRecent: %v", err)
+		return lastfmRecentPage{}, false
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("lastfmRecent: status %d", resp.StatusCode)
+		return lastfmRecentPage{}, false
+	}
 	if err != nil {
 		log.Printf("lastfmRecent: decode response: %v", err)
 		return lastfmRecentPage{}, false
 	}
 	return page, true
+}
+
+// lastfmRecentRateLimitedUntil:user.getrecenttracks 回了 29(限流)之后,这个时刻(UnixNano)之前 bridge 不再拉。
+// Last.fm 的服务条款把持续撞限流列为可能停用 API key 的理由,撞上了就该停手,不是 15 秒后照拉。
+var lastfmRecentRateLimitedUntil atomic.Int64
+
+const lastfmRecentRateLimitBackoff = 2 * time.Minute
+
+func lastfmRecentRateLimited(now time.Time) bool {
+	return now.UnixNano() < lastfmRecentRateLimitedUntil.Load()
 }
 
 // parseLastfmRecent 把 `user.getrecenttracks` 的响应体解成 lastfmRecentPage。拆出来是为了
@@ -612,6 +687,15 @@ func parseLastfmRecent(body []byte) (lastfmRecentPage, error) {
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		return lastfmRecentPage{}, err
+	}
+	// 200 + {"error":N}(限流、用户不存在、key 失效)解出来是一页空结果:当成功的话 App 读的 feed 会被写成空列表,
+	// bridge 也会以为 iPhone 停了。
+	var errBody struct {
+		Error   int    `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &errBody) == nil && errBody.Error != 0 {
+		return lastfmRecentPage{}, &lastfmAPIError{Code: errBody.Error, Message: errBody.Message, Method: "user.getrecenttracks"}
 	}
 	var page lastfmRecentPage
 	page.Total, _ = strconv.Atoi(out.RecentTracks.Attr.Total)

@@ -113,7 +113,12 @@ func runArtistAvatarsCLI(args []string) {
 	wg.Wait()
 
 	if len(updated) > 0 {
+		// 「重读 → 合并 → 写回」整段拿跨进程文件锁:App 连切榜单时会同时起几个 artist-avatars,各自重读完再各自写回的话,
+		// 后写的那个会盖掉前一个刚写进去的条目。
+		unlock := exclusiveFileLock(cachePath)
+		defer unlock()
 		merged := mergeAvatarCache(cachePath, updated)
+		pruneAvatarCache(merged, now)
 		if data, err := json.MarshalIndent(merged, "", "  "); err == nil {
 			if err := writeFileAtomic(cachePath, data); err != nil {
 				slog.Error("artist-avatars: write cache failed", "err", err)
@@ -124,6 +129,20 @@ func runArtistAvatarsCLI(args []string) {
 	enc := json.NewEncoder(os.Stdout)
 	if err := enc.Encode(out); err != nil {
 		log.Fatalf("artist-avatars: encode: %v", err)
+	}
+}
+
+// pruneAvatarCache 丢掉早就过期的条目(比 TTL 再多放一倍的宽限:过期的真图还会被 serve-stale 用上),不然这份文件
+// 跟着榜单上出现过的歌手只涨不落。
+func pruneAvatarCache(m map[string]avatarCacheEntry, now time.Time) {
+	for name, e := range m {
+		ttl := avatarCacheTTL
+		if e.Transient {
+			ttl = avatarTransientTTL
+		}
+		if now.Sub(time.Unix(e.TS, 0)) > 2*ttl {
+			delete(m, name)
+		}
 	}
 }
 

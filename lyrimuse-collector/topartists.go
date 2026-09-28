@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // topArtistsCheckInterval：网页这块内容不需要实时,一天检查一次即可,省掉绝大多数
@@ -129,7 +130,24 @@ func artistMergeNameKey(name string) string {
 	if alias := resolveGenericArtistCanonicalName(context.Background(), first); alias != "" {
 		first = alias
 	}
-	return strings.ToLower(toSimplified(first))
+	return artistMergeFold(first)
+}
+
+// artistMergeFold 是名字键的最后一步:繁简、大小写,再加全角转半角、去空白、折变音 —— 跟 App 侧听歌次数归并
+// (PlayCountFold / LocalArtistAliases.artistKey)同一口径,不然「Dean Ting / DeanTing」「Beyoncé / Beyonce」
+// 在听歌次数里是一个人、在歌手榜里是两个。
+func artistMergeFold(name string) string {
+	var b strings.Builder
+	for _, r := range foldDiacritics(toSimplified(name)) {
+		switch {
+		case r == '\u3000' || unicode.IsSpace(r):
+			continue
+		case r >= '\uFF01' && r <= '\uFF5E':
+			r -= 0xFEE0
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // artistMergeNameKeyCached / artistMergeDisplayNameCached 是 artistMergeNameKey /
@@ -140,7 +158,7 @@ func artistMergeNameKeyCached(name string) string {
 	if alias := cachedGenericArtistCanonicalName(first); alias != "" {
 		first = alias
 	}
-	return strings.ToLower(toSimplified(first))
+	return artistMergeFold(first)
 }
 
 func artistMergeDisplayNameCached(name string) string {
@@ -297,19 +315,17 @@ func artistMergeGroups(entries []lastfmChartEntry, resolve artistIdentityFn, nam
 			groups[k] = append(groups[k], i)
 		}
 	}
-	for i, e := range entries {
+	for i := range entries {
 		if nameKeys[i] != "" {
 			addKey("n:"+nameKeys[i], i)
 		}
-		mbid := e.Mbid
-		if mbid == "" {
-			mbid = ids[i].Mbid
-		}
-		if mbid != "" {
+		// 用身份里的 mbid,不直接用 e.Mbid:合唱串的 mbid 属于整条 credit(常常是第二位歌手的),
+		// 拿它并桶会把 A、B 两位歌手连成一行。ids[i] 只在单人条目时带着 Last.fm 的 mbid(见上面 resolve 那行)。
+		if mbid := ids[i].Mbid; mbid != "" {
 			addKey("m:"+mbid, i)
 		}
 		if ids[i].Zh != "" {
-			addKey("n:"+strings.ToLower(toSimplified(ids[i].Zh)), i)
+			addKey("n:"+artistMergeFold(ids[i].Zh), i)
 		}
 	}
 	for _, idxs := range groups {
@@ -453,7 +469,7 @@ var (
 func deezerArtistAvatar(ctx context.Context, name string) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	u := deezerArtistSearchURL + "?limit=1&q=" + neturl.QueryEscape(name)
+	u := deezerArtistSearchURL + "?limit=5&q=" + neturl.QueryEscape(name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", false
@@ -468,16 +484,37 @@ func deezerArtistAvatar(ctx context.Context, name string) (string, bool) {
 	}
 	var out struct {
 		Data []struct {
+			Name          string `json:"name"`
 			PictureMedium string `json:"picture_medium"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", false
 	}
-	if len(out.Data) == 0 {
-		return "", true // 服务端明确说查无此人
+	// 同 qqSingerAvatar:只认名字对得上的,第一条不一定是这个人。
+	for _, a := range out.Data {
+		if avatarNameMatches(name, a.Name) {
+			return a.PictureMedium, true
+		}
 	}
-	return out.Data[0].PictureMedium, true
+	return "", true // 服务端明确说查无此人,或者搜出来的都不是这个人
+}
+
+// avatarNameMatches:搜出来的歌手名跟要找的是不是同一个写法(按 normLoose 比:繁简、大小写、标点、变音都折掉)。
+// 允许一边包含另一边,容下「周杰伦 Jay Chou」这类中英并列的登记名;太短的名字(两个字符以内)只认相等,
+// 免得「A」包含进什么都算。
+func avatarNameMatches(want, got string) bool {
+	w, g := normLoose(want), normLoose(got)
+	if w == "" || g == "" {
+		return false
+	}
+	if w == g {
+		return true
+	}
+	if len([]rune(w)) <= 2 || len([]rune(g)) <= 2 {
+		return false
+	}
+	return strings.Contains(g, w) || strings.Contains(w, g)
 }
 
 // topArtistsDigest 检查(至多每 topArtistsCheckInterval 一次)要不要重新计算"历史播放
@@ -486,14 +523,15 @@ func deezerArtistAvatar(ctx context.Context, name string) (string, bool) {
 // 同一套 Last.fm 凭证,没配置就整体跳过;还要求 StateRelayURL 已配置(数据要推给网页读
 // 的中继,没配这个推了也没地方读)。
 func (p *poller) topArtistsDigest(now time.Time, env digestEnv) {
-	if env.cfg.LastfmUser == "" || env.cfg.lastfmBridgeAPIKey() == "" || env.cfg.StateRelayURL == "" {
+	if env.cfg.LastfmUser == "" || env.cfg.lastfmBridgeAPIKey() == "" {
 		return
 	}
 	if !p.topArtistsLastCheckedAt.IsZero() && now.Sub(p.topArtistsLastCheckedAt) < topArtistsCheckInterval {
 		return
 	}
 	p.topArtistsLastCheckedAt = now
-	if last := p.topArtistsState.load(); last > 0 && now.Sub(time.Unix(last, 0)) < topArtistsCheckInterval {
+	relay := env.cfg.StateRelayURL != ""
+	if last := p.topArtistsState.load(); relay && last > 0 && now.Sub(time.Unix(last, 0)) < topArtistsCheckInterval {
 		return // 磁盘上记录的上次成功推送还没满一天(比如刚重启,内存态丢了但磁盘状态还在)
 	}
 
@@ -503,7 +541,13 @@ func (p *poller) topArtistsDigest(now time.Time, env digestEnv) {
 	}
 	// 缓存预热单开 goroutine:MusicBrainz 全局 1.1s 限速、整池预热要 ~1 分钟,不能在这里等。
 	// 归并本体只读缓存,今天没预热到的名字明天这一轮自然吃到——榜单一天才推一次,晚一天收敛无感。
+	//
+	// 预热不看有没有配网页中继:身份缓存是唯一的联网填充入口,歌手榜的 mbid 合并、歌手地区卡、平台页、App 歌手页的
+	// 中文名和 mbid 都靠它。网页推送默认不开,把预热挂在推送后面,这些就一直读不到数据、静默退化。
 	go warmTopArtistIdentities(entries, topArtistsFetchPool)
+	if !relay {
+		return // 数据要推给网页读的中继;没配这个推了也没地方读
+	}
 	merged := mergeAliasedArtists(entries)
 	if len(merged) > topArtistsN {
 		merged = merged[:topArtistsN]

@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -80,9 +81,34 @@ const (
 var (
 	artworkRelayURL   string
 	artworkRelayToken string
-	// stateRelayMu 护着 artworkRelayURL / artworkRelayToken / webRelayURL 三个变量。只在读写这三个
+	// artworkRelayGen:中继地址的代次,地址每换一次加一。在飞的上传带着排队那一刻的代次,完成时代次变了
+	// 就作废结果 —— 不然发往旧中继的那次成功会被记成「新中继上已经有这张图」,网页拿着新中继的地址去取、404。
+	artworkRelayGen uint64
+	// stateRelayMu 护着 artworkRelayURL / artworkRelayToken / webRelayURL / artworkRelayGen。只在读写这几个
 	// 变量的那一瞬间持有,持有期间不拿别的锁。
 	stateRelayMu sync.RWMutex
+)
+
+// artworkRelayTargetGen 同 artworkRelayTarget,另带这份地址的代次。
+func artworkRelayTargetGen() (url, token string, gen uint64) {
+	stateRelayMu.RLock()
+	defer stateRelayMu.RUnlock()
+	return artworkRelayURL, artworkRelayToken, artworkRelayGen
+}
+
+func artworkRelayGenNow() uint64 {
+	stateRelayMu.RLock()
+	defer stateRelayMu.RUnlock()
+	return artworkRelayGen
+}
+
+// artworkUploads:scheduleArtworkUpload 起的上传 goroutine。从起之前到「确认记录也写完」才算结束,
+// 测试据此等它们收尾(原来那个「在途集合空了」的信号在 goroutine 读完全局量之前就亮了)。
+var artworkUploads sync.WaitGroup
+
+// artworkUploadCtx:上传 goroutine 的 ctx,换中继时取消,在飞的那几个不再往旧中继发。受 artworkMu 保护。
+var (
+	artworkUploadCtx, artworkUploadCancel = context.WithCancel(context.Background())
 )
 
 // artworkRelayTarget 取这一刻的中继地址与令牌(同一次读出,不会一个新一个旧)。
@@ -101,6 +127,9 @@ func artworkRelayConfigured() bool {
 func setStateRelay(url, token string) {
 	stateRelayMu.Lock()
 	defer stateRelayMu.Unlock()
+	if strings.TrimRight(artworkRelayURL, "/") != strings.TrimRight(url, "/") {
+		artworkRelayGen++
+	}
 	artworkRelayURL, artworkRelayToken, webRelayURL = url, token, url
 }
 
@@ -208,30 +237,49 @@ func scheduleArtworkUpload(sha, path string) {
 		return
 	}
 	artworkInflight[sha] = true
+	ctx := artworkUploadCtx
 	artworkMu.Unlock()
+	// 地址、令牌、代次在排队这一刻一次取定,整个上传都对着这一份。
+	base, token, gen := artworkRelayTargetGen()
 
+	artworkUploads.Add(1)
 	go func() {
-		err := ensureArtworkUploaded(context.Background(), sha, path)
+		defer artworkUploads.Done()
+		err := ensureArtworkUploadedTo(ctx, base, token, sha, path)
 		artworkMu.Lock()
 		delete(artworkInflight, sha)
-		if err == nil {
+		current := artworkRelayGenNow() == gen
+		switch {
+		case !current:
+			// 传的是旧中继:结果不属于现在这个中继,什么都不记(新中继那边由它自己的补传 / 懒加载去传)。
+		case err == nil:
 			artworkUploaded[sha] = true
-		} else {
-			artworkNextRetry[sha] = time.Now().Add(artworkUploadRetryAfter)
+		default:
+			wait := artworkUploadRetryAfter
+			if errors.Is(err, errArtworkTooLarge) {
+				wait = artworkTooLargeRetryAfter
+			}
+			artworkNextRetry[sha] = time.Now().Add(wait)
 		}
 		artworkMu.Unlock()
 		// 必须在 artworkMu 之外调:markArtworkConfirmed 要拿 artworkConfirmMu,而
 		// loadArtworkConfirmed 是先 artworkConfirmMu 再 artworkMu —— 两处反着拿就是死锁。
 		// 现在靠"load 在 run() 之前跑完、那时还没有上传 goroutine"侥幸不撞上,但那是调用
 		// 顺序撑着的,不是锁本身保证的。统一成"这两把锁不嵌套"。
-		if err == nil {
-			markArtworkConfirmed(sha)
+		if err == nil && current {
+			markArtworkConfirmedGen(sha, gen)
 		}
-		if err != nil {
-			slog.Warn("artwork relay: upload failed, not retrying", "sha", sha, "retry_after", artworkUploadRetryAfter, "err", err)
+		if err != nil && current {
+			slog.Warn("artwork relay: upload failed, will retry later", "sha", sha, "err", err)
 		}
 	}()
 }
+
+// errArtworkTooLarge:图超过中继的上限。换一次不会变小,不值得每 5 分钟重试一次。
+var errArtworkTooLarge = errors.New("artwork too large for the relay")
+
+// artworkTooLargeRetryAfter:超限的图多久再看一次(文件被换成小图的话会自然恢复)。
+const artworkTooLargeRetryAfter = 24 * time.Hour
 
 // ensureArtworkUploaded 确保这张图在中继上存在。先 HEAD 后 POST。
 //
@@ -240,6 +288,11 @@ func scheduleArtworkUpload(sha, path string) {
 // 1000 写/天,读却有 100k/天。
 func ensureArtworkUploaded(ctx context.Context, sha, path string) error {
 	base, token := artworkRelayTarget()
+	return ensureArtworkUploadedTo(ctx, base, token, sha, path)
+}
+
+// ensureArtworkUploadedTo 同 ensureArtworkUploaded,对着调用方给的那一份中继地址与令牌。
+func ensureArtworkUploadedTo(ctx context.Context, base, token, sha, path string) error {
 	if base == "" {
 		return fmt.Errorf("artwork relay: 未配置中继地址")
 	}
@@ -262,8 +315,11 @@ func ensureArtworkUploaded(ctx context.Context, sha, path string) error {
 	if err != nil {
 		return err
 	}
-	if len(data) == 0 || len(data) > artworkMaxUploadBytes {
-		return fmt.Errorf("artwork %s: %d 字节,不在允许范围内", sha, len(data))
+	if len(data) == 0 {
+		return fmt.Errorf("artwork %s: 空文件", sha)
+	}
+	if len(data) > artworkMaxUploadBytes {
+		return fmt.Errorf("artwork %s: %d 字节,超过中继上限: %w", sha, len(data), errArtworkTooLarge)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
@@ -281,6 +337,19 @@ func ensureArtworkUploaded(ctx context.Context, sha, path string) error {
 		return fmt.Errorf("artwork upload %s: status %d", sha, resp.StatusCode)
 	}
 	return nil
+}
+
+// referencedDeviceArtwork:歌词缓存里此刻还有条目拿它当封面的设备封面 sha。
+func referencedDeviceArtwork() map[string]bool {
+	enrichMu.Lock()
+	defer enrichMu.Unlock()
+	out := map[string]bool{}
+	for _, e := range enrichCache {
+		if sha, _, ok := deviceArtworkRef(e.CoverURL); ok {
+			out[sha] = true
+		}
+	}
+	return out
 }
 
 // sweepDeviceArtwork 启动时把 artwork/ 目录里已有的图补传一遍。
@@ -303,6 +372,9 @@ func sweepDeviceArtwork(ctx context.Context) {
 	if err != nil {
 		return // 目录不存在 = 还没有任何设备封面,不是错误
 	}
+	// 只补传缓存里还有条目在用的那些:目录里还躺着已经不被引用的图(被高清版换掉的旧设备图、清掉引用的播放器
+	// 占位图),把它们也传上去只是白烧中继每天 1000 次的写额度。
+	referenced := referencedDeviceArtwork()
 	uploaded, failed, skipped := 0, 0, 0
 	for _, ent := range entries {
 		if ctx.Err() != nil {
@@ -313,7 +385,7 @@ func sweepDeviceArtwork(ctx context.Context) {
 		}
 		path := filepath.Join(deviceArtworkDir, ent.Name())
 		sha, _, ok := deviceArtworkRef(deviceArtworkURLPrefix + path)
-		if !ok {
+		if !ok || !referenced[sha] {
 			skipped++
 			continue
 		}
@@ -323,14 +395,21 @@ func sweepDeviceArtwork(ctx context.Context) {
 		if done {
 			continue
 		}
-		if err := ensureArtworkUploaded(ctx, sha, path); err != nil {
+		base, token, gen := artworkRelayTargetGen()
+		if err := ensureArtworkUploadedTo(ctx, base, token, sha, path); err != nil {
 			failed++
 			slog.Warn("artwork relay: backfill upload failed", "sha", sha, "err", err)
 		} else {
 			artworkMu.Lock()
-			artworkUploaded[sha] = true
+			current := artworkRelayGenNow() == gen
+			if current {
+				artworkUploaded[sha] = true
+			}
 			artworkMu.Unlock()
-			markArtworkConfirmed(sha)
+			if !current {
+				return // 中继换了:这一轮作废,switchStateRelay 会对新中继重起一轮
+			}
+			markArtworkConfirmedGen(sha, gen)
 			uploaded++
 		}
 		select {

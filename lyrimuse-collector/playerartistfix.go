@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -80,36 +82,101 @@ const playerArtistFixRetryAfter = time.Minute
 func setPlayerArtistFixPath(path string) {
 	// 恢复判定必须在放开 playerArtistFixMu 之后做:kugouFixedArtist 持着 kugouLyricArtistMu
 	// 调 publishPlayerArtistFix,锁序是 kugou → fix,反过来会死锁。
-	switch prev := setPlayerArtistFixPathLocked(path); prev.Bundle {
-	case "":
-	case kugouMusicBundleID:
-		restoreKugouArtistPoisonConfirmed()
-	default:
-		// 锁序同上:trustedFixedTrack 持着 trustedLyricArtistMu 调 publishPlayerTrackFix。
-		restoreTrustedLyricArtistConfirmed(prev.Bundle, prev.StableField, prev.Order)
+	prev, verdicts := setPlayerArtistFixPathLocked(path)
+	if prev.Bundle != "" {
+		verdicts[prev.Bundle] = playerVerdict{StableField: prev.StableField, Order: prev.Order}
+	}
+	bundles := make([]string, 0, len(verdicts))
+	for b := range verdicts {
+		bundles = append(bundles, b)
+	}
+	sort.Strings(bundles)
+	for _, b := range bundles {
+		v := verdicts[b]
+		switch b {
+		case kugouMusicBundleID:
+			restoreKugouArtistPoisonConfirmed()
+		default:
+			// 锁序同上:trustedFixedTrack 持着 trustedLyricArtistMu 调 publishPlayerTrackFix。
+			restoreTrustedLyricArtistConfirmed(b, v.StableField, v.Order)
+		}
 	}
 }
 
-// setPlayerArtistFixPathLocked 返回保留下来的播放器级结论(只含播放器级字段),没有就是零值。
-func setPlayerArtistFixPathLocked(path string) playerArtistFixState {
+// playerVerdict:一个播放器「署名不可信」这条播放器级结论里跨重启要留的那几项。
+type playerVerdict struct {
+	StableField string `json:"stableField,omitempty"`
+	Order       string `json:"order,omitempty"`
+}
+
+// 播放器级结论按 bundle 另存一份(collector 自己的文件,App 不读):给 App 的那份状态只有一个槽位,酷狗和另一个
+// 信任播放器交替用时后发布的会盖掉前一个的 Unreliable,重启只能恢复最后那个播放器的判定,另一个又得重新观察好几首才认出来。
+var (
+	playerVerdictsPath string
+	playerVerdicts     = map[string]playerVerdict{}
+)
+
+func loadPlayerVerdictsLocked() map[string]playerVerdict {
+	out := map[string]playerVerdict{}
+	if playerVerdictsPath == "" {
+		return out
+	}
+	raw, err := os.ReadFile(playerVerdictsPath)
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+// rememberPlayerVerdictLocked 记下一条播放器级结论,变了才写盘。调用方必须持有 playerArtistFixMu。
+func rememberPlayerVerdictLocked(bundle string, v playerVerdict) {
+	if playerVerdictsPath == "" || bundle == "" {
+		return
+	}
+	if cur, ok := playerVerdicts[bundle]; ok && cur == v {
+		return
+	}
+	playerVerdicts[bundle] = v
+	data, err := json.Marshal(playerVerdicts)
+	if err != nil {
+		return
+	}
+	if err := writeFileAtomic(playerVerdictsPath, data); err != nil {
+		slog.Warn("player artist fix: verdicts write failed", "err", err)
+	}
+}
+
+// setPlayerArtistFixPathLocked 返回保留下来的播放器级结论(只含播放器级字段,没有就是零值),以及按 bundle 另存的
+// 那一份里的全部结论(见 playerVerdicts)。
+func setPlayerArtistFixPathLocked(path string) (playerArtistFixState, map[string]playerVerdict) {
 	playerArtistFixMu.Lock()
 	defer playerArtistFixMu.Unlock()
 	playerArtistFixPath = path
 	playerArtistFixLast = playerArtistFixState{}
 	playerArtistFixFailed, playerArtistFixFailedAt = playerArtistFixState{}, time.Time{}
+	playerVerdictsPath = ""
+	if path != "" {
+		playerVerdictsPath = filepath.Join(filepath.Dir(path), clientName+"-player-verdicts.json")
+	}
+	playerVerdicts = loadPlayerVerdictsLocked()
+	verdicts := make(map[string]playerVerdict, len(playerVerdicts))
+	for b, v := range playerVerdicts {
+		verdicts[b] = v
+	}
 	if path == "" {
-		return playerArtistFixState{}
+		return playerArtistFixState{}, verdicts
 	}
 	// 上一个进程记的**曲目**作不得数:那时在放哪一首无从得知,而 App 按 bundle + 曲名比对,
 	// 陈旧记录正好能撞上同一首歌。但"哪个播放器不可信"要留下 —— 理由见 Unreliable 字段。
 	prev := readPlayerArtistFixLocked(path)
 	if !prev.Unreliable || prev.Bundle == "" {
 		_ = os.Remove(path)
-		return playerArtistFixState{}
+		return playerArtistFixState{}, verdicts
 	}
 	kept := playerArtistFixState{Bundle: prev.Bundle, Unreliable: true, StableField: prev.StableField, Order: prev.Order}
 	writePlayerArtistFixLocked(kept)
-	return kept
+	return kept, verdicts
 }
 
 // readPlayerArtistFixLocked 读上一个进程留下的那份。读不到 / 解析不了都返回零值,
@@ -141,6 +208,9 @@ func writePlayerArtistFixLocked(next playerArtistFixState) bool {
 	}
 	playerArtistFixLast = next
 	playerArtistFixFailedAt = time.Time{}
+	if next.Unreliable {
+		rememberPlayerVerdictLocked(next.Bundle, playerVerdict{StableField: next.StableField, Order: next.Order})
+	}
 	return true
 }
 

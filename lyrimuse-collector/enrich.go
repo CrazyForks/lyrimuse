@@ -684,7 +684,7 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 			go applyDeviceCoverUpgrade(context.Background(), key, artist, title, album, bundleID)
 		} else if (needsPeripheralBackfill(e, artist, album) ||
 			(coverNeedsHintCheck(e, album, coverAlbum) && peripheralBackfillWindowOpen(e)) ||
-			(motionCoverWorthBackfill(e, title, album) && peripheralBackfillWindowOpen(e))) && !enrichInflight[key] {
+			(motionCoverWorthBackfill(e, artist, title, album) && peripheralBackfillWindowOpen(e))) && !enrichInflight[key] {
 			// 第二个条件:播放器没报专辑、回填出的专辑名跟现有封面完全不沾边 —— 首次解析时没有
 			// 专辑名可用、Apple 第一条合集就此冻结,这条给它一次按回填专辑重选的机会(见
 			// coverNeedsHintCheck)。
@@ -890,6 +890,12 @@ func coverNeedsAlbumCheck(e enrichEntry, album string) bool {
 // 对版、国内加载得出来的网易云封面换成 mzstatic 的(国内无 CDN)。而 coverNeedsAlbumCheck
 // 会让存量的网易云封面条目每条都补查一次,撞上限流的概率不低。
 func coverSwapAllowed(old, fresh enrichEntry, album string) bool {
+	return coverSwapAllowedWith(old, fresh, album, deviceCoverUpgradable)
+}
+
+// coverSwapAllowedWith 同 coverSwapAllowed,设备封面那一档的判据由调用方给:deviceCoverUpgradable 要读本地图、
+// 取远程候选(最长几秒),持着 enrichMu 的调用方得在锁外先算好,锁里只认算好的结果(见 backfillPeripheralFields)。
+func coverSwapAllowedWith(old, fresh enrichEntry, album string, deviceUpgradable func(deviceURL, candidateURL string) bool) bool {
 	if fresh.CoverURL == "" {
 		return false
 	}
@@ -915,7 +921,7 @@ func coverSwapAllowed(old, fresh enrichEntry, album string) bool {
 	// 这一条也是存量低分辨率设备封面的自愈通路:各自下次被播到、走到这条外围自愈时就会被
 	// 升级,不需要用户做任何事。
 	if old.CoverSource == "device" {
-		return deviceCoverUpgradable(old.CoverURL, fresh.CoverURL)
+		return deviceUpgradable(old.CoverURL, fresh.CoverURL)
 	}
 	if old.CoverURL == "" || old.CoverSource == fresh.CoverSource {
 		return true
@@ -2356,6 +2362,7 @@ func deviceCoverUpgradePass(ctx context.Context, key, artist, title, album, bund
 // 对"查过了、这条确实没有"的记录调它 = 每轮 backfill 白发两次 HTTP,正是那一位要防的事。
 // 网络 I/O 全在锁外,跟本文件其它地方(如上面那段清晰度判据)同一纪律。
 func recheckMotionCoverAgainstCurrentCover(ctx context.Context, key, title, album string) {
+	artist, _, _ := splitEnrichKey(key)
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	enrichMu.Unlock()
@@ -2363,7 +2370,7 @@ func recheckMotionCoverAgainstCurrentCover(ctx context.Context, key, title, albu
 		return
 	}
 	e.MotionCoverChecked = false
-	e.fillMotionCover(ctx, title, album)
+	e.fillMotionCover(ctx, artist, title, album)
 	if !e.MotionCoverChecked {
 		// 这一轮没查成(在飞/请求失败)——不写半吊子结果,下次自然再来。
 		return
@@ -2423,6 +2430,15 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	// QQ 专辑 / 歌手 mid 的现查是网络请求(单曲详情:几个网页主机各 6 秒,再退客户端网关,没取到不缓存),
 	// 同样必须在拿 enrichMu 之前做完,锁里只认这里查好的结果。
 	qqMids := lookupPeripheralQQMids(ctx, key, fresh)
+	// 设备封面能不能让位给这一轮的候选,要读本地图、取远程候选比对(color.go,最长 4 秒):在拿 enrichMu 之前算好。
+	// 锁里只在封面还是算的时候那一张时才用这个结果,变了就不换(下一轮外围补全再判)。
+	enrichMu.Lock()
+	pre := enrichCache[key]
+	enrichMu.Unlock()
+	preDeviceURL, preUpgradable := "", false
+	if pre.CoverSource == "device" && fresh.CoverURL != "" {
+		preDeviceURL, preUpgradable = pre.CoverURL, deviceCoverUpgradable(pre.CoverURL, fresh.CoverURL)
+	}
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	if !ok {
@@ -2438,7 +2454,9 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	// 封面四件套一起判(主色是从这张封面算出来的,不能出现"新封面配旧主色"的错配;
 	// cover_album 记的是这张封面属于哪张专辑,换封面就得跟着换)。
 	// "这一轮拿到了新封面"之外还要过 coverSwapAllowed —— 见那个函数的注释。
-	if coverSwapAllowed(e, fresh, coverAlbum) {
+	if coverSwapAllowedWith(e, fresh, coverAlbum, func(deviceURL, candidateURL string) bool {
+		return preDeviceURL != "" && deviceURL == preDeviceURL && candidateURL == fresh.CoverURL && preUpgradable
+	}) {
 		e.CoverURL, e.CoverSource, e.CoverAlbum, e.AccentColor =
 			fresh.CoverURL, fresh.CoverSource, fresh.CoverAlbum, fresh.AccentColor
 	}
@@ -2817,7 +2835,7 @@ func finishTrackEnrichment(ctx context.Context, e enrichEntry, scored []scoredLy
 	if title != "" {
 		e.SpotifyURL = "https://open.spotify.com/search/" + neturl.QueryEscape(artist+" "+title)
 	}
-	e.fillMotionCover(ctx, title, album)
+	e.fillMotionCover(ctx, artist, title, album)
 	return e
 }
 
@@ -2831,7 +2849,7 @@ func finishTrackEnrichment(ctx context.Context, e enrichEntry, scored []scoredLy
 //   - 拿不到已校验的目录专辑 ID(不是 Apple Music 目录曲目 / 锚点还没建立)→ 不查;
 //   - 页面抓取或解析失败 → motionCoverFor 回 done=false,这一轮跳过、下一首再试;
 //   - 查到了但这张专辑没做动态封面 → Master 为空,motioncover.go 那边把"没有"记进缓存。
-func (e *enrichEntry) fillMotionCover(ctx context.Context, title, album string) {
+func (e *enrichEntry) fillMotionCover(ctx context.Context, artist, title, album string) {
 	if e.MotionCoverChecked || e.MotionCoverURL != "" {
 		return
 	}
@@ -2845,7 +2863,7 @@ func (e *enrichEntry) fillMotionCover(ctx context.Context, title, album string) 
 	// ②之所以敢用,全靠下面那两道**图像校验**(首帧比对 / 专辑身份核验,并联,见
 	// decideMotionCover):错的专辑给出的首帧和官方封面,跟这条记录的封面都不会是同一张,
 	// 会被当场拦掉。
-	albumID, viaAnchor := appleCatalogAlbumIDFor(title, album)
+	albumID, viaAnchor := appleCatalogAlbumIDFor(artist, title, album)
 	if !viaAnchor {
 		albumID = motionCoverAlbumIDFromAppleURL(e.AppleURL)
 	}

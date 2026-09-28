@@ -304,6 +304,9 @@ func warmPlatformPages(ctx context.Context, now time.Time, budget int, src platf
 			platformPagesMu.Unlock()
 			if !known || stale(alb.Checked) {
 				if mbid == "" {
+					// 歌手 mbid 还没解析出来,这张专辑根本没查过:不能算「查过、没有」,否则这首会被记成
+					// 无 Spotify 链接、整整一个检查周期不再看。不落这首的结论,下一轮 mbid 到了再查(这里不花预算)。
+					settled = false
 					continue
 				}
 				if budget <= 0 {

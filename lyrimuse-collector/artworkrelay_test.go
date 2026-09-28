@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,8 +22,8 @@ import (
 // 生产里这个变量在 main() 里设一次就再也不变,不存在这个问题,是测试特有的。
 func resetArtworkRelayState(t *testing.T) {
 	t.Helper()
+	oldURL, oldToken := artworkRelayTarget()
 	artworkMu.Lock()
-	oldURL, oldToken := artworkRelayURL, artworkRelayToken
 	oldDir := deviceArtworkDir
 	artworkUploaded = map[string]bool{}
 	artworkInflight = map[string]bool{}
@@ -39,7 +40,8 @@ func resetArtworkRelayState(t *testing.T) {
 	t.Cleanup(func() {
 		waitArtworkIdle(t)
 		artworkMu.Lock()
-		artworkRelayURL, artworkRelayToken, deviceArtworkDir = oldURL, oldToken, oldDir
+		setStateRelay(oldURL, oldToken)
+		deviceArtworkDir = oldDir
 		artworkUploaded = map[string]bool{}
 		artworkInflight = map[string]bool{}
 		artworkNextRetry = map[string]time.Time{}
@@ -52,24 +54,44 @@ func resetArtworkRelayState(t *testing.T) {
 	})
 }
 
-// waitArtworkIdle 等到没有在飞的上传。等不到就报错——那说明真漏了个 goroutine,
-// 悄悄放过去只会让下一个用例莫名其妙地红。
+// waitArtworkIdle 等到上传 goroutine 全部收尾(连确认记录也写完)。等不到就报错——那说明真漏了个 goroutine,
+// 悄悄放过去只会让下一个用例莫名其妙地红。原来看「在途集合空了」:goroutine 在那之后还要读中继地址、写确认记录,
+// 收尾函数这时改全局量就是数据竞争。
 func waitArtworkIdle(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		artworkMu.Lock()
-		n := len(artworkInflight)
-		artworkMu.Unlock()
-		if n == 0 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		artworkUploads.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("退出时仍有上传在飞,会污染下一个用例")
 	}
-	t.Error("退出时仍有上传在飞,会污染下一个用例")
 }
 
 const testSHA = "567de5eb77440ca8" // 真实存在过的一张(用户那首「死神」的封面)
+
+// referenceDeviceArtworkForTest 让歌词缓存里有条目拿这几张当封面:补传只处理还被引用的图(见 referencedDeviceArtwork)。
+func referenceDeviceArtworkForTest(t *testing.T, paths ...string) {
+	t.Helper()
+	enrichMu.Lock()
+	keys := make([]string, 0, len(paths))
+	for i, p := range paths {
+		k := "封面引用测试|" + strconv.Itoa(i) + "|"
+		enrichCache[k] = enrichEntry{CoverURL: deviceArtworkURLPrefix + p, CoverSource: "device"}
+		keys = append(keys, k)
+	}
+	enrichMu.Unlock()
+	t.Cleanup(func() {
+		enrichMu.Lock()
+		for _, k := range keys {
+			delete(enrichCache, k)
+		}
+		enrichMu.Unlock()
+	})
+}
 
 func TestDeviceArtworkRef(t *testing.T) {
 	cases := []struct {
@@ -105,7 +127,7 @@ func TestWebSafeCoverURLNeverLeaksLocalPath(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL, artworkRelayToken = srv.URL, "tok"
+	setStateRelay(srv.URL, "tok")
 
 	// 远程封面原样透传。
 	const remote = "https://p1.music.126.net/abc.jpg?param=600y600"
@@ -141,12 +163,12 @@ func TestWebSafeCoverURLNeverLeaksLocalPath(t *testing.T) {
 	}
 
 	// 没配中继(用户没搭中继、只用 LB)→ 依然不能透传本地路径。
-	artworkRelayURL = ""
+	setStateRelay("", "")
 	if got := webSafeCoverURL(local); got != "" {
 		t.Errorf("没配中继时应返回空串, got %q", got)
 	}
 	// 认不出的 file://(理论上不该出现)同样不许透传。
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 	if got := webSafeCoverURL("file:///etc/passwd"); got != "" {
 		t.Errorf("认不出的 file:// 应返回空串, got %q", got)
 	}
@@ -171,7 +193,7 @@ func TestEnsureArtworkUploadedSkipsPostWhenAlreadyThere(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	artworkRelayURL, artworkRelayToken = srv.URL, "tok"
+	setStateRelay(srv.URL, "tok")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, testSHA+".jpg")
@@ -210,7 +232,7 @@ func TestEnsureArtworkUploadedPostsWhenMissing(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL, artworkRelayToken = srv.URL, "sekrit"
+	setStateRelay(srv.URL, "sekrit")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, testSHA+".jpg")
@@ -252,7 +274,7 @@ func TestEnsureArtworkUploadedPNGContentType(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, testSHA+".png")
@@ -280,7 +302,7 @@ func TestEnsureArtworkUploadedReportsRelayFailure(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable) // KV 写额度爆了就是这个
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, testSHA+".jpg")
@@ -299,7 +321,7 @@ func TestEnsureArtworkUploadedRejectsOversize(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound) // HEAD 未命中,逼它走到大小检查
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, testSHA+".jpg")
@@ -323,21 +345,26 @@ func TestSweepDeviceArtwork(t *testing.T) {
 		w.WriteHeader(http.StatusOK) // HEAD 一律命中 → 全程零写入
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	deviceArtworkDir = dir
-	for _, name := range []string{testSHA + ".jpg", "0011223344556677.png", "README.txt", "not-a-sha.jpg"} {
+	for _, name := range []string{testSHA + ".jpg", "0011223344556677.png", "README.txt", "not-a-sha.jpg", "7766554433221100.jpg"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// 最后那张没有条目引用(被高清版换掉的旧图这类):不该补传。
+	referenceDeviceArtworkForTest(t, filepath.Join(dir, testSHA+".jpg"), filepath.Join(dir, "0011223344556677.png"))
 	sweepDeviceArtwork(context.Background())
 
 	mu.Lock()
 	defer mu.Unlock()
 	if !seen["/artwork/"+testSHA+".jpg"] || !seen["/artwork/0011223344556677.png"] {
 		t.Errorf("两张合法封面都该被确认一遍, seen = %v", seen)
+	}
+	if seen["/artwork/7766554433221100.jpg"] {
+		t.Errorf("没有条目引用的图不该补传, seen = %v", seen)
 	}
 	if seen["/artwork/README.txt"] || seen["/artwork/not-a-sha.jpg"] {
 		t.Errorf("非封面文件不该被传上去, seen = %v", seen)
@@ -363,7 +390,7 @@ func TestScheduleArtworkUploadBacksOffAfterFailure(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	deviceArtworkDir = dir

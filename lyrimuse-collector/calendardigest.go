@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -81,7 +82,10 @@ func (s calendarDigestState) save(period string) {
 	if err != nil {
 		return
 	}
-	os.WriteFile(s.path, data, 0o644)
+	// 原子写 + 记错误:写到一半(磁盘满、被杀)留下半截 JSON,读回来是零值 —— 下一轮会把上一期当成还没发、再推一次。
+	if err := writeFileAtomic(s.path, data); err != nil {
+		slog.Error("calendar digest: save state failed", "err", err)
+	}
 }
 
 // calendarDigestRun 是一种周期在 poller 里的运行状态。

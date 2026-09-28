@@ -21,6 +21,17 @@ func featuresRef() *featureFlags {
 	return featuresSnapshot.Load()
 }
 
+// setFeatureForTest 复制当前快照、改完整体换上,测试结束换回原快照。测试里起了会读 features() 的 goroutine
+// (提交、解析)时用它,不用 featuresRef:原地改字段跟那些 goroutine 的读是数据竞争。
+func setFeatureForTest(t *testing.T, mutate func(*featureFlags)) {
+	t.Helper()
+	saved := featuresSnapshot.Load()
+	t.Cleanup(func() { featuresSnapshot.Store(saved) })
+	next := features()
+	mutate(&next)
+	setFeatures(next)
+}
+
 // resetFeaturesForTest 把配置状态恢复干净 —— 路径不登记(=不热重读),快照置空。
 func resetFeaturesForTest(t *testing.T) {
 	t.Helper()

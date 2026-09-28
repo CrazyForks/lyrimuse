@@ -89,6 +89,9 @@ func runCrossAlbumReuseCLI(args []string) {
 		log.Fatalf("cross-album-reuse: collector is running (or the exclusive lock is unavailable); stop it before -apply")
 	}
 	setFeatures(loadFeatureFlags(filepath.Join(cfgDir, clientName+"-features.json")))
+	// 「已校准时间轴」的记录(菜单栏按过提前 / 推后的那几首):校准偏移按正文指纹记,换了正文偏移就当场失效。
+	// rescore、全量扫库都把它当一票否决,这条命令同样要认。
+	lyricsPinsPath = filepath.Join(cfgDir, clientName+"-lyrics-pins.json")
 	loadEnrichForMaintenance(cfgDir, *apply)
 	enrichMu.Lock()
 	snapshot := make(map[string]enrichEntry, len(enrichCache))
@@ -141,7 +144,7 @@ func runCrossAlbumReuseCLI(args []string) {
 	n, skipped := applyCrossAlbumReuse(groups)
 	saveEnrichCache()
 	exportLyricsFiles()
-	fmt.Printf("\n已复用 %d 条;跳过 %d 条(用户手改过内容或手动选过源的一律不动)。\n", n, skipped)
+	fmt.Printf("\n已复用 %d 条;跳过 %d 条(用户手改过内容、手动选过源或校准过时间轴的一律不动;组内最高分打平的整组不动)。\n", n, skipped)
 }
 
 // bestMember 组里歌词要复用给其余成员的那一条的下标:打分版本最新的那几条里评分最高的。旧版本的分数不在
@@ -157,6 +160,18 @@ func (g crossAlbumGroup) bestMember() int {
 	return best
 }
 
+// tiedBest:组内最高分打平(同一打分版本、同分)而正文不同。这种组里谁是「对的那份」没有依据,增量那一侧
+// (crossAlbumSiblingLyrics)的规则是同分不动,这里跟它一致、整组不碰。
+func (g crossAlbumGroup) tiedBest() bool {
+	best := g.members[g.bestMember()]
+	for _, m := range g.members {
+		if m.key != best.key && m.version == best.version && m.score == best.score && m.lyrics != best.lyrics {
+			return true
+		}
+	}
+	return false
+}
+
 // applyCrossAlbumReuse 把每组评分最高那条的歌词族字段复用给同组其余条目,返回改了几条、
 // 跳过几条。只动内存里的 enrichCache,落盘和导出由调用方负责。
 //
@@ -168,10 +183,16 @@ func (g crossAlbumGroup) bestMember() int {
 // 复用的是歌词族字段;封面 / 强调色 / 各家链接**不复用** —— 那些是专辑维度的,
 // 同一段录音在原版和 Deluxe 下本来就该有各自的封面。
 func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
+	// 校准过的条目先取一份(lyricsPinnedKeys 自己拿锁、读文件,不能放进 enrichMu 里)。
+	pinned := lyricsPinnedKeys()
 	enrichMu.Lock()
 	defer enrichMu.Unlock()
 	for _, g := range groups {
 		if !g.diverged() {
+			continue
+		}
+		if g.tiedBest() {
+			skipped += len(g.members) - 1
 			continue
 		}
 		best := g.bestMember()
@@ -187,7 +208,7 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 			if !ok || dst.Lyrics == src.Lyrics {
 				continue
 			}
-			if dst.ManualLyrics || dst.ManualPickSHA != "" {
+			if dst.ManualLyrics || dst.ManualPickSHA != "" || pinned[m.key] {
 				skipped++
 				continue
 			}
@@ -210,6 +231,10 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 				d.Path = lyricsDecisionPathCrossAlbumReuse
 				d.ReusedFrom = g.members[best].key
 				dst.LyricsDecisionApplied = &d
+			} else {
+				// 源那条没有决策记录:自己那份旧的已经描述不了现在的正文(胜者歌手、时长会被 albumhint 读去当旁证),
+				// 换成一份只标明复用来源的最小记录。
+				dst.LyricsDecisionApplied = &lyricsDecision{Path: lyricsDecisionPathCrossAlbumReuse, ReusedFrom: g.members[best].key}
 			}
 			enrichCache[m.key] = dst
 			// saveEnrichCache() 在 enrichDirty 为 false 时直接 return —— 漏掉这一行的表现是
@@ -224,9 +249,9 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 
 // groupCrossAlbumCandidates 把缓存按 `artist|title` 归并,再在组内按时长切出互相兼容的子组。
 //
-// 组内切分用的是「跟子组内**任一**成员时长差都在容差内」:同一段录音在不同专辑下的读数
-// 抖动是零点几秒量级,不会出现链式漂移把两个真版本连起来。真的差到 2 秒以上就会各自成组,
-// 而单成员的组没有复用对象,直接丢掉。
+// 组内切分:按时长升序,子组里**每个**成员跟子组第一个(最短的)那条差都在容差内。只跟上一个成员比是链式合并:
+// 200.0 / 201.9 / 203.8 秒三条会被连成一组,把 200 秒那份词写到差了 3.8 秒的那条上,比增量那一侧的 2 秒
+// 阈值宽得多,两边结论对不上。真的差到容差以上就各自成组,单成员的组没有复用对象,直接丢掉。
 func groupCrossAlbumCandidates(cache map[string]enrichEntry, tolerance float64) []crossAlbumGroup {
 	byTitle := map[string][]crossAlbumMember{}
 	for key, e := range cache {
@@ -282,7 +307,7 @@ func groupCrossAlbumCandidates(cache map[string]enrichEntry, tolerance float64) 
 			bucket = nil
 		}
 		for _, m := range ms {
-			if len(bucket) > 0 && math.Abs(m.duration-bucket[len(bucket)-1].duration) > tolerance {
+			if len(bucket) > 0 && math.Abs(m.duration-bucket[0].duration) > tolerance {
 				flush()
 			}
 			bucket = append(bucket, m)

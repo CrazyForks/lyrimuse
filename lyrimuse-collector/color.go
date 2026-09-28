@@ -9,6 +9,7 @@ import (
 	"image"
 	_ "image/jpeg" // 注册 JPEG 解码器
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -74,7 +75,7 @@ func loadCoverImage(ctx context.Context, coverURL string) image.Image {
 		if err != nil {
 			return nil
 		}
-		img, _, err := image.Decode(bytes.NewReader(data))
+		img, err := decodeCoverImage(data)
 		if err != nil {
 			return nil
 		}
@@ -111,11 +112,36 @@ func loadCoverImage(ctx context.Context, coverURL string) image.Image {
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
-	img, _, err := image.Decode(resp.Body) // 自动识别 JPEG/PNG
+	data, err := io.ReadAll(io.LimitReader(resp.Body, coverImageMaxBytes+1))
+	if err != nil || len(data) > coverImageMaxBytes {
+		return nil
+	}
+	img, err := decodeCoverImage(data) // 自动识别 JPEG/PNG
 	if err != nil {
 		return nil
 	}
 	return img
+}
+
+// 封面解码的上限。设备封面来自播放器 / 网页的 MediaSession,远程候选来自各家 CDN,都不是我们控制的:几十 KB 的
+// PNG 就能声明一张 8000² 的图,解码当场分配几百 MB,之后取色、感知指纹还要逐像素再扫一遍。真实封面最大 3000²
+// (Apple 原图档),4096² 留足余量。
+const (
+	coverImageMaxPixels = 4096 * 4096
+	coverImageMaxBytes  = 16 << 20
+)
+
+// decodeCoverImage 先只读图头拿尺寸,超过像素上限就不解码。
+func decodeCoverImage(data []byte) (image.Image, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > coverImageMaxPixels {
+		return nil, fmt.Errorf("cover image %dx%d exceeds the decode limit", cfg.Width, cfg.Height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	return img, err
 }
 
 // dominantColorFromImage 是取色算法本体,从 resolveDominantColor 里抽出来——设备直送

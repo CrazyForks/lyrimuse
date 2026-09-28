@@ -238,6 +238,12 @@ lookup:
 			}
 			code, used, err := src.country(ctx, mbid)
 			budget -= used
+			if err != nil && mbDefinitiveMiss(err) {
+				// MusicBrainz 上没有这个 mbid(Last.fm 给了一个不存在或已失效的):这是结论,跟「查过、没登记国家」一样记下,
+				// 按 artistRegionsRetryAfter 过一阵再查。当成没问成的话,这位歌手永远停在「还在查」,每一轮都算失败、
+				// 30 分钟就重拉一次榜单,几个这样的排在前面时还会挡住后面的歌手。
+				err, code = nil, ""
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					cancelled = true

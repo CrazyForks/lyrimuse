@@ -28,7 +28,7 @@ func writeConfirmFile(t *testing.T, path, relay string, entries map[string]int64
 // 补传扫描据此跳过它们,省下的正是那几百次 KV 读。
 func TestArtworkConfirmedRoundTrip(t *testing.T) {
 	resetArtworkRelayState(t)
-	artworkRelayURL = "https://relay.invalid"
+	setStateRelay("https://relay.invalid", "")
 	artworkConfirmPath = filepath.Join(t.TempDir(), "confirmed.json")
 
 	markArtworkConfirmed(testSHA)
@@ -54,10 +54,10 @@ func TestArtworkConfirmedRoundTrip(t *testing.T) {
 // 过期条目不算数:中继侧真被清空时,漂移窗口必须有上界(见 artworkconfirmed.go 头注)。
 func TestArtworkConfirmedExpires(t *testing.T) {
 	resetArtworkRelayState(t)
-	artworkRelayURL = "https://relay.invalid"
+	setStateRelay("https://relay.invalid", "")
 	artworkConfirmPath = filepath.Join(t.TempDir(), "confirmed.json")
 	old := time.Now().Add(-artworkConfirmTTL - time.Hour).Unix()
-	writeConfirmFile(t, artworkConfirmPath, artworkRelayURL, map[string]int64{testSHA: old})
+	writeConfirmFile(t, artworkConfirmPath, "https://relay.invalid", map[string]int64{testSHA: old})
 
 	loadArtworkConfirmed()
 
@@ -75,7 +75,7 @@ func TestArtworkConfirmedInvalidatedOnRelayChange(t *testing.T) {
 	artworkConfirmPath = filepath.Join(t.TempDir(), "confirmed.json")
 	writeConfirmFile(t, artworkConfirmPath, "https://old-relay.invalid",
 		map[string]int64{testSHA: time.Now().Unix()})
-	artworkRelayURL = "https://new-relay.invalid"
+	setStateRelay("https://new-relay.invalid", "")
 
 	loadArtworkConfirmed()
 
@@ -99,7 +99,7 @@ func TestSweepSkipsConfirmedFromDisk(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	deviceArtworkDir = dir
@@ -135,7 +135,7 @@ func TestSweepStillChecksUnconfirmed(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL = srv.URL
+	setStateRelay(srv.URL, "")
 
 	dir := t.TempDir()
 	deviceArtworkDir = dir
@@ -147,6 +147,7 @@ func TestSweepStillChecksUnconfirmed(t *testing.T) {
 	}
 	artworkConfirmPath = filepath.Join(t.TempDir(), "confirmed.json")
 	writeConfirmFile(t, artworkConfirmPath, srv.URL, map[string]int64{testSHA: time.Now().Unix()})
+	referenceDeviceArtworkForTest(t, filepath.Join(dir, testSHA+".jpg"), filepath.Join(dir, other+".png"))
 
 	loadArtworkConfirmed()
 	sweepDeviceArtwork(context.Background())
@@ -187,7 +188,7 @@ func TestArtworkConfirmedIgnoresTrailingSlash(t *testing.T) {
 	artworkConfirmPath = filepath.Join(t.TempDir(), "confirmed.json")
 	writeConfirmFile(t, artworkConfirmPath, "https://relay.invalid",
 		map[string]int64{testSHA: time.Now().Unix()})
-	artworkRelayURL = "https://relay.invalid/"
+	setStateRelay("https://relay.invalid/", "")
 
 	loadArtworkConfirmed()
 
@@ -202,7 +203,7 @@ func TestArtworkConfirmedIgnoresTrailingSlash(t *testing.T) {
 // (只用本机悬浮歌词,不搭自己的网页中继),对他们必须是零额外动作。
 func TestArtworkConfirmedInertWithoutRelay(t *testing.T) {
 	resetArtworkRelayState(t)
-	artworkRelayURL = "" // 用户没填「状态中继地址」
+	setStateRelay("", "") // 用户没填「状态中继地址」
 	dir := t.TempDir()
 	artworkConfirmPath = filepath.Join(dir, "confirmed.json")
 	// 磁盘上有一份完全有效的记录(比如用户曾经配过中继、后来把地址删了)。
@@ -251,7 +252,7 @@ func TestSweepInertWithoutRelay(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	artworkRelayURL = "" // 关键:地址为空
+	setStateRelay("", "") // 关键:地址为空
 
 	dir := t.TempDir()
 	deviceArtworkDir = dir

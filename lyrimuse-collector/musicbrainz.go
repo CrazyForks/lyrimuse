@@ -44,8 +44,10 @@ import (
 var (
 	artistAliasMu    sync.Mutex
 	artistAliasCache = map[string]string{}
-	artistAliasPath  string // 落盘路径；空则只用内存不持久化
-	artistAliasDirty bool
+	// artistAliasFailedUntil:这位歌手的中文名刚才没问成,到这个时刻之前不再问(只在内存里)。
+	artistAliasFailedUntil = map[string]time.Time{}
+	artistAliasPath        string // 落盘路径；空则只用内存不持久化
+	artistAliasDirty       bool
 )
 
 // loadArtistAliasCache/saveArtistAliasCache 跟 loadEnrichCache/saveEnrichCache
@@ -66,6 +68,9 @@ func loadArtistAliasCache(path string) {
 		log.Printf("cache: loaded %d artist aliases from %s", len(m), path)
 	}
 }
+
+// artistAliasRetryAfter:中文名没问成之后多久再问。
+const artistAliasRetryAfter = 10 * time.Minute
 
 func saveArtistAliasCache() {
 	artistAliasMu.Lock()
@@ -172,19 +177,48 @@ func canonicalArtistViaMusicBrainz(ctx context.Context, rawArtist string) string
 		return ""
 	}
 
+	// 手工表排在 MusicBrainz 前面:表里那几条恰恰是 MB 查错人的(「Lexie Liu」MB 给的是另一个人「刘昱妤」),
+	// 让 MB 先答就拦不住。命中时把缓存里的值也纠正过来 —— App 的歌手归并(LocalArtistAliases)直接读这份缓存,
+	// 早先落盘的错值不改掉,两个人就一直被并在一起。
+	if v := knownArtistAlias(rawArtist); v != "" {
+		artistAliasMu.Lock()
+		if artistAliasCache[rawArtist] != v {
+			artistAliasCache[rawArtist] = v
+			artistAliasDirty = true
+		}
+		artistAliasMu.Unlock()
+		saveArtistAliasCache()
+		return v
+	}
+
 	artistAliasMu.Lock()
 	if v, ok := artistAliasCache[rawArtist]; ok {
 		artistAliasMu.Unlock()
 		return v
+	}
+	if until, failed := artistAliasFailedUntil[rawArtist]; failed && time.Now().Before(until) {
+		artistAliasMu.Unlock()
+		return ""
 	}
 	artistAliasMu.Unlock()
 	if artistCanonicalCacheOnly {
 		return "" // 见 artistCanonicalCacheOnly:不联网、不写空值
 	}
 
-	resolved := lookupMusicBrainzChineseAlias(ctx, rawArtist)
+	resolved, err := lookupMusicBrainzChineseAlias(ctx, rawArtist)
+	if err != nil {
+		// 没问成(限流、超时、共享冷却里被拦、调用方取消):不写缓存 —— 写进去就是这个常驻进程余下的生命周期里
+		// 这位歌手都「没有中文名」。退避一段再试,免得每首歌都白排一次限速队列;调用方取消的不退避。
+		if ctx.Err() == nil {
+			artistAliasMu.Lock()
+			artistAliasFailedUntil[rawArtist] = time.Now().Add(artistAliasRetryAfter)
+			artistAliasMu.Unlock()
+		}
+		return ""
+	}
 
 	artistAliasMu.Lock()
+	delete(artistAliasFailedUntil, rawArtist)
 	artistAliasCache[rawArtist] = resolved
 	// 查空不算脏 —— 空值不落盘,下一次进程还能再试一次(见上面 saveArtistAliasCache 前的
 	// 说明)。
@@ -241,19 +275,31 @@ func loadArtistIdentityCache(path string) {
 	}
 }
 
+// artistIdentitySaveMu 把「拍快照 → 并盘上 → 写盘」整段串起来:两次存盘并发时,先拍的旧快照不能后落盘。
+var artistIdentitySaveMu sync.Mutex
+
 func saveArtistIdentityCache() {
+	artistIdentitySaveMu.Lock()
+	defer artistIdentitySaveMu.Unlock()
 	artistIdentityMu.Lock()
 	if !artistIdentityDirty || artistIdentityPath == "" {
 		artistIdentityMu.Unlock()
 		return
 	}
-	data, err := json.Marshal(artistIdentityCache)
+	keep := make(map[string]mbArtistIdentity, len(artistIdentityCache))
+	for k, v := range artistIdentityCache {
+		keep[k] = v
+	}
+	path := artistIdentityPath
 	artistIdentityDirty = false
 	artistIdentityMu.Unlock()
+	// 先并盘上的:手动跑 `top-artists -mb-budget N` 查到的条目,不能被常驻进程下一次整份写回盖掉(同 saveArtistAliasCache)。
+	mergeMissingFromDisk(path, keep, func(mbArtistIdentity) bool { return true })
+	data, err := json.Marshal(keep)
 	if err != nil {
 		return
 	}
-	if err := writeFileAtomic(artistIdentityPath, data); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save artist identity cache", "err", err)
 	}
 }
@@ -283,29 +329,47 @@ func resolveArtistIdentityMB(name, knownMbid string) mbArtistIdentity {
 	}
 	ctx := context.Background()
 	id := mbArtistIdentity{Mbid: knownMbid}
+	// 手工表里的名字不去搜:那几条正是 MB 把人认错的(见 artistAliasTable 头注),搜出来的 mbid 属于别人,
+	// 永久落盘之后「歌手来自哪里」、App 歌手页的跳转都会指到那个人。中文名直接用表里的;Last.fm 给了 mbid 就留着。
+	if v := knownArtistAlias(name); v != "" {
+		id.Zh = v
+		artistIdentityMu.Lock()
+		artistIdentityCache[name] = id
+		artistIdentityDirty = true
+		artistIdentityMu.Unlock()
+		return id
+	}
 	// 任何一步没问成(限速被拒、网络失败、共享窗口停手)就只返回、不写缓存:缓存查一次永久生效,
 	// 把「没问成」写成「查过、没有」会把这位歌手永久钉在没有身份上。
+	// 走 mbGetJSONShared:同一个名字的搜索 / 别名请求跟中文名、主名那两条路径逐字相同,响应缓存里有就不再排队。
+	verified := id.Mbid != "" // Last.fm 给的 mbid 就是这条榜单记录自己的身份
+	var withAliases mbArtistWithAliases
+	aliasesFor := "" // withAliases 是哪个 mbid 的
 	if id.Mbid == "" {
-		if err := musicbrainzThrottle(ctx); err != nil {
-			return id
-		}
 		var search mbSearchResponse
-		searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(name) + "&fmt=json&limit=5"
-		if err := mbGetJSON(ctx, searchURL, &search); err != nil {
+		if err := mbGetJSONShared(ctx, mbArtistSearchURL(name), &search); err != nil {
 			return id
 		}
 		if len(search.Artists) > 0 && search.Artists[0].Score >= musicbrainzMinScore {
-			id.Mbid = search.Artists[0].ID
+			top := search.Artists[0]
+			aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(top.ID) + "?inc=aliases&fmt=json"
+			if err := mbGetJSONShared(ctx, aliasURL, &withAliases); err != nil {
+				return id
+			}
+			aliasesFor = top.ID
+			// 分数高不等于是这个人(「David Tao」排到过一位德国音乐人头上):本地写法得是这位艺人的主名或
+			// 登记过的别名才收,同 mbAliasCandidatesForRetry 的判据。
+			if mbNameBelongsToArtist(top.Name, withAliases.Aliases, name) {
+				id.Mbid, verified = top.ID, true
+			}
 		}
 	}
-	if id.Mbid != "" && !containsHan(name) {
-		if err := musicbrainzThrottle(ctx); err != nil {
-			return id
-		}
-		var withAliases mbArtistWithAliases
-		aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(id.Mbid) + "?inc=aliases&fmt=json"
-		if err := mbGetJSON(ctx, aliasURL, &withAliases); err != nil {
-			return id
+	if verified && id.Mbid != "" && !containsHan(name) {
+		if aliasesFor != id.Mbid {
+			aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(id.Mbid) + "?inc=aliases&fmt=json"
+			if err := mbGetJSONShared(ctx, aliasURL, &withAliases); err != nil {
+				return id
+			}
 		}
 		id.Zh = pickChineseAlias(withAliases.Aliases, withAliases.Country)
 	}
@@ -314,6 +378,23 @@ func resolveArtistIdentityMB(name, knownMbid string) mbArtistIdentity {
 	artistIdentityDirty = true
 	artistIdentityMu.Unlock()
 	return id
+}
+
+// mbNameBelongsToArtist:本地写法是不是这位艺人的主名或登记过的别名(按 normLoose 比)。
+func mbNameBelongsToArtist(primary string, aliases []mbAlias, raw string) bool {
+	target := normLoose(raw)
+	if target == "" {
+		return false
+	}
+	if normLoose(primary) == target {
+		return true
+	}
+	for _, al := range aliases {
+		if normLoose(al.Name) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // mbSearchResponse/mbArtistWithAliases 只取用得到的字段,完整字段列表见 MusicBrainz
@@ -398,23 +479,48 @@ const musicbrainzMinScore = 90
 // 这条本身没有标 locale,不能简单按 locale==zh 过滤,只能反过来排除确定不是中文的)。
 // 任何一步失败/没有结果都返回空字符串,不重试、不报错——这条路径只是 canonical_artist
 // 解析链路的第一层,查不到时 resolveTrackEnrichment 现有的网易云/QQ 逻辑会接手。
-func lookupMusicBrainzChineseAlias(ctx context.Context, rawArtist string) string {
+// lookupMusicBrainzChineseAlias 查一位歌手的中文名。error 只回答「这一次查成没有」:没搜到、首条不够可信、
+// 没有合适的中文别名都是查成了的空结果(nil error),可以缓存;请求本身没成才返回 error。
+func lookupMusicBrainzChineseAlias(ctx context.Context, rawArtist string) (string, error) {
 	var search mbSearchResponse
-	searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(rawArtist) + "&fmt=json&limit=5"
-	if err := mbGetJSONShared(ctx, searchURL, &search); err != nil || len(search.Artists) == 0 {
-		return ""
+	if err := mbGetJSONShared(ctx, mbArtistSearchURL(rawArtist), &search); err != nil {
+		return "", err
+	}
+	if len(search.Artists) == 0 {
+		return "", nil
 	}
 	top := search.Artists[0]
 	if top.Score < musicbrainzMinScore {
-		return ""
+		return "", nil
 	}
 
 	var withAliases mbArtistWithAliases
 	aliasURL := "https://musicbrainz.org/ws/2/artist/" + neturl.PathEscape(top.ID) + "?inc=aliases&fmt=json"
 	if err := mbGetJSONShared(ctx, aliasURL, &withAliases); err != nil {
-		return ""
+		return "", err
 	}
-	return pickChineseAlias(withAliases.Aliases, withAliases.Country)
+	return pickChineseAlias(withAliases.Aliases, withAliases.Country), nil
+}
+
+// mbArtistSearchURL:按名字搜艺人的地址。几处按名字搜的都经这里拼,同一个名字拼出的地址逐字相同,
+// 响应缓存(mbGetJSONShared)才共享得上。名字按 Lucene 语法转义:MusicBrainz 的 query 参数是 Lucene 查询,
+// 「AC/DC」「(G)I-DLE」「P!nk」里的特殊字符不转义会改变查询语义,可能回 400(每次都被当成没问成、反复重试),
+// 也可能首条命中别人。
+func mbArtistSearchURL(name string) string {
+	return "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(mbLuceneEscape(name)) + "&fmt=json&limit=5"
+}
+
+// mbLuceneEscape 在 Lucene 查询语法的特殊字符前加反斜杠。
+func mbLuceneEscape(s string) string {
+	const special = `+-&|!(){}[]^"~*?:\/`
+	var b strings.Builder
+	for _, r := range s {
+		if strings.ContainsRune(special, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // ---- MB 主名:本名 与 艺名互换的通用解法 ----
@@ -746,8 +852,7 @@ func cachedMusicBrainzCanonicalName(rawArtist string) string {
 // 请求去猜 MB 活没活着,而探针和真查询各有各的运气,CI 上连红六次(见那条测试的头注)。
 func lookupMusicBrainzArtistAliases(ctx context.Context, raw string) ([]string, error) {
 	var search mbSearchResponse
-	searchURL := "https://musicbrainz.org/ws/2/artist/?query=" + neturl.QueryEscape(raw) + "&fmt=json&limit=5"
-	if err := mbGetJSONShared(ctx, searchURL, &search); err != nil {
+	if err := mbGetJSONShared(ctx, mbArtistSearchURL(raw), &search); err != nil {
 		return nil, err
 	}
 	if len(search.Artists) == 0 {
@@ -860,9 +965,26 @@ func mbGetBody(ctx context.Context, url string) ([]byte, error) {
 		publishSharedCooldown("musicbrainz.org", sharedCooldownMusicBrainz, time.Now().Add(musicbrainzPauseFor(resp.Header.Get("Retry-After"))))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("musicbrainz %s: status %d", url, resp.StatusCode)
+		return nil, &mbStatusError{url: url, status: resp.StatusCode}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, mbResponseMaxBytes))
+}
+
+// mbStatusError:MusicBrainz 回了非 200。带上状态码,调用方才分得清「确定没有」(404 / 400)和「这次没问成」(503、5xx)。
+type mbStatusError struct {
+	url    string
+	status int
+}
+
+func (e *mbStatusError) Error() string {
+	return fmt.Sprintf("musicbrainz %s: status %d", e.url, e.status)
+}
+
+// mbDefinitiveMiss:这次失败是 MusicBrainz 明确说「没有这个」(mbid 不存在 / 已失效是 404,请求本身不成立是 400)。
+// 这种结论可以记下,重试也不会变;503 / 超时这类才该等会儿再问。
+func mbDefinitiveMiss(err error) bool {
+	var se *mbStatusError
+	return errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusBadRequest)
 }
 
 // 歌手查询的响应缓存:同一个网址在 mbResponseTTL 内只真正请求一次。

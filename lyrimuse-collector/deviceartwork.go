@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -59,7 +58,7 @@ var deviceArtworkDir string
 // 得上这首歌"——但这份数据是设备自己在播这首歌的当下吐出来的,身份不需要另外验证
 // (这正是它比网易云/Apple/QQ 那套要靠文字匹配去猜的机制更可信的地方,见本文件头注)。
 func decodeDeviceArtwork(data []byte) (image.Image, bool) {
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := decodeCoverImage(data)
 	if err != nil {
 		return nil, false
 	}
@@ -122,7 +121,9 @@ func saveDeviceArtwork(data []byte, mimeType string) (string, bool) {
 	if err := os.MkdirAll(deviceArtworkDir, 0o755); err != nil {
 		return "", false
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// 原子写:「文件已经在就直接复用」,写到一半被杀(collector 一天重启十几次)留下的半截文件之后会一直被当成
+	// 这张图,App 显示残图、中继补传把残图按完整的 sha 传上去。
+	if err := writeFileAtomic(path, data); err != nil {
 		return "", false
 	}
 	return "file://" + path, true

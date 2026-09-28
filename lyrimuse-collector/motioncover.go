@@ -642,8 +642,8 @@ func motionCoverNeedsRecheckAgainstOwnCover(freshApplies bool, e enrichEntry) bo
 // 跟 motionCoverWorthBackfill 的区别只有一处,但正是关键:专辑还没查过时它回 false
 // (那个回 true)。所以它**一个请求都不发**,纯查本地两份缓存,可以拿来在全量扫描里筛出
 // "值得为它发两次 HTTP"的那一小撮,而不必对整份缓存无差别重验。
-func motionCoverAlbumHasKnownVideo(e enrichEntry, title, album string) bool {
-	albumID, ok := appleCatalogAlbumIDFor(title, album)
+func motionCoverAlbumHasKnownVideo(e enrichEntry, artist, title, album string) bool {
+	albumID, ok := appleCatalogAlbumIDFor(artist, title, album)
 	if !ok {
 		albumID = motionCoverAlbumIDFromAppleURL(e.AppleURL)
 	}
@@ -656,13 +656,13 @@ func motionCoverAlbumHasKnownVideo(e enrichEntry, title, album string) bool {
 	return cached && mc.Master != ""
 }
 
-func motionCoverWorthBackfill(e enrichEntry, title, album string) bool {
+func motionCoverWorthBackfill(e enrichEntry, artist, title, album string) bool {
 	if e.MotionCoverURL != "" || e.MotionCoverChecked {
 		return false
 	}
 	// 两条来路跟 fillMotionCover 一致(锚点优先、退到 apple_music_url),否则非 Apple Music
 	// 播的存量条目连 backfill 的门都进不来。
-	albumID, ok := appleCatalogAlbumIDFor(title, album)
+	albumID, ok := appleCatalogAlbumIDFor(artist, title, album)
 	if !ok {
 		albumID = motionCoverAlbumIDFromAppleURL(e.AppleURL)
 	}

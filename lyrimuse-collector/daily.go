@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -51,7 +52,10 @@ func (s dailyDigestState) save(date string) {
 	if err != nil {
 		return
 	}
-	os.WriteFile(s.path, data, 0o644)
+	// 原子写 + 记错误:写到一半(磁盘满、被杀)留下半截 JSON,读回来是零值 —— 下一轮会把上一期当成还没发、再推一次。
+	if err := writeFileAtomic(s.path, data); err != nil {
+		slog.Error("daily digest: save state failed", "err", err)
+	}
 }
 
 var dailyDigestPath string

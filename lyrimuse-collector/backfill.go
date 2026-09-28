@@ -143,7 +143,7 @@ func pendingBackfillListens(now time.Time) (pending []listenLogLine, tooOld int)
 // 顺序上它必须在**收到服务端确认之后**调用:提前写等于把"发出去了"当成"接受了",
 // 而超时那条路径恰恰是发出去了但不知道结果。
 func markBackfilled(uts int64) {
-	_ = markBackfilledChecked(uts) // 失败已经记过日志;重发队列那边照旧,下一轮看回执时会再交一次
+	_ = markBackfilledChecked(uts) // 失败已经记过日志;要按失败停手的调用方用 markBackfilledChecked
 }
 
 // markBackfilledChecked 同 markBackfilled,交回写盘错误。补提交用:服务端已经收下、回执却写不进去时必须停手 ——
@@ -344,7 +344,13 @@ func truncateForLog(b []byte) string {
 // 所以选后者。这些条目不会被自动重试;将来若要救回来,正路是拿 user.getRecentTracks
 // 按时间区间对账(那个方法不需要认证),确认服务端确实没有再放行 —— 那部分单独实现。
 func markQuarantined(uts int64) {
-	appendListenLogLine(listenLogLine{
+	_ = markQuarantinedChecked(uts)
+}
+
+// markQuarantinedChecked 同 markQuarantined,交回写盘错误。隔离行写不进去,这一条在收听日志里就还是「待补」,
+// 下次补提交会把一条可能已经落库的收听再交一遍 —— 补提交据此停手,同 markBackfilledChecked。
+func markQuarantinedChecked(uts int64) error {
+	return appendListenLogLine(listenLogLine{
 		T: "q", V: listenLogSchemaVersion, UTS: uts, AT: time.Now().Unix(),
 	})
 }
@@ -475,7 +481,11 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 				log.Printf("backfill: ignored by server: %s - %s (%s)", it.AR, it.TI, res.ignored[it.UTS])
 			default:
 				// 请求成功了,但这条的回执没回来 —— join 不上就当状态未知。
-				markQuarantined(it.UTS)
+				if err := markQuarantinedChecked(it.UTS); err != nil {
+					out.AbortedReason = "listen log write failed: " + err.Error()
+					log.Printf("backfill: aborted, quarantine mark could not be written: %v", err)
+					return out
+				}
 				out.Quarantined++
 			}
 		}

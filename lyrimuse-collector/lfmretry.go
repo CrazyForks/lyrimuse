@@ -72,6 +72,26 @@ func loadLfmRetryLocked() []lfmRetryItem {
 	return items
 }
 
+// dropLfmRetryTimestamps 把这些时间戳从重发队列里拿掉(delete-listen 用:用户在待补清单里删掉的收听,
+// 不能再被后台重发交上去)。返回拿掉几条。常驻进程那边的重发在交之前还会再核一次收听日志(见 lfmRetryHooks.logged),
+// 两道一起挡住「这边刚删、那边这一轮已经读进内存」的窗口。
+func dropLfmRetryTimestamps(drop map[int64]bool) int {
+	lfmRetryMu.Lock()
+	defer lfmRetryMu.Unlock()
+	items := loadLfmRetryLocked()
+	kept := items[:0]
+	for _, it := range items {
+		if !drop[it.Timestamp] {
+			kept = append(kept, it)
+		}
+	}
+	removed := len(items) - len(kept)
+	if removed > 0 {
+		saveLfmRetryLocked(kept)
+	}
+	return removed
+}
+
 // lfmRetryQueuedTimestamps 重发队列里此刻排着的收听时间戳。补提交发送前拿它排除(见 stillPendingForBackfill);
 // 补提交是另一个进程,读的是同一份文件。
 func lfmRetryQueuedTimestamps() []int64 {
@@ -146,10 +166,14 @@ type lfmRetrySubmitter func(ctx context.Context, it lfmRetryItem) error
 type lfmRetryHooks struct {
 	// handled:这个时间戳在收听日志里已经有回执或被隔离("s" / "q")。
 	handled func() map[int64]bool
-	// submitted:重发成功,写回执(markBackfilled)。
-	submitted func(ts int64)
+	// submitted:重发成功,写回执(markBackfilledChecked)。返回写盘错误。
+	submitted func(ts int64) error
 	// quarantine:重发时撞上「不确定有没有写进去」,隔离、不再自动重发(markQuarantined)。
 	quarantine func(ts int64)
+	// logged:收听日志里还留着收听行("l")的时间戳;第二个返回值 = 收听日志在用。为 nil 时不查(单测)。
+	// 进队列的每一条都先经 recordFailedMirror 写过 "l",这一行不在了只能是用户在待补清单里删掉了它
+	// (delete-listen 按整个时间戳删)—— 那条就不该再交上去。
+	logged func() (map[int64]bool, bool)
 }
 
 func defaultLfmRetryHooks() lfmRetryHooks {
@@ -163,8 +187,20 @@ func defaultLfmRetryHooks() lfmRetryHooks {
 			}
 			return out
 		},
-		submitted:  markBackfilled,
+		submitted:  markBackfilledChecked,
 		quarantine: markQuarantined,
+		logged: func() (map[int64]bool, bool) {
+			listenLogMu.Lock()
+			inUse := listenLogPath != ""
+			listenLogMu.Unlock()
+			out := map[int64]bool{}
+			for _, l := range readListenLog() {
+				if l.T == "l" && l.UTS > 0 {
+					out[l.UTS] = true
+				}
+			}
+			return out, inUse
+		},
 	}
 }
 
@@ -183,6 +219,11 @@ func processLfmRetry(ctx context.Context, now time.Time, user string, submit lfm
 		return 0
 	}
 	handled := hooks.handled()
+	var logged map[int64]bool
+	checkLogged := false
+	if hooks.logged != nil {
+		logged, checkLogged = hooks.logged()
+	}
 	cutoff := now.Add(-backfillMaxAge).Unix()
 	done := map[string]bool{}
 	sent := 0
@@ -199,11 +240,23 @@ func processLfmRetry(ctx context.Context, now time.Time, user string, submit lfm
 			log.Printf("lastfm retry: dropping %q - %q queued for another account", it.Artist, it.Title)
 			continue
 		}
+		if checkLogged && !logged[it.Timestamp] {
+			done[it.key()] = true
+			log.Printf("lastfm retry: dropping %q - %q, deleted from the local listen log", it.Artist, it.Title)
+			continue
+		}
 		err := submit(ctx, it)
 		if err == nil {
-			hooks.submitted(it.Timestamp)
 			done[it.key()] = true
 			sent++
+			if werr := hooks.submitted(it.Timestamp); werr != nil {
+				// Last.fm 已经收下,回执却写不进收听日志:这一条在日志里还是「待补」。移出队列(留着的话下一轮
+				// 自动再交一遍),补一条隔离标记挡住补提交;这一轮停手 —— 接着交的每一条都会是同样的处境。
+				hooks.quarantine(it.Timestamp)
+				slog.Error("lastfm retry: scrobbled but the receipt could not be written, stopping this round",
+					"err", werr, "artist", it.Artist, "title", it.Title)
+				break
+			}
 			log.Printf("lastfm retry: scrobbled %q - %q (timestamp=%d)", it.Artist, it.Title, it.Timestamp)
 			continue
 		}

@@ -17,10 +17,13 @@ import (
 //     回填兜底的);
 //   - 同一条件下的普通曲目仍然正常发 LB —— 分流只认"短",不是把 LB 整个关掉。
 func TestSubmitSingleShortTrackSkipsListenBrainz(t *testing.T) {
-	savedFlag, savedPath := features().ScrobbleShortTracks, listenLogPath
-	defer func() { featuresRef().ScrobbleShortTracks = savedFlag; listenLogPath = savedPath }()
-	featuresRef().ScrobbleShortTracks = true
-	listenLogPath = filepath.Join(t.TempDir(), "listens.jsonl")
+	// 整体替换快照、经锁设路径:下面普通曲目那一段起了 LB 提交 goroutine,它会读 features()。
+	setFeatureForTest(t, func(f *featureFlags) { f.ScrobbleShortTracks = true })
+	listenLogMu.Lock()
+	savedPath := listenLogPath
+	listenLogMu.Unlock()
+	t.Cleanup(func() { setListenLogPath(savedPath) })
+	setListenLogPath(filepath.Join(t.TempDir(), "listens.jsonl"))
 
 	var lbPosts int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

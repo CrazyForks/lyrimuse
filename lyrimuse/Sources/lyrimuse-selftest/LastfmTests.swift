@@ -7,6 +7,16 @@ import Foundation
 
 @MainActor
 func runLastfmTests() {
+    // ---- 授权成功后桥接用户名(lastfm_user)跟不跟着换 ----
+    do {
+        let adopt = LastfmBridgeUser.shouldAdoptAuthorized
+        expectEqual(adopt("", ""), true, "桥接用户名: 没填过 → 用授权账号")
+        expectEqual(adopt("", "old"), true, "桥接用户名: 没填过(之前授权过)→ 用授权账号")
+        expectEqual(adopt("Old", "old"), true, "桥接用户名: 就是上次授权的账号(大小写不计)→ 换成新账号")
+        expectEqual(adopt("manual", "old"), false, "桥接用户名: 填的是别的账号 → 保留")
+        expectEqual(adopt("manual", ""), false, "桥接用户名: 之前没授权过、手填过 → 保留")
+    }
+
     // ---- 「第 N 次听」的作废判据:按最新一条收听的时刻,而不是页内出现次数 ----
     //
     // 页内出现次数在连播同一首歌时会饱和 —— 新的挤进来、旧的挤出去,页内次数**不再增长**,

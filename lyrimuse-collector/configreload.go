@@ -170,7 +170,8 @@ func (p *poller) syncLiveConfig() {
 	if next == nil {
 		return
 	}
-	if next != p.cfg {
+	cfgChanged := next != p.cfg
+	if cfgChanged {
 		prev := p.cfg
 		p.cfg = next
 		if p.lb != nil && (prev == nil || notifyTarget(prev) != notifyTarget(next)) {
@@ -179,11 +180,17 @@ func (p *poller) syncLiveConfig() {
 	}
 	// Last.fm 镜像写入还吃 features.json 的 lastfm_mirror_scrobble 开关,所以每拍都比一次,不只在
 	// config.json 变了的时候。
-	if want := lastfmScrobblerKeyOf(p.cfg); want != p.lfmKey {
+	//
+	// 已熔断(dead)的那一个,config.json 换了新快照就重建一次,哪怕凭据字段没变:熔断原来靠「保存配置 / 重连账号
+	// 会重启 collector」复位,热重读之后保存配置不再重启,一次误判(error 4 两击也可能是服务端抽风)就会一直
+	// 停到进程下次重启。凭据真死了,重建出来的第一次提交会再判死一次,多打的只有那一两发。
+	want := lastfmScrobblerKeyOf(p.cfg)
+	deadRetry := cfgChanged && p.lfm != nil && p.lfm.dead.Load()
+	if want != p.lfmKey || deadRetry {
 		p.lfmKey = want
 		p.lfm = lastfmScrobblerIfEnabled(p.cfg)
 		lfmRetryTarget.Store(p.lfm)
-		log.Printf("config: lastfm mirror writer rebuilt enabled=%v", p.lfm != nil)
+		log.Printf("config: lastfm mirror writer rebuilt enabled=%v dead_retry=%v", p.lfm != nil, deadRetry)
 	}
 }
 

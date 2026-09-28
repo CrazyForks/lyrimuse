@@ -66,7 +66,7 @@ func TestProcessLfmRetry(t *testing.T) {
 	var submitted, quarantined, asked []int64
 	hooks := lfmRetryHooks{
 		handled:    func() map[int64]bool { return map[int64]bool{ts + 5: true} },
-		submitted:  func(t int64) { submitted = append(submitted, t) },
+		submitted:  func(t int64) error { submitted = append(submitted, t); return nil },
 		quarantine: func(t int64) { quarantined = append(quarantined, t) },
 	}
 	results := map[string]error{
@@ -118,7 +118,7 @@ func TestProcessLfmRetryKeepsQueueWhileOffline(t *testing.T) {
 	enqueueLastfmRetryIfSafe(errDNS, lfmRetryItem{User: "u", Timestamp: now.Add(-time.Minute).Unix(), Artist: "a", Title: "t1"})
 	enqueueLastfmRetryIfSafe(errDNS, lfmRetryItem{User: "u", Timestamp: now.Unix(), Artist: "a", Title: "t2"})
 	calls := 0
-	hooks := lfmRetryHooks{handled: func() map[int64]bool { return nil }, submitted: func(int64) {}, quarantine: func(int64) { t.Fatal("offline must not quarantine") }}
+	hooks := lfmRetryHooks{handled: func() map[int64]bool { return nil }, submitted: func(int64) error { return nil }, quarantine: func(int64) { t.Fatal("offline must not quarantine") }}
 	processLfmRetry(context.Background(), now, "u", func(context.Context, lfmRetryItem) error {
 		calls++
 		return errors.Join(errDNS)
@@ -134,7 +134,7 @@ func TestProcessLfmRetryDropsAnotherAccountsListens(t *testing.T) {
 	enqueueLastfmRetryIfSafe(errDNS, lfmRetryItem{User: "old", Timestamp: now.Unix(), Artist: "a", Title: "old account"})
 	enqueueLastfmRetryIfSafe(errDNS, lfmRetryItem{User: "new", Timestamp: now.Unix() + 1, Artist: "a", Title: "new account"})
 	var asked []string
-	hooks := lfmRetryHooks{handled: func() map[int64]bool { return nil }, submitted: func(int64) {}, quarantine: func(int64) {}}
+	hooks := lfmRetryHooks{handled: func() map[int64]bool { return nil }, submitted: func(int64) error { return nil }, quarantine: func(int64) {}}
 	processLfmRetry(context.Background(), now, "new", func(_ context.Context, it lfmRetryItem) error {
 		asked = append(asked, it.Title)
 		return nil

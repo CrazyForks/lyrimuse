@@ -12,6 +12,7 @@ import (
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -36,6 +37,30 @@ type lbClient struct {
 	mu             sync.Mutex
 	cooldownUntil  time.Time
 	consecutive429 int
+	// 令牌被拒(401/403)之后的冷却:这把令牌、到什么时候之前不再发。令牌换了(热重读)就自动失效。
+	authRejectedToken string
+	authRejectedUntil time.Time
+}
+
+// lbAuthRejectedHold:令牌被拒之后多久不再发。收听不会丢(会话结束的进待重发队列、桥接的不记已转发),
+// 这段时间只是不再每拍白打一个注定 401 的请求;用户在设置里换了令牌,热重读之后立刻恢复。
+const lbAuthRejectedHold = 10 * time.Minute
+
+// authRejected:当前这把令牌还在「被拒」的冷却里。
+func (c *lbClient) authRejected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.authRejectedToken != "" && c.authRejectedToken == c.apiToken() && time.Now().Before(c.authRejectedUntil)
+}
+
+// noteAuthRejected 记下这把令牌被拒;返回是不是这一段冷却里的第一次(据此只打一行日志)。
+func (c *lbClient) noteAuthRejected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tok := c.apiToken()
+	first := c.authRejectedToken != tok || !time.Now().Before(c.authRejectedUntil)
+	c.authRejectedToken, c.authRejectedUntil = tok, time.Now().Add(lbAuthRejectedHold)
+	return first
 }
 
 // lbCooldownSchedule:第 N 次"一整轮调用全部以 429 收尾"后的冷却时长(N 从 1 起)。
@@ -190,6 +215,11 @@ func lbMeta(s snapshot) lbTrackMeta {
 
 var errListenRejected = errors.New("listen rejected by server (4xx, non-retryable)")
 
+// errListenAuth:令牌被拒(401 / 403)。跟 errListenRejected 不同,这不是「这条内容发不进去」,是
+// 「这把令牌现在不能用」—— 换好令牌之后同一条照样能收。调用方一律按瞬时失败处理:会话结束的进待重发队列、
+// 桥接的不记已转发、待重发队列停在这一条。当成拒收的话,令牌失效到用户换好之间的收听会全部丢光。
+var errListenAuth = errors.New("listenbrainz token rejected (401/403)")
+
 // apiRoot / apiToken 取 ListenBrainz 的地址和令牌。常驻进程里跟着 config.json 热重读走
 // (configreload.go),没登记热重读时(CLI 子命令、测试)用构造时给的那份。submit 跑在各自的
 // goroutine 里,所以这两个字段不能在运行中改写,一律经这里读。
@@ -247,6 +277,9 @@ func (c *lbClient) submit(ctx context.Context, listenType string, listenedAt int
 		log.Printf("[dry-run] would POST %s: %s", listenType, body)
 		return nil
 	}
+	if c.authRejected() {
+		return fmt.Errorf("post %s: skipped, the ListenBrainz token was rejected recently: %w", listenType, errListenAuth)
+	}
 	if c.coolingDown() {
 		// 冷却未过:不发出任何网络请求。这个 error 刻意**不**包 errListenRejected——
 		// 调用方(poller.go 四个调用点)把 errListenRejected 当"LB 确实不收这条,别再试"
@@ -275,6 +308,13 @@ func (c *lbClient) submit(ctx context.Context, listenType string, listenedAt int
 			return nil
 		}
 		lastStatus = status
+		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			if c.noteAuthRejected() {
+				slog.Warn("listenbrainz: token rejected, holding submissions until the token changes",
+					"status", status, "hold", lbAuthRejectedHold)
+			}
+			return fmt.Errorf("post %s: %v: %w", listenType, err, errListenAuth)
+		}
 		if status >= 400 && status < 500 && status != http.StatusTooManyRequests {
 			return fmt.Errorf("post %s: %v: %w", listenType, err, errListenRejected)
 		}

@@ -205,6 +205,9 @@ type lastfmCatalogDecision struct {
 	Provisional bool `json:"provisional,omitempty"`
 	// Tail 是得出这条结论时的尾巴判定口径(lastfmCatalogTailVersion)。曲名带尾巴、口径更旧的要重判(见 lookup)。
 	Tail int `json:"tail,omitempty"`
+	// NoDuration:这条 defer 是在不知道时长时判的(MV、不报时长的播放器)。弱身份候选要两边时长对得上才收
+	// (weakCandidateOK),没时长时一律不收 —— 这份 defer 对之后带着时长来的同一首不成立,见 resolve。
+	NoDuration bool `json:"no_duration,omitempty"`
 }
 
 // lastfmCatalogMatcher 按上面的判据决定一条 scrobble 该用哪个歌手名 + 曲名。
@@ -256,7 +259,8 @@ func (s matchScope) id() string {
 	return ""
 }
 
-// resolve 返回这条提交应该用的歌手名和曲名,以及**有没有匹配到编目条目**(第三个返回值)。
+// resolve 返回这条提交应该用的歌手名和曲名,以及**结论是不是落在编目条目上**(第三个返回值):match(改写成编目
+// 那条)或 keep(原样就是编目那条)都算;defer、查询失败、没开匹配都不算。调用方据此决定还要不要截合唱串。
 // 任何一步不确定都返回原串 —— 改写不可逆,默认行为必须是「维持现状」。nil 接收者
 // (没配只读 api_key)整体退化成原样返回。
 func (c *lastfmCatalogMatcher) resolve(ctx context.Context, artist, track string, durationSecs float64, scope matchScope) (string, string, bool) {
@@ -269,8 +273,9 @@ func (c *lastfmCatalogMatcher) resolve(ctx context.Context, artist, track string
 	}
 
 	key := trimmedArtist + "\n" + trimmedTrack
-	if d, ok := c.lookup(key, time.Now(), scope); ok {
-		return d.Artist, orDefault(d.Track, trimmedTrack), d.Verdict == verdictMatch
+	// 没时长时判出的 defer 挡不住这次带时长的判定(先放了 MV、再放录音室版,不能让前者的 90 天 defer 管住后者)。
+	if d, ok := c.lookup(key, time.Now(), scope); ok && !(d.Verdict == verdictDefer && d.NoDuration && durationSecs > 0) {
+		return d.Artist, orDefault(d.Track, trimmedTrack), d.Verdict == verdictMatch || d.Verdict == verdictKeep
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, lastfmCatalogBudget)
@@ -291,6 +296,9 @@ func (c *lastfmCatalogMatcher) resolve(ctx context.Context, artist, track string
 		log.Printf("lastfm catalog: lookup %q / %q failed: %v (keeping as-is, not cached)", trimmedArtist, trimmedTrack, err)
 		return artist, track, false
 	}
+	if d.Verdict == verdictDefer && durationSecs <= 0 {
+		d.NoDuration = true
+	}
 	c.store(key, d)
 	switch d.Verdict {
 	case verdictMatch:
@@ -306,7 +314,7 @@ func (c *lastfmCatalogMatcher) resolve(ctx context.Context, artist, track string
 		log.Printf("lastfm catalog: defer %q / %q (nothing catalogued: %s; recheck after %s)",
 			trimmedArtist, trimmedTrack, d.Own.summary(), recheck)
 	}
-	return d.Artist, orDefault(d.Track, trimmedTrack), d.Verdict == verdictMatch
+	return d.Artist, orDefault(d.Track, trimmedTrack), d.Verdict == verdictMatch || d.Verdict == verdictKeep
 }
 
 func orDefault(s, fallback string) string {

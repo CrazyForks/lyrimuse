@@ -210,6 +210,10 @@ func (p *poller) settleLastfmPending(s *playSession) bool {
 	if s.lastfmPending == nil || !lastfmScrobblePointReached(s) {
 		return false
 	}
+	if p.exitFlushCtx != nil {
+		p.settleLastfmPendingSync(p.exitFlushCtx, s)
+		return true
+	}
 	l := s.lastfmPending
 	s.lastfmPending, s.lastfmSettled = nil, true
 	p.mirrorScrobbleTracked(l.artistName, l.meta.Title, l.meta.albumForUpload(), l.startedAt, l.meta.Artist, l.meta.Duration, l.meta.NotAudio)
@@ -233,7 +237,7 @@ func (p *poller) settleLastfmPendingSync(ctx context.Context, s *playSession) {
 	}
 	l := s.lastfmPending
 	s.lastfmPending, s.lastfmSettled = nil, true
-	p.mirrorScrobbleSync(withCatalogDurationUnknown(ctx, l.meta.NotAudio), l.artistName, l.meta.Title, l.meta.albumForUpload(), l.startedAt, l.meta.Artist, l.meta.Duration)
+	p.mirrorScrobbleSync(withCatalogDurationUnknown(ctx, l.meta.NotAudio), l.artistName, l.meta.Title, l.meta.albumForUpload(), l.startedAt, l.meta.Artist, l.meta.Duration, l.meta.NotAudio)
 	if p.lfm == nil {
 		appendListen(l.meta.Artist, l.meta.Title, l.meta.albumForUpload(), l.startedAt, l.meta.Duration)
 	}
@@ -392,6 +396,10 @@ type poller struct {
 	// 只给退出兜底用:上一首刚 finalize、它的提交还在飞时进程要退出,run() 不再等 submitDoneCh,
 	// 这一条的 Last.fm 镜像、本地收听日志、LB 待重发全都没人管(见 drainSubmitsOnExit)。只在主循环上读写。
 	submitsInflight map[*playSession]submitOutcome
+	// exitFlushCtx:进程正在退出(run() 的最后一次 flush)时是那次 flush 的 ctx,平时 nil。非 nil 时
+	// settleLastfmPending 改走同步变体:退出兜底里 drainSubmitsOnExit 结算的那些会话要发 Last.fm,异步 goroutine
+	// 活不过紧接着的 return,而「已镜像」标记在发之前就落了盘,被截断的那一条从此谁都不会再发。只在主循环上读写。
+	exitFlushCtx context.Context
 	// bridge() 里读 Last.fm(lastfmRecent,8s 超时)改到后台 goroutine 跑,结果经这个
 	// channel 送回单一 poll 主循环处理——理由同 submitDoneCh/announceDoneCh:Last.fm
 	// 一慢,同步调用会连带堵住 poll() 后面紧接着的 pushRelayState,让网页刷新(包括
@@ -628,8 +636,26 @@ func recordFailedMirror(err error, rawArtist, title, album string, timestamp int
 // 一次 flush 用:mirrorAsync 起的 goroutine 活不过紧接着的进程退出(审阅
 // 确认的竞态 —— 标记已落盘、请求没发出去,这首歌对 Last.fm 永久丢失),退出路径必须
 // 拿 flush 的 ctx 同步把请求发完。
-func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album string, timestamp int64, rawArtist string, durationSecs float64) {
+func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album string, timestamp int64, rawArtist string, durationSecs float64, notAudio bool) {
 	if p.lfm == nil || timestamp <= 0 {
+		return
+	}
+	// 幂等守卫排在已熔断分支前面:活路径已经处理过这一条(发了、或者已经留过痕)时,退出这一拍不能再留一次痕、
+	// 再排一次重发。
+	if p.lfmMirrored[timestamp] {
+		return
+	}
+	// 标记同样先于熔断分支:这一条将来经回填 / 重发队列补进 Last.fm 时,bridge 靠它认出是自己写的,
+	// 不当 iPhone 收听再转发一遍(同 mirrorScrobbleTracked)。
+	p.lfmMirrored[timestamp] = true
+	p.lfmMirroredSet.save(p.lfmMirrored)
+	if ctx.Err() != nil {
+		// 退出兜底的时限在轮到这一条之前就用完了(前面几条同步提交、LB 提交慢):请求根本不会发出去,
+		// 按「确定没发」留痕、排进重发队列,别让下面那次注定失败的调用把它当成「不确定」隔离掉。
+		notSent := errors.Join(errLastfmNotSent, ctx.Err())
+		recordFailedMirror(notSent, rawArtist, title, album, timestamp, durationSecs)
+		enqueueLastfmRetryIfSafe(notSent, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album,
+			Duration: durationSecs, NotAudio: notAudio})
 		return
 	}
 	if p.lfm.dead.Load() {
@@ -637,20 +663,17 @@ func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album st
 		// 不能漏,进程正要结束,没有"下一拍"能补。
 		deadErr := &lastfmAPIError{Code: 9, Message: "mirror disabled (credentials judged dead)", Method: "track.scrobble"}
 		recordFailedMirror(deadErr, rawArtist, title, album, timestamp, durationSecs)
-		enqueueLastfmRetryIfSafe(deadErr, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album, Duration: durationSecs})
+		enqueueLastfmRetryIfSafe(deadErr, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album,
+			Duration: durationSecs, NotAudio: notAudio})
 		return
 	}
-	if p.lfmMirrored[timestamp] {
-		return
-	}
-	p.lfmMirrored[timestamp] = true
-	p.lfmMirroredSet.save(p.lfmMirrored)
 	if err := p.lfm.scrobble(ctx, artist, title, album, timestamp, durationSecs); err != nil {
 		log.Printf("lastfm mirror scrobble (final flush) failed: %v", err)
 		// 退出路径同样要留痕 —— 而且这里比活路径更需要:进程正在退出,没有"下一拍"
 		// 可言。这条是同步调用,本来就在主 goroutine 上,不涉及上面那条并发约束。
 		recordFailedMirror(err, rawArtist, title, album, timestamp, durationSecs)
-		enqueueLastfmRetryIfSafe(err, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album, Duration: durationSecs})
+		enqueueLastfmRetryIfSafe(err, lfmRetryItem{User: p.lfm.user, Timestamp: timestamp, Artist: artist, Title: title, Album: album,
+			Duration: durationSecs, NotAudio: notAudio})
 	}
 }
 
@@ -1108,6 +1131,9 @@ type submitOutcome struct {
 	// 保留这个字段是为了两条路径永远同源,而不是因为它还需要被加工。
 	artistName string
 	startedAt  int64
+	// lm:当初发给 LB 的那份载荷。失败进待重发队列时原样用它,不再对 meta 重算 lbMeta —— 重算会带上歌词、
+	// 对已经结束的曲目还可能触发一次首次联网解析(trackEnrichment)。
+	lm lbTrackMeta
 	// lastfmOnly:这条是开着「短于 30 秒的曲目」放进来的短曲目,没发 ListenBrainz(见
 	// shortTrackLastfmOnly);err 恒为 nil,applySubmitOutcome 据此换一行日志。
 	lastfmOnly bool
@@ -1153,11 +1179,11 @@ func (p *poller) submitSingleAsync(sess *playSession, meta snapshot, startedAt i
 	if p.submitsInflight == nil {
 		p.submitsInflight = map[*playSession]submitOutcome{}
 	}
-	p.submitsInflight[sess] = submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt}
+	p.submitsInflight[sess] = submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt, lm: lm}
 	go func() {
 		err := p.lb.submit(p.ctx, "single", startedAt, lm)
 		select {
-		case p.submitDoneCh <- submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt, err: err}:
+		case p.submitDoneCh <- submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt, lm: lm, err: err}:
 		case <-p.ctx.Done():
 		}
 	}()
@@ -1209,8 +1235,14 @@ func (p *poller) applySubmitOutcome(r submitOutcome) {
 		log.Printf("submit listen failed: %v", r.err)
 		// 会话已经结束就不会再有人重试它(播放中每拍重试只管当前会话),交给待重发队列;
 		// LB 明确拒收(4xx)的重发也没用,不进队列。
-		if r.sess.ended && !errors.Is(r.err, errListenRejected) {
-			enqueueLBRetry(r.startedAt, lbMeta(r.meta))
+		if errors.Is(r.err, errListenRejected) {
+			// LB 明确不收这条(内容本身的问题,令牌被拒是另一种错误、不走这里):重发多少次都一样,标成已处理,
+			// 免得歌还在放时每拍再发一次。
+			r.sess.listenSent = true
+			return
+		}
+		if r.sess.ended {
+			enqueueLBRetry(r.startedAt, r.lm)
 		}
 		return
 	}
@@ -1565,7 +1597,7 @@ func (p *poller) bridge(now time.Time) {
 	if p.cfg.LastfmUser == "" || p.cfg.lastfmBridgeAPIKey() == "" {
 		return
 	}
-	if p.bridgeFetching {
+	if p.bridgeFetching || lastfmRecentRateLimited(now) {
 		return
 	}
 	localPlaying := p.cur.Playing && p.isTracked()
@@ -1654,6 +1686,19 @@ func (p *poller) applyBridgeForwardResults(results []bridgeForwardResult) {
 	p.pushRelayState(time.Now(), false)
 }
 
+// lfmNowPlayingEcho:Last.fm 上这条「正在播放」是不是我们自己镜像写进去的。先按本地当前曲目比(原来的判据),
+// 再按最近一次实际发出去的写法比 —— 编目匹配 / 合唱截断改写过的歌手名,跟本地标签比不上。
+func (p *poller) lfmNowPlayingEcho(artist, title string, now time.Time) bool {
+	if p.lfm == nil {
+		return false
+	}
+	if p.cur.Title != "" && looseContains(artist, p.cur.Artist) && looseContains(title, p.cur.Title) {
+		return true
+	}
+	sa, st := p.lfm.sentNowPlayingAt(now)
+	return st != "" && looseContains(artist, sa) && looseContains(title, st)
+}
+
 // bridgeForwardingEnabled:iPhone→ListenBrainz 桥接(转发完成收听 + 镜像远端 now-playing)
 // 的既有门槛。之前它跟"要不要拉 Last.fm"是同一个判断,现在拉取只看 Last.fm
 // 凭据(见 bridge()),这里单独保住 LB 那半边的条件不变。
@@ -1732,6 +1777,21 @@ func (p *poller) applyBridgeResult(r bridgeFetchResult) {
 			m.AdditionalInfo["media_player"] = mediaPlayerLabelIPhone // 这条桥接固定是 iPhone 上的 Apple Music,不受本地 Mac 播放器选择影响
 			pending = append(pending, bridgeForwardItem{uts: s.UTS, meta: m, track: snapshot{Title: s.Title, Artist: s.Artist, Album: s.Album, Remote: true}})
 		}
+		// 本机经回填 / 重发队列补进 Last.fm 的收听:它们的时间戳不在 lfmMirrored 里(回填是独立的子命令进程,
+		// 重发队列补的可能是早被修剪掉的旧条目),却有收听日志里的 "s" 回执。不排除的话会被当成 iPhone 新收听
+		// 再转发给 ListenBrainz 一次(LB 已经从 Mac 路径收过)。只在真有候选时读一次日志。
+		if len(pending) > 0 {
+			receipts := listenLogReceiptTimestamps()
+			kept := pending[:0]
+			for _, it := range pending {
+				if receipts[it.uts] {
+					p.forwarded[it.uts], fwdChanged = true, true
+					continue
+				}
+				kept = append(kept, it)
+			}
+			pending = kept
+		}
 		// 提交放后台:LB 一次提交中位约 1.1 秒、慢时十几秒,手机一次同步上来好几条时串行跑在主循环里
 		// 会卡住十几到几十秒(暂停、换歌都察觉不到)。按顺序提交、失败即停这个语义留在后台那一轮里,
 		// 结果交回主循环再记进 forwarded。上一轮还在飞时不另起一轮:挑出来的条目还没记进 forwarded,
@@ -1765,7 +1825,7 @@ func (p *poller) applyBridgeResult(r bridgeFetchResult) {
 		p.remoteAt = time.Time{} // iPhone 也停了 → 中继转"上次播放"
 		return
 	}
-	if p.lfm != nil && looseContains(np.Artist, p.cur.Artist) && looseContains(np.Title, p.cur.Title) && p.cur.Title != "" {
+	if p.lfmNowPlayingEcho(np.Artist, np.Title, now) {
 		// Last.fm 上的"正在播放"跟本地 Mac 当前/最近曲目同名——很可能是我们自己刚
 		// 镜像写入、Mac 已暂停但 Last.fm 侧还没自然过期的残留状态,不是真实 iPhone
 		// 在放同一首歌。宁可漏判(小概率两台设备真放同一首)也不能误判成 iPhone。
@@ -2025,7 +2085,8 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 	if cfg.StateRelayURL != "" && cfg.User != "" && lb != nil {
 		go seedLastListen(ctx, lb.apiRoot(), cfg.User, p.lastListenSeedCh)
 	}
-	if cfg.User != "" && cfg.Token != "" && lb != nil {
+	if lb != nil {
+		// 不看启动时有没有令牌:令牌可能是之后热重读才填上的。没有令牌的那几轮由循环自己跳过(见 startLBRetryLoop)。
 		go startLBRetryLoop(ctx, lb) // 会话结束后才失败的收听,后台重发,见 lbretry.go
 	}
 	go startLfmRetryLoop(ctx)           // 确定没写进 Last.fm 的收听,后台重发,见 lfmretry.go
@@ -2042,6 +2103,7 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 			// Best-effort final flush with a fresh context.
 			flushCtx, cancel := context.WithTimeout(context.Background(), submitTimeout)
 			defer cancel()
+			p.exitFlushCtx = flushCtx
 			p.drainSubmitsOnExit()
 			// 这条退出兜底路径直接调 mirrorScrobbleSync/lb.submit,不经过 submitSingleAsync,
 			// 所以广告判据要在这里再挡一次(见 isAdBreak)。
@@ -2084,8 +2146,14 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 				p.pushScrobble(p.sess.meta, p.sess.startedAt.Unix(), "mac")
 			}
 			// 活路径上已经发出去的 Last.fm 写入(mirrorAsync)活不过紧接着的进程退出,而它们的「已镜像」标记在
-			// 发请求之前就落了盘 —— 被截断的那一条从此谁都不会再发。在 flush 的时限内等它们发完。
-			if n := waitMirrorsInflight(flushCtx); n > 0 {
+			// 发请求之前就落了盘 —— 被截断的那一条从此谁都不会再发。等它们发完。
+			//
+			// 单独给一段时限,不跟 flushCtx 共用:上面 LB 同步提交慢的时候会把 flushCtx 用光,这里就一毫秒都等不了。
+			// 它们在后台是跟上面那几步同时跑的,这段只是收尾;flushCtx 15 秒 + 这 4 秒仍在 launchd 默认 20 秒的
+			// 退出宽限之内。
+			waitCtx, cancelWait := context.WithTimeout(context.Background(), exitMirrorWait)
+			defer cancelWait()
+			if n := waitMirrorsInflight(waitCtx); n > 0 {
 				log.Printf("lastfm: exiting with %d mirror write(s) still in flight", n)
 			}
 			return nil

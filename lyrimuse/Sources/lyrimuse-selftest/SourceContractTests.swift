@@ -1045,7 +1045,7 @@ func runSourceContractTests() {
             //    另起一步切换。
             expectEqual(reloadGo?.contains(" = cur.") ?? true, false,
                         "配置热重读: featuresreload.go 不该在快照里保留旧值(next.X = cur.X)")
-            expectEqual(reloadGo?.contains("go switchLyricsDir(next.LyricsDir)") ?? false, true,
+            expectEqual(reloadGo?.contains("switchLyricsDir(next.LyricsDir)") ?? false, true,
                         "配置热重读: 改了 lyrics_dir 要拉起 switchLyricsDir,否则歌词文件夹停在启动时那个")
 
             // ②' config.json 热重读:main() 登记路径,坏 JSON 保留当前快照。

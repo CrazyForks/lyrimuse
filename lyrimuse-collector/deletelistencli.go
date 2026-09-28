@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -52,12 +51,20 @@ func runDeleteListenCLI(args []string) {
 	// **不能**调 initListenLog:那个会顺带跑一次 compactListenLog,把超限的老记录一并
 	// 截掉 —— 用户点的是"删这一条",不该附带一次静默的历史清理。
 	setListenLogPath(filepath.Join(filepath.Dir(resolved), clientName+"-listens.jsonl"))
+	// Last.fm 重发队列跟收听日志在同一个目录。删掉的收听要从队列里一并拿掉,不然凭据失效 / 限流期间听的、
+	// 同时排在队列里的那些,重新授权之后照样会被后台重发交上去 —— 而 Last.fm 上的记录几乎删不掉。
+	lfmRetryPath = filepath.Join(filepath.Dir(resolved), clientName+"-lastfm-retry.json")
 
 	deleted, remaining, err := deleteListensByUTS(utsList)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "delete-listen: %v\n", err)
 		os.Exit(1)
 	}
+	drop := make(map[int64]bool, len(utsList))
+	for _, u := range utsList {
+		drop[u] = true
+	}
+	dropLfmRetryTimestamps(drop)
 	if *asJSON {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
 			Deleted   int `json:"deleted"`
@@ -112,10 +119,11 @@ func deleteListensByUTS(targets []int64) (deleted, remaining int, err error) {
 	// 在跨进程锁内读全文再重写:常驻进程这期间追加的收听不会被改名替换掉(见 lockListenLogFile)。
 	unlock := lockListenLogFile(listenLogPath)
 	defer unlock()
-	lines := readListenLogAt(listenLogPath)
-	kept := make([]listenLogLine, 0, len(lines))
+	// 按原始字节挑行:解不开的行留着(它不属于任何时间戳,删不到它头上),留下的行原样写回。
+	lines := readListenLogRawAt(listenLogPath)
+	kept := make([]listenLogRawLine, 0, len(lines))
 	for _, line := range lines {
-		if drop[line.UTS] {
+		if line.parsed && drop[line.line.UTS] {
 			deleted++
 			continue
 		}
@@ -126,32 +134,8 @@ func deleteListensByUTS(targets []int64) (deleted, remaining int, err error) {
 		return 0, len(lines), nil
 	}
 
-	tmp := listenLogPath + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return 0, 0, fmt.Errorf("建临时文件失败: %w", err)
-	}
-	w := bufio.NewWriter(f)
-	for _, line := range kept {
-		data, err := json.Marshal(line)
-		if err != nil {
-			continue
-		}
-		if _, err := w.Write(append(data, '\n')); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return 0, 0, fmt.Errorf("写临时文件失败: %w", err)
-		}
-	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return 0, 0, fmt.Errorf("刷新临时文件失败: %w", err)
-	}
-	f.Close()
-	if err := os.Rename(tmp, listenLogPath); err != nil {
-		os.Remove(tmp)
-		return 0, 0, fmt.Errorf("替换日志失败: %w", err)
+	if err := rewriteListenLogAt(listenLogPath, kept); err != nil {
+		return 0, 0, fmt.Errorf("重写收听日志失败: %w", err)
 	}
 	return deleted, len(kept), nil
 }

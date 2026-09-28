@@ -2,8 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
+	"syscall"
 )
+
+// exclusiveFileLock 拿 path+".lock" 的跨进程排他锁,返回释放函数。拿不到(文件建不了、flock 失败)就不锁、照常往下走,
+// 跟收听日志那把锁(lockListenLogFile)同一个取舍:锁是为了不丢并发写入,不能反过来让写入本身失败。
+func exclusiveFileLock(path string) func() {
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		slog.Warn("file lock unavailable, continuing without it", "path", path, "err", err)
+		return func() {}
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		slog.Warn("flock failed, continuing without it", "path", path, "err", err)
+		return func() {}
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}
+}
 
 // mergeMissingFromDisk 存盘前把盘上那份里、这份没有的条目并进 keep(只收 keep 函数认可的非空值)。
 //

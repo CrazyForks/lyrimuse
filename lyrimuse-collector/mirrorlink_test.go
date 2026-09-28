@@ -353,7 +353,7 @@ func TestMirrorScrobbleSync(t *testing.T) {
 
 	t.Run("成功:标记、不写日志", func(t *testing.T) {
 		env := newMirrorPoller(t, func() (string, error) { return acceptedOne, nil })
-		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "A", 200)
+		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "A", 200, false)
 		if env.requests.Load() != 1 || !env.p.lfmMirrored[uts] || !env.markedBeforeSend.Load() {
 			t.Errorf("应先标记再同步发一次: requests=%d", env.requests.Load())
 		}
@@ -364,31 +364,32 @@ func TestMirrorScrobbleSync(t *testing.T) {
 	t.Run("已标记过:不重发", func(t *testing.T) {
 		env := newMirrorPoller(t, func() (string, error) { return acceptedOne, nil })
 		env.p.lfmMirrored[uts] = true
-		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "A", 200)
+		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "A", 200, false)
 		if env.requests.Load() != 0 {
 			t.Error("已镜像过的时间戳不该再发")
 		}
 	})
 	t.Run("网络中断:l + q", func(t *testing.T) {
 		env := newMirrorPoller(t, func() (string, error) { return "", errors.New("connection reset by peer") })
-		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200)
+		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200, false)
 		if k := logKinds(uts); k != "lq" {
 			t.Errorf("不确定发没发到应记 lq,got %q", k)
 		}
 	})
 	t.Run("凭据失效:只写 l", func(t *testing.T) {
 		env := newMirrorPoller(t, func() (string, error) { return `{"error":9,"message":"Invalid session key"}`, nil })
-		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200)
+		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200, false)
 		if k := logKinds(uts); k != "l" {
 			t.Errorf("确定没落库应只写 l,got %q", k)
 		}
 	})
-	t.Run("已熔断:不发、不标记、只写 l", func(t *testing.T) {
+	t.Run("已熔断:不发、标记、只写 l", func(t *testing.T) {
 		env := newMirrorPoller(t, func() (string, error) { return acceptedOne, nil })
 		env.p.lfm.dead.Store(true)
-		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200)
-		if env.requests.Load() != 0 || env.p.lfmMirrored[uts] {
-			t.Error("已熔断不该发请求、不该标记")
+		env.p.mirrorScrobbleSync(ctx, "A", "S", "", uts, "Raw", 200, false)
+		// 标记跟活路径(mirrorScrobbleTracked)一致:这一条之后经回填补进 Last.fm 时 bridge 要认得出是自己的。
+		if env.requests.Load() != 0 || !env.p.lfmMirrored[uts] {
+			t.Error("已熔断不该发请求,但要标记")
 		}
 		if k := logKinds(uts); k != "l" {
 			t.Errorf("已熔断这一条确定没写进去,应只写 l,got %q", k)

@@ -205,16 +205,18 @@ func topArtistsAllPeriods(ctx context.Context, user, apiKey string, limit int, r
 			log.Printf("top-artists: period %s failed: %v", r.period, r.err)
 			continue
 		}
-		merged := mergeAliasedArtistsResolved(r.entries, resolve)
-		if len(merged) > limit {
-			merged = merged[:limit]
+		buckets, ids := mergeAliasedArtistBuckets(r.entries, resolve, artistMergeNameKey, artistMergeDisplayName)
+		if len(buckets) > limit {
+			buckets = buckets[:limit]
 		}
 		var ranks []int
 		if r.window != nil && r.window.Listens > 0 {
-			ranks = previousMergedRanks(merged, mergeAliasedArtistsResolved(r.previous, resolve), artistMergeNameKey)
+			prev, prevIDs := mergeAliasedArtistBuckets(r.previous, resolve, artistMergeNameKey, artistMergeDisplayName)
+			ranks = previousBucketRanks(buckets, r.entries, ids, prev, r.previous, prevIDs, artistMergeNameKey)
 		}
-		rows := make([]topArtistsCLIRow, 0, len(merged))
-		for i, e := range merged {
+		rows := make([]topArtistsCLIRow, 0, len(buckets))
+		for i, b := range buckets {
+			e := b.lastfmChartEntry
 			row := topArtistsCLIRow{Name: e.Name, PlayCount: e.PlayCount}
 			if ranks != nil {
 				rank := ranks[i]
@@ -223,6 +225,44 @@ func topArtistsAllPeriods(ctx context.Context, user, apiKey string, limit int, r
 			rows = append(rows, row)
 		}
 		out[r.period] = topArtistsPeriodOutput{Rows: rows, Previous: r.window}
+	}
+	return out
+}
+
+// previousBucketRanks 给本期每一桶找它在上一期榜里的名次,找不到为 0。按桶的**身份**对齐:桶里任一成员的名字键、
+// 任一成员的 mbid 在上一期某桶里出现过就算同一个人。只拿展示名对齐的话,两期的展示名挑法可能不同
+// (本期桶里有「窦靖童」、展示成中文,上一期只有「Leah Dou」、展示成英文),同一个人被标成「新」。
+// 上一期几桶都对得上时取名次最靠前的。
+func previousBucketRanks(current []mergedArtist, curEntries []lastfmChartEntry, curIDs []mbArtistIdentity,
+	previous []mergedArtist, prevEntries []lastfmChartEntry, prevIDs []mbArtistIdentity, nameKey func(string) string) []int {
+	keysOf := func(b mergedArtist, entries []lastfmChartEntry, ids []mbArtistIdentity) []string {
+		keys := []string{"n:" + nameKey(b.Name)}
+		for _, m := range b.members {
+			if m < 0 || m >= len(entries) {
+				continue
+			}
+			keys = append(keys, "n:"+nameKey(entries[m].Name))
+			if m < len(ids) && ids[m].Mbid != "" {
+				keys = append(keys, "m:"+ids[m].Mbid)
+			}
+		}
+		return keys
+	}
+	prevRank := map[string]int{}
+	for i, b := range previous {
+		for _, k := range keysOf(b, prevEntries, prevIDs) {
+			if _, seen := prevRank[k]; k != "n:" && !seen {
+				prevRank[k] = i + 1
+			}
+		}
+	}
+	out := make([]int, len(current))
+	for i, b := range current {
+		for _, k := range keysOf(b, curEntries, curIDs) {
+			if r := prevRank[k]; r > 0 && (out[i] == 0 || r < out[i]) {
+				out[i] = r
+			}
+		}
 	}
 	return out
 }
