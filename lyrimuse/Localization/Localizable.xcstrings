@@ -36690,6 +36690,29 @@
         }
       }
     },
+    "%@ 首这次没法判断，扫完再试一次" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ couldn't be checked this time, will retry at the end"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 首这次没法判断，扫完再试一次"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 首這次無法判斷，掃完再試一次"
+          }
+        }
+      }
+    },
     "最近完成" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -107,6 +108,11 @@ type lyricsFullScanState struct {
 	Total  int `json:"total,omitempty"`
 	Done   int `json:"done,omitempty"`
 	Filled int `json:"filled,omitempty"`
+	// Deferred:这一场里「当前歌词的来源那一轮没应答、没法判断」的 key(rescoreLyrics 返回 true 的那些)。
+	// 整份候选跑完后统一再试一次,见 runLyricsFullScanDeferredKeys。放进这份文件而不是内存:这些条目的
+	// LyricsRescoreTS 已经晚于这一场的起点,续跑时 lyricsFullScanTier 不会再挑它们,重启一次就丢了。
+	// 在 Done 里已经算过一次,再试那一遍不再计 Done。
+	Deferred []string `json:"deferred,omitempty"`
 }
 
 // lyricsFullScanProgressBase 纯函数:给定盘上记着的那一场(可能是空的)和这一轮还剩多少条,
@@ -160,8 +166,62 @@ func saveLyricsFullScanProgress(done, filled int) {
 func resetLyricsFullScanProgress() {
 	updateLyricsFullScanState(func(state *lyricsFullScanState) bool {
 		state.Total, state.Done, state.Filled = 0, 0, 0
+		state.Deferred = nil
 		return true
 	})
+}
+
+// noteLyricsFullScanDeferred 把一条记进待再试的名单(已在名单里就不重复记),返回名单现在的长度。
+func noteLyricsFullScanDeferred(key string) (pending int) {
+	updateLyricsFullScanState(func(state *lyricsFullScanState) bool {
+		pending = len(state.Deferred)
+		if slices.Contains(state.Deferred, key) {
+			return false
+		}
+		state.Deferred = append(state.Deferred, key)
+		pending = len(state.Deferred)
+		return true
+	})
+	return pending
+}
+
+// dropLyricsFullScanDeferred 把再试过的一条从名单里划掉,返回名单现在的长度。
+func dropLyricsFullScanDeferred(key string) (pending int) {
+	updateLyricsFullScanState(func(state *lyricsFullScanState) bool {
+		i := slices.Index(state.Deferred, key)
+		if i < 0 {
+			pending = len(state.Deferred)
+			return false
+		}
+		state.Deferred = slices.Delete(state.Deferred, i, i+1)
+		pending = len(state.Deferred)
+		return true
+	})
+	return pending
+}
+
+// pruneLyricsFullScanDeferred 从名单里去掉这一轮主循环本来就会跑到的 key,返回剩下的名单。
+// 用户按停止再点「开始」是新的一场起点,名单里的条目会重新进候选;不去掉的话同一首会搜两遍。
+func pruneLyricsFullScanDeferred(keys []string) []string {
+	var remaining []string
+	updateLyricsFullScanState(func(state *lyricsFullScanState) bool {
+		if len(state.Deferred) == 0 {
+			return false
+		}
+		inRound := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			inRound[k] = true
+		}
+		for _, k := range state.Deferred {
+			if !inRound[k] {
+				remaining = append(remaining, k)
+			}
+		}
+		changed := len(remaining) != len(state.Deferred)
+		state.Deferred = remaining
+		return changed
+	})
+	return remaining
 }
 
 // lyricsFullScanSearchEstimate:一首歌那一轮全源搜索的粗略耗时。
@@ -201,6 +261,7 @@ func setLyricsFullScanStatePath(path string) {
 			if state.Active {
 				state.StartedAt = time.Now().Unix()
 			}
+			state.Deferred = nil
 		}
 		state.ScoringVersion = lyricsScoringVersion
 		state.SecondsPerTrack = lyricsFullScanSecondsPerTrack()
@@ -384,7 +445,7 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 	// 外层 round 同 lyricsFillSweepOne:看里层这一轮连没连上任何歌词源。
 	roundCtx, round := withLyricSourceRound(ctx)
 	// 同步跑:rescoreLyrics 自己 defer 清 enrichInflight,并负责落盘/导出/通知重推。
-	rescoreLyrics(withBackgroundOutbound(roundCtx), key, artist, title, album, duration)
+	deferred := rescoreLyrics(withBackgroundOutbound(roundCtx), key, artist, title, album, duration)
 	enrichMu.Lock()
 	after := enrichCache[key]
 	enrichMu.Unlock()
@@ -393,7 +454,8 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 	return lyricsSweepOutcome{
 		filled: after.Lyrics != before.Lyrics || after.LyricsYRC != before.LyricsYRC ||
 			after.LyricsTr != before.LyricsTr,
-		offline: !round.reachedAny(),
+		offline:  !round.reachedAny(),
+		deferred: deferred && round.reachedAny(),
 	}
 }
 

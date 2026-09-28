@@ -26,6 +26,9 @@ enum FillSweepProgressText {
                           status.done.formatted(), status.total.formatted())]
         if status.isFullScan {
             out.append(String(format: L10n.t("已更新 %@ 首"), status.filled.formatted()))
+            if status.deferredCount > 0 {
+                out.append(String(format: L10n.t("%@ 首这次没法判断，扫完再试一次"), status.deferredCount.formatted()))
+            }
         } else {
             out.append(String(format: L10n.t("补全 %1$@ · 没找到 %2$@ · 跳过 %3$@"),
                               "\(status.filled)", "\(status.missedCount)", "\(status.skippedCount)"))
@@ -37,11 +40,13 @@ enum FillSweepProgressText {
         return out
     }
 
-    /// 最近完成那一条的结果图标。全量那一轮的 missed 是「重选后没变」,换成等号图标。
+    /// 最近完成那一条的结果图标。全量那一轮的 missed 是「重选后没变」,换成等号图标;deferred 是「这一轮
+    /// 没法判断」,用稍后再试的图标。
     static func recentSymbol(_ item: LyricsFillSweep.Info.Recent, isFullScan: Bool) -> String {
         switch item.result {
         case "filled": return "checkmark.circle"
         case "skipped": return "forward.circle"
+        case "deferred": return "clock.arrow.circlepath"
         default: return isFullScan ? "equal.circle" : "xmark.circle"
         }
     }

@@ -1107,6 +1107,11 @@ func runLyricsManagerTests() {
          "recent":[{"key":"范逸臣|革命|無樂不作","result":"filled"},{"key":"A|B|C","result":"missed"}]}
         """.utf8))
         expectEqual(detailed?.skippedCount, 2, "补空进度: skipped 解出来")
+        expectEqual(detailed?.deferredCount, 0, "全量进度: 没有 deferred 键(omitempty / 旧版)读成 0")
+        let deferred = try? JSONDecoder().decode(S.Info.self, from: Data("""
+        {"running":true,"manual":true,"full":true,"total":5000,"done":10,"filled":3,"deferred":2,"startedAt":1,"updatedAt":2}
+        """.utf8))
+        expectEqual(deferred?.deferredCount, 2, "全量进度: deferred 解出来")
         expectEqual(detailed?.missedCount, 5, "补空进度: 没找到 = done - filled - skipped")
         expectEqual(detailed?.recent?.first, S.Info.Recent(key: "范逸臣|革命|無樂不作", result: "filled"),
                     "补空进度: recent 解出来、新的在前")

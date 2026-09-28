@@ -55,6 +55,7 @@
 "%@ 首待搜" = "%@ to search";
 "%@ 首待跟进" = "%@ to catch up";
 "%@ 首歌" = "%@ songs";
+"%@ 首这次没法判断，扫完再试一次" = "%@ couldn't be checked this time, will retry at the end";
 "%@pt" = "%@pt";
 "%@–%@pt" = "%@–%@pt";
 "%@更新" = "Updated %@";

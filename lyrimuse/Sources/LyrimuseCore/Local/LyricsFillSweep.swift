@@ -44,13 +44,16 @@ public enum LyricsFillSweep {
         public let offline: Bool?
         /// `done` 里轮到时已经不需要搜(被删 / 被手改 / 已有词)、没发请求的条数。可选:collector 带 `omitempty`,旧版也不写。
         public let skipped: Int?
-        /// 最近跑完的几条,新的在前(collector 最多留 3 条,只在补搜时记)。可选,理由同上。
+        /// 全量扫库里「当前歌词的来源那一轮没应答、没法判断」、等整份候选跑完后再试一次的条数
+        /// (见 collector 的 runLyricsFullScanDeferredKeys)。可选:collector 带 `omitempty`,旧版也不写。
+        public let deferred: Int?
+        /// 最近跑完的几条,新的在前(collector 最多留 3 条)。可选,理由同上。
         public let recent: [Recent]?
 
         /// 最近跑完的一条:缓存 key 与结果。
         public struct Recent: Decodable, Equatable, Sendable {
             public let key: String
-            /// filled / missed / skipped;认不出的按 missed 显示。
+            /// filled / missed / skipped / deferred(只有全量扫库会出现);认不出的按 missed 显示。
             public let result: String
 
             public init(key: String, result: String) {
@@ -61,6 +64,9 @@ public enum LyricsFillSweep {
 
         /// 见 `skipped`。字段缺席读成 0。
         public var skippedCount: Int { skipped ?? 0 }
+
+        /// 见 `deferred`。字段缺席读成 0。
+        public var deferredCount: Int { deferred ?? 0 }
 
         /// 搜了、没找到的条数。
         public var missedCount: Int { max(done - filled - skippedCount, 0) }
@@ -77,7 +83,8 @@ public enum LyricsFillSweep {
         public init(running: Bool, manual: Bool, full: Bool? = nil, total: Int, done: Int, filled: Int,
                     roundDone: Int? = nil,
                     current: String?, startedAt: Int64, updatedAt: Int64, finishedAt: Int64?,
-                    cancelled: Bool?, offline: Bool? = nil, skipped: Int? = nil, recent: [Recent]? = nil) {
+                    cancelled: Bool?, offline: Bool? = nil, skipped: Int? = nil, deferred: Int? = nil,
+                    recent: [Recent]? = nil) {
             self.running = running
             self.manual = manual
             self.full = full
@@ -92,6 +99,7 @@ public enum LyricsFillSweep {
             self.cancelled = cancelled
             self.offline = offline
             self.skipped = skipped
+            self.deferred = deferred
             self.recent = recent
         }
     }

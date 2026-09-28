@@ -118,10 +118,14 @@ type lyricsSweepOutcome struct {
 	offline bool
 	// skipped:轮到它时已经不需要搜了(被删 / 被手改 / 已有词 / 正在别处解析),没发请求。
 	skipped bool
+	// deferred:只有全量扫库会置。连上了歌词源,但当前歌词的来源没应答,这一轮没法判断、什么都没改
+	// (见 rescoreDecidable)。整份候选跑完后再试一次。
+	deferred bool
 }
 
-// lyricsFillRecent 是最近跑完的一条,给界面列「刚才搜了哪几首、结果如何」。Result 取 filled / missed / skipped;
-// 全量扫库那一轮 filled = 歌词更新了、missed = 重选后没变(不是「没找到」),界面按 Full 换措辞和图标。
+// lyricsFillRecent 是最近跑完的一条,给界面列「刚才搜了哪几首、结果如何」。Result 取 filled / missed / skipped /
+// deferred;全量扫库那一轮 filled = 歌词更新了、missed = 重选后没变(不是「没找到」)、deferred = 这一轮没法判断,
+// 界面按 Full 换措辞和图标。
 type lyricsFillRecent struct {
 	Key    string `json:"key"`
 	Result string `json:"result"`
@@ -137,6 +141,8 @@ func (s *lyricsFillStatus) noteRecent(key string, out lyricsSweepOutcome) {
 		result = "skipped"
 	case out.filled:
 		result = "filled"
+	case out.deferred:
+		result = "deferred"
 	}
 	s.Recent = append([]lyricsFillRecent{{Key: key, Result: result}}, s.Recent...)
 	if len(s.Recent) > lyricsFillRecentMax {
@@ -169,6 +175,8 @@ type lyricsFillStatus struct {
 	Offline bool `json:"offline,omitempty"`
 	// Skipped:Done 里轮到时已经不需要搜、没发请求的条数(Done - Filled - Skipped 就是搜了没找到的)。
 	Skipped int `json:"skipped,omitempty"`
+	// Deferred:全量扫库里等着最后再试一次的条数(lyricsFullScanState.Deferred 的长度)。
+	Deferred int `json:"deferred,omitempty"`
 	// Recent:最近跑完的几条,新的在前,见 lyricsFillRecent。
 	Recent []lyricsFillRecent `json:"recent,omitempty"`
 }
@@ -410,6 +418,10 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 		setLyricsFullScanActive(true)
 	}
 	keys := lyricsFillSweepCandidates(req)
+	var deferred []string
+	if req.full {
+		deferred = pruneLyricsFullScanDeferred(keys)
+	}
 	status := lyricsFillStatus{
 		Running: true, Manual: req.manual, Full: req.full,
 		Total: len(keys), StartedAt: time.Now().Unix(),
@@ -418,10 +430,11 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 	// 不走这条 —— 它一轮就是一轮,没有"续跑"这回事。
 	if req.full {
 		status.Total, status.Done, status.Filled = lyricsFullScanBaseline(len(keys))
+		status.Deferred = len(deferred)
 	}
 	writeLyricsFillStatus(status)
-	slog.Info("lyrics fill sweep: start", "manual", req.manual, "full", req.full, "candidates", len(keys))
-	if len(keys) == 0 {
+	slog.Info("lyrics fill sweep: start", "manual", req.manual, "full", req.full, "candidates", len(keys), "deferred", len(deferred))
+	if len(keys) == 0 && len(deferred) == 0 {
 		status.Running = false
 		status.FinishedAt = time.Now().Unix()
 		writeLyricsFillStatus(status)
@@ -433,6 +446,9 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 		return
 	}
 	status = runLyricsFillSweepKeys(ctx, keys, req.full, lyricsFillSweepPace(req.manual), status)
+	if req.full && !status.Cancelled && !status.Offline {
+		status = runLyricsFullScanDeferredKeys(ctx, lyricsFillSweepPace(req.manual), status)
+	}
 	status.Running = false
 	status.Current = ""
 	status.FinishedAt = time.Now().Unix()
@@ -464,8 +480,30 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 // 往下走的话,断网期间剩下的每一首都会白搜一轮,收据上还显示成「搜了、没补出来」。
 // 搜到一半被停(ctx 取消)的那一条什么都没写,同样不算进度。
 func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, gap time.Duration, status lyricsFillStatus) lyricsFillStatus {
+	return runSweepKeys(ctx, keys, full, false, gap, status)
+}
+
+// runLyricsFullScanDeferredKeys 是全量扫库的收尾:把主循环里「没法判断」的那几首(lyricsFullScanState.Deferred)
+// 各再试一次。只试这一次,再没法判断就放下 —— 日志里同一首接连没法判断的,多半是当前来源已经不收录它了,
+// 再试也一样。断网停下、被取消时没试到的留在名单里,续跑时接着试。
+func runLyricsFullScanDeferredKeys(ctx context.Context, gap time.Duration, status lyricsFillStatus) lyricsFillStatus {
+	keys := readLyricsFullScanState().Deferred
+	status.Deferred = len(keys)
+	if len(keys) == 0 {
+		return status
+	}
+	slog.Info("lyrics full scan: retrying deferred", "count", len(keys))
+	return runSweepKeys(ctx, keys, true, true, gap, status)
+}
+
+// runSweepKeys:retry = true 是全量扫库收尾那一遍(runLyricsFullScanDeferredKeys),这些条目在 Done 里已经
+// 算过一次,只更新 Filled 和待再试名单。
+func runSweepKeys(ctx context.Context, keys []string, full, retry bool, gap time.Duration, status lyricsFillStatus) lyricsFillStatus {
 	offlineStreak := 0
 	var wait time.Duration
+	if retry {
+		wait = gap
+	}
 	for i := 0; i < len(keys); {
 		if wait > 0 {
 			lyricsFillSweepWait(ctx, wait)
@@ -500,13 +538,21 @@ func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, gap t
 		if out.filled {
 			status.Filled++
 		}
-		if out.skipped {
-			status.Skipped++
-		}
 		status.noteRecent(keys[i], out)
-		status.Done++
-		status.RoundDone++
 		status.Current = ""
+		switch {
+		case retry:
+			status.Deferred = dropLyricsFullScanDeferred(keys[i])
+		default:
+			if out.skipped {
+				status.Skipped++
+			}
+			if full && out.deferred {
+				status.Deferred = noteLyricsFullScanDeferred(keys[i])
+			}
+			status.Done++
+			status.RoundDone++
+		}
 		// 先落盘再写状态:进程在这两行之间被杀时,宁可界面少算一条,也不要续跑时把已经
 		// 跑过的那条重新算进"还剩"。
 		if full {

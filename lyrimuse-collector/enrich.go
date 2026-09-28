@@ -1772,8 +1772,11 @@ func needsLyricsRescore(e enrichEntry, pinned, autoUpgrade bool) bool {
 //  2. 只有这一轮的结果够格推翻旧决定才认并盖版本号(见 rescoreDecidable);不够格就只记
 //     一次尝试、隔一段时间再来。
 //
+// 返回 true = 走到了"不够格"那一支:当前歌词的来源这一轮没应答,什么都没改。全量扫库靠它把这首
+// 留到整份候选跑完后再试一次(见 lyricsFullScanState.Deferred)。条目被删 / 被手改、ctx 被取消都返回 false。
+//
 // ctx 同 retryLyricsUpgrade。
-func rescoreLyrics(ctx context.Context, key, artist, title, album string, durationSecs float64) {
+func rescoreLyrics(ctx context.Context, key, artist, title, album string, durationSecs float64) (deferred bool) {
 	defer func() {
 		enrichMu.Lock()
 		delete(enrichInflight, key)
@@ -1792,7 +1795,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	roundCtx, queries := withLyricQueryLog(roundCtx)
 	_, scored := scoredLyricCandidates(roundCtx, artist, title, album, durationSecs)
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	reached := round.reachedAny()
 	// 用户选定过源就只在那个源内重选,见 LyricsSourceChoice 字段注释。
@@ -1840,13 +1843,13 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	e, ok := enrichCache[key]
 	if !ok {
 		// 重搜这段时间里这条被用户在"歌词管理"里删掉了 —— 不要把它复活回去。
-		return
+		return false
 	}
 	// 期间用户可能刚好手改或采纳了这条(重搜是异步的,进来时的快照已经过期)。跟删除同理:
 	// 以拿锁这一刻的实际状态为准,不能用几秒前的判断结果去覆盖用户刚做的改动。采纳候选在开关
 	// 关着时不置 ManualLyrics,所以还要看改动序号。
 	if e.ManualLyrics || enrichEditedSinceLocked(key, stamp) {
-		return
+		return false
 	}
 	// 换了打分版本后的第一次尝试:旧版本下的计数作废、从零开始(见 LyricsRescoreVersion 注释)。
 	if e.LyricsRescoreVersion != lyricsScoringVersion {
@@ -1884,6 +1887,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	}
 	switch {
 	case !decidable:
+		deferred = true
 		log.Printf("lyrics rescore deferred: %s  current source %q did not answer this round (responded: %v)",
 			key, currentSource, lyricSourcesResponded(scored))
 	case picked == nil:
@@ -1942,6 +1946,7 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	}
 	enrichCache[key] = e
 	enrichDirty = true
+	return deferred
 }
 
 // peripheralQQURL 外围补全后生效的 QQ 链接:只在这一轮**真的升级了**(拿到真·歌曲页)时才覆盖 ——
