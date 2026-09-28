@@ -180,6 +180,8 @@ struct LyricsLibraryStatsPanel: View {
     @State private var fillSweepStarting = false
     /// 全量扫描确认开始后、collector 接手前的过渡状态,清法同上。
     @State private var fullScanStarting = false
+    /// 进度圆环点开的详情(`FillSweepProgressDetail`)。两行一次只有一行在跑,共用这一个。
+    @State private var progressDetailShown = false
 
     private static let snapshotHolder = "settings-library-stats"
 
@@ -246,8 +248,11 @@ struct LyricsLibraryStatsPanel: View {
         .onDisappear { store.releaseSnapshot(Self.snapshotHolder) }
         .task(id: windowVisible) {
             guard windowVisible else { return }
-            await store.reload(onlyIfChanged: true)
+            // 两份状态文件先读,再重读缓存:这一块每次进页面都是新建的,状态从 nil 起步,而 reload 要把整份
+            // 缓存按指纹过一遍、下面的循环还要先睡一拍 —— 后读的话,扫库明明在跑,这两行头几秒显示的是「开始」。
+            fillSweepStatus = LyricsFillSweep.current
             fullScanState = LyricsFullScan.current
+            await store.reload(onlyIfChanged: true)
             while !Task.isCancelled {
                 let starting = fillSweepStarting || fullScanStarting
                 try? await Task.sleep(for: .seconds(starting ? 1 : (fillSweepStatus?.running == true ? 2 : 5)))
@@ -434,17 +439,7 @@ struct LyricsLibraryStatsPanel: View {
         ) {
             HStack(spacing: 10) {
                 if sweepRunning, let status {
-                    ProgressView(value: Double(status.done), total: Double(max(status.total, 1)))
-                        .progressViewStyle(.circular)
-                        .controlSize(.small)
-                    Text(Self.runningText(status))
-                        .font(.system(size: 11))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        // 剩余时间按**这一轮的实测速度**算。放 tooltip 不放正文:这一行 11pt
-                        // 的空间塞不下第三段文字。
-                        .help(Self.remainingText(status, fallbackSecondsPerTrack: secondsPerTrack))
+                    progressButton(status, fallbackSecondsPerTrack: FillSweepProgressText.fillFallbackSecondsPerTrack)
                     Button(L10n.t("停止")) { LyricsFillSweep.requestCancel() }
                         .controlSize(.small)
                         .fixedSize()
@@ -496,6 +491,35 @@ struct LyricsLibraryStatsPanel: View {
         guard status.done > 0 else { return nil }
         return String(format: L10n.t("上次搜索 %1$@ 首，补全 %2$@ 首"),
                       format(status.done), format(status.filled))
+    }
+
+    /// 两行跑着时行尾的进度圆环 +「扫描中 3/82」,整块是一颗按钮:点开是跟「歌词管理」工具栏菜单同样的进度详情
+    /// (此刻在搜哪首、结果分布、大约还要多久、最近完成的几首)。这一行 11pt 的空间只放得下计数,其余的都在详情里。
+    ///
+    /// 剩余时间按**这一轮的实测速度**算:真实速度受源的响应快慢影响很大,这一轮自己跑出来的数是自校正的。
+    /// 按钮消失(这一轮跑完 / 停下)时把详情收起,免得下一轮一开跑它自己弹出来。
+    private func progressButton(_ status: LyricsFillSweep.Info, fallbackSecondsPerTrack: Double) -> some View {
+        Button {
+            progressDetailShown.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                ProgressView(value: Double(status.done), total: Double(max(status.total, 1)))
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                Text(Self.runningText(status))
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(Self.remainingText(status, fallbackSecondsPerTrack: fallbackSecondsPerTrack))
+        .popover(isPresented: $progressDetailShown, arrowEdge: .bottom) {
+            FillSweepProgressDetail(status: status, fallbackSecondsPerTrack: fallbackSecondsPerTrack)
+        }
+        .onDisappear { progressDetailShown = false }
     }
 
     /// 两行跑着时行尾那段文字。上一首一个歌词源都没连上时 collector 在原地等网络,说这个,
@@ -590,18 +614,7 @@ struct LyricsLibraryStatsPanel: View {
             ) {
                 HStack(spacing: 10) {
                     if fullRunning, let status {
-                        ProgressView(value: Double(status.done), total: Double(max(status.total, 1)))
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                        Text(Self.runningText(status))
-                            .font(.system(size: 11))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            // 剩余时间按**这一轮的实测速度**算,不用上面那个估计常量:真实
-                            // 速度受源的响应快慢影响很大,而这一轮自己跑出来的数是自校正的。
-                            // 放 tooltip 不放正文:这一行 11pt 的空间塞不下第三段文字。
-                            .help(Self.remainingText(status, fallbackSecondsPerTrack: secondsPerTrack))
+                        progressButton(status, fallbackSecondsPerTrack: secondsPerTrack)
                         Button(L10n.t("停止")) { LyricsFillSweep.requestCancel() }
                             .controlSize(.small)
                             .fixedSize()
