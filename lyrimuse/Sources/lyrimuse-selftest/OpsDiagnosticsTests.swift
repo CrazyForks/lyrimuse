@@ -539,7 +539,7 @@ func runOpsDiagnosticsTests() {
         // 超时：这是这个类型存在的全部理由。
         // 不加超时的话这一句会等满 10 秒 —— 而 Music.app 卡住时 osascript 会等 60 秒。
         let started = Date()
-        let slept = ProcessRunner.run("/bin/sleep", ["10"], timeout: 1)
+        let slept = ProcessRunner.run("/bin/sleep", ["10"], timeout: 0.2)
         let elapsed = Date().timeIntervalSince(started)
         expectEqual(slept?.timedOut, true, "ProcessRunner: 超时的命令标记 timedOut")
         expectEqual(slept?.succeeded, false, "ProcessRunner: 超时不算成功")
@@ -591,14 +591,14 @@ func runOpsDiagnosticsTests() {
         }
 
         let started = Date()
-        let first = ask("a", timeout: 0.2, stuck)
+        let first = ask("a", timeout: 0.05, stuck)
         let firstReturned = first.done.wait(timeout: .now() + 3) == .success
         expectEqual(firstReturned, true, "闸门: 调用卡住时,等待者按超时返回")
         expectEqual(first.value, nil, "闸门: 超时的等待者拿到 nil")
         expectEqual(Date().timeIntervalSince(started) < 2, true, "闸门: 超时不陪卡住的调用一起等")
         expectEqual(gate.isInFlight("a"), true, "闸门: 等待者超时后,底下那次调用仍记为在飞")
 
-        let second = ask("a", timeout: 0.2, stuck)
+        let second = ask("a", timeout: 0.05, stuck)
         _ = second.done.wait(timeout: .now() + 3)
         expectEqual(second.value, nil, "闸门: 在飞期间再请求同一个 key,同样按超时返回")
         expectEqual(calls.value, 1, "闸门: 同一个 key 在飞时不另起调用(不会越卡越多线程)")

@@ -1696,18 +1696,12 @@ func runPlaybackPositionTests() {
         probe.platformBrowserPairs = [:] // 确保没有任何配对
         let key = "selftest-pairing-gate-key"
         probe.kickIfNeeded(bundleIdentifier: "company.thebrowser.Browser", key: key, expectedDuration: 240)
-        // 没配对过任何平台,kickIfNeeded 应该在发起探测之前就直接返回——短暂等待后确认
-        // 没有任何结果被缓存(如果门禁失效、真的发起了探测,这里会因为异步任务还没跑完
-        // 而是 nil,也会因为跑完了拿到真实值而非 nil,两种情况这条断言都盖不住;门禁生效
-        // 时唯一保证的是"从头到尾都不会有值"——所以额外拉长等待,给"万一门禁失效"的探测
-        // 留够时间跑完,这样"仍是 nil"才是门禁生效的可靠证据)。
-        // 探测改成"两次采样 + 中间等 `livenessGapSeconds`"之后这 2 秒仍然够:
-        // 这个用例把配对表清空了,门禁**万一**失效,`probeOnce` 也会因为没有任何规则匹配得上
-        // 而立刻返回 nil、根本走不到那次等待。盖不住的只有"门禁失效**且**真有配对"的组合,
-        // 而那不是这条用例要证明的东西。
-        Thread.sleep(forTimeInterval: 2.0)
-        expectEqual(probe.consumeCorrection(forKey: key, rate: 1, now: Date()), nil,
+        // 没配对过任何平台,kickIfNeeded 应该在发起探测之前就直接返回。发起探测时计数是同步加的,
+        // 所以调用一返回就能看:不用等探测跑完,探测很快跑完返回 nil 的情况也盖得住。
+        expectEqual(probe.probeAttempts(forKey: key), 0,
                     "浏览器歌词同步: 没配对任何平台时 kickIfNeeded 不应该发起探测")
+        expectEqual(probe.consumeCorrection(forKey: key, rate: 1, now: Date()), nil,
+                    "浏览器歌词同步: 没配对任何平台时没有探测结果")
         probe.trackChanged()
         probe.platformBrowserPairs = [:]
         // Spotify 网页版广告识别:LocalPlaybackSource

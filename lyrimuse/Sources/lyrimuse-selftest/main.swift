@@ -2,8 +2,8 @@ import LyrimuseCore
 import Foundation
 
 // lyrimuse-selftest 的入口:只放「注册表 + 参数 + 汇总」。断言本身按领域放在同目录的
-// XxxTests.swift 里,每个文件一个 runXxxTests(),由下面的 groups 表按顺序调用;断言函数与
-// 计数器在 Harness.swift。
+// XxxTests.swift 里,每个文件一个 runXxxTests(),由下面的 groups 表调用;断言函数与
+// 计数器在 Harness.swift。默认各组各起一个子进程同时跑,输出按表里的顺序打出(见 runInParallel)。
 //
 // 加断言:
 //   - 已有领域 → 写进对应文件的 runXxxTests() 函数体里(顺序执行,失败只计数不中断),
@@ -18,6 +18,7 @@ import Foundation
 //   lyrimuse-selftest                    全部组,每条断言一行 ok/FAIL
 //   lyrimuse-selftest --filter lastfm    只跑组名含 lastfm 的组(可重复给多个;不区分大小写)
 //   lyrimuse-selftest --quiet            不打 ok 行,只留 FAIL + 每组一行汇总
+//   lyrimuse-selftest --serial           所有组在本进程里一组接一组跑
 //   lyrimuse-selftest --list             列出所有组
 // 退出码:0 全部通过;1 有 FAIL;2 参数错误,或 --filter 一组都没匹配上(手滑拼错不能拿到假绿)。
 
@@ -26,6 +27,9 @@ struct TestGroup {
     let name: String
     /// --list 里的一句话说明。
     let summary: String
+    /// 默认各组各起一个子进程同时跑。一组要碰跨进程共享的东西 —— 固定路径的文件、别的组也读写的
+    /// UserDefaults 键、真实的 App / 服务 —— 就设成 true:等并行那批跑完,再单独跑。
+    var exclusive = false
     /// 标成 @MainActor:原先这些断言是 main.swift 的顶层语句、天然跑在主 actor 上,拆进函数后
     /// 要显式保住这层隔离,否则引用 Core 里 @MainActor 的属性会报「nonisolated context」。
     let run: @MainActor () -> Void
@@ -65,15 +69,22 @@ let groups: [TestGroup] = [
 // ---- 参数 ----
 
 let usage = """
-用法: lyrimuse-selftest [--filter <组名子串>]... [--quiet] [--list]
+用法: lyrimuse-selftest [--filter <组名子串>]... [--quiet] [--serial] [--list]
   --filter, -f <子串>   只跑组名包含该子串的组(不区分大小写;可重复)
   --quiet,  -q          不打 ok 行,只留 FAIL 与每组一行汇总
+  --serial              所有组在本进程里一组接一组跑(默认各组各起一个子进程同时跑)
   --list,   -l          列出所有组后退出
   --help,   -h          本说明
 """
 
 var filters: [String] = []
 var listOnly = false
+var serial = false
+/// 运行器给子进程传的:只跑这一组、不跑注册表守卫,最后一行报计数。
+let childFlag = "--child-group"
+/// 子进程最后一行:`<前缀> <断言数> <失败数>`,运行器靠它汇总。
+let childCountsPrefix = "@@selftest-counts"
+var childGroup: String?
 var badArgument: String?
 var argIterator = CommandLine.arguments.dropFirst().makeIterator()
 while let arg = argIterator.next() {
@@ -82,6 +93,14 @@ while let arg = argIterator.next() {
         quietOutput = true
     case "--list", "-l":
         listOnly = true
+    case "--serial":
+        serial = true
+    case childFlag:
+        if let value = argIterator.next(), !value.isEmpty {
+            childGroup = value
+        } else {
+            badArgument = arg
+        }
     case "--help", "-h":
         print(usage)
         exit(0)
@@ -108,6 +127,16 @@ if listOnly {
         print("\(group.name)\t\(group.summary)")
     }
     exit(0)
+}
+
+if let name = childGroup {
+    guard let group = groups.first(where: { $0.name == name }) else {
+        fputs("lyrimuse-selftest: 没有叫 \(name) 的组\n", stderr)
+        exit(2)
+    }
+    runGroup(group)
+    print("\(childCountsPrefix) \(assertions) \(failures)")
+    exit(failures == 0 ? 0 : 1)
 }
 
 let selected = filters.isEmpty
@@ -149,16 +178,11 @@ do {
 // ---- 逐组运行 + 汇总 ----
 
 let runStarted = Date()
-for group in selected {
-    let assertionsBefore = assertions
-    let failuresBefore = failures
-    let started = Date()
-    // 顶层代码在这个包的语言模式下不是主 actor 上下文,直接调 @MainActor 函数编不过;selftest
-    // 只有主线程,所以在这里断言一次「就在主 actor 上」再调,跟各组里原有的 MainActor.assumeIsolated 同一路数。
-    MainActor.assumeIsolated { group.run() }
-    let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
-    let failed = failures - failuresBefore
-    print("## \(group.name): \(assertions - assertionsBefore) 条断言\(failed == 0 ? "" : ", \(failed) 条 FAIL"), \(elapsedMs) ms")
+if serial || selected.count == 1 {
+    for group in selected { runGroup(group) }
+} else {
+    runInParallel(selected.filter { !$0.exclusive })
+    for group in selected where group.exclusive { runGroup(group) }
 }
 let totalMs = Int(Date().timeIntervalSince(runStarted) * 1000)
 let scope = filters.isEmpty ? "\(groups.count) 组" : "\(selected.count)/\(groups.count) 组(--filter \(filters.joined(separator: ",")))"
@@ -169,3 +193,76 @@ if passed {
     print("\n\(scope) · \(assertions) 条断言 · \(failures) FAILURE(S)")
 }
 exit(passed ? 0 : 1)
+
+/// 在本进程里跑一组,打一行这组的汇总。
+func runGroup(_ group: TestGroup) {
+    let assertionsBefore = assertions
+    let failuresBefore = failures
+    let started = Date()
+    // 顶层代码在这个包的语言模式下不是主 actor 上下文,直接调 @MainActor 函数编不过;selftest
+    // 只有主线程,所以在这里断言一次「就在主 actor 上」再调,跟各组里原有的 MainActor.assumeIsolated 同一路数。
+    MainActor.assumeIsolated { group.run() }
+    let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+    let failed = failures - failuresBefore
+    print("## \(group.name): \(assertions - assertionsBefore) 条断言\(failed == 0 ? "" : ", \(failed) 条 FAIL"), \(elapsedMs) ms")
+}
+
+/// 每组起一个子进程(本程序 + `--child-group <组名>`),同时跑的不超过 CPU 核数。各组的输出收齐之后按表里的
+/// 顺序原样打出,计数从子进程最后一行读出来加进总数。子进程起不来、超时、或没报计数,都记一条 FAIL 并打出它的输出。
+func runInParallel(_ batch: [TestGroup]) {
+    let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
+    let passThrough = quietOutput ? ["-q"] : []
+    let outputs = ParallelGroupOutputs(count: batch.count)
+    let slots = DispatchSemaphore(value: max(2, ProcessInfo.processInfo.activeProcessorCount))
+    let done = DispatchGroup()
+    for (i, group) in batch.enumerated() {
+        slots.wait()
+        done.enter()
+        DispatchQueue.global().async {
+            outputs.slots[i] = ProcessRunner.run(executable, [childFlag, group.name] + passThrough,
+                                                 timeout: 900, captureStderr: true)
+            slots.signal()
+            done.leave()
+        }
+    }
+    done.wait()
+    for (i, group) in batch.enumerated() {
+        guard let result = outputs.slots[i] else {
+            failures += 1
+            print("FAIL - \(group.name): 子进程起不来")
+            continue
+        }
+        var lines = result.stdoutText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.last == "" { lines.removeLast() }
+        let counts = lines.last.flatMap { last -> (Int, Int)? in
+            let fields = last.split(separator: " ")
+            guard fields.count == 3, fields[0] == childCountsPrefix,
+                  let a = Int(fields[1]), let f = Int(fields[2]) else { return nil }
+            return (a, f)
+        }
+        if counts != nil { lines.removeLast() }
+        if !lines.isEmpty { print(lines.joined(separator: "\n")) }
+        if !result.stderrText.isEmpty { fputs(result.stderrText, stderr) }
+        if let (a, f) = counts, !result.timedOut {
+            assertions += a
+            failures += f
+        } else {
+            failures += 1
+            let why = result.timedOut ? "超时被杀" : "没报计数就退出了(退出码 \(result.status))"
+            print("FAIL - \(group.name): 子进程\(why)")
+        }
+    }
+}
+
+/// 并发跑子进程时各自写自己那一格,互不重叠。
+final class ParallelGroupOutputs: @unchecked Sendable {
+    let slots: UnsafeMutableBufferPointer<ProcessRunner.Result?>
+    init(count: Int) {
+        slots = .allocate(capacity: count)
+        slots.initialize(repeating: nil)
+    }
+    deinit {
+        slots.deinitialize()
+        slots.deallocate()
+    }
+}

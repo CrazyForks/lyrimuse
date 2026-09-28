@@ -802,6 +802,13 @@ public final class BrowserPositionProbe: @unchecked Sendable {
         Self.logger.notice("probe: resumed, reopening per-track probe budget (key=\(key, privacy: .public))")
     }
 
+    /// 这首歌(`key`)发起过几次探测,换歌清零。发起那一刻同步计数,不等探测跑完。
+    public func probeAttempts(forKey key: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return attemptKey == key ? attemptCount : 0
+    }
+
     /// 如果这个 bundle id 受支持、这首歌还没消费过一次探测结果、且当前没有正在飞的同
     /// 曲目探测,踢一次新的——异步、**不阻塞调用方**,结果就绪时写回 `cached` 供
     /// `consumeCorrection` 用。这首歌一旦被消费过一次就不再重新探测(见类头注),避免

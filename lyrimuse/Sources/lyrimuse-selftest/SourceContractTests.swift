@@ -270,10 +270,12 @@ func runSourceContractTests() {
                 guard let text = try? String(contentsOfFile: uiSources.appendingPathComponent(rel).path,
                                              encoding: .utf8) else { continue }
                 scannedFiles += 1
+                // 逐字符扫在 debug 构建下很慢:不含 Slider( 的文件直接跳过,扫的时候先比首字符。
+                guard sourceBytes(text, contain: "Slider(") else { continue }
                 let chars = Array(text)
                 var i = 0
                 while i + needle.count <= chars.count {
-                    guard Array(chars[i ..< (i + needle.count)]) == needle else { i += 1; continue }
+                    guard chars[i] == needle[0], Array(chars[i ..< (i + needle.count)]) == needle else { i += 1; continue }
                     // 前一个字符是标识符字符 = 这是 SteppedSlider( / volumeSlider( 这类别的名字,
                     // 不是对原生 Slider 的直接调用。
                     let prev: Character? = i > 0 ? chars[i - 1] : nil
@@ -2015,7 +2017,7 @@ func runSourceContractTests() {
         var platformTables: [String] = []
         if let walker = FileManager.default.enumerator(atPath: appSources.path) {
             for case let rel as String in walker where rel.hasSuffix(".swift") {
-                guard let text = read(rel) else { continue }
+                guard let text = read(rel), sourceBytes(text, contain: "case \"youtubeMusic\"") else { continue }
                 let hit = text.split(separator: "\n", omittingEmptySubsequences: false).contains { raw in
                     let line = String(raw).trimmingCharacters(in: .whitespaces)
                     return !line.hasPrefix("//") && !line.hasPrefix("///")
@@ -2727,6 +2729,8 @@ func runSourceContractTests() {
             for case let url as URL in files where url.pathExtension == "swift" {
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 scanned += 1
+                // 整个文件一个 API 都没有就不用逐行切。
+                guard glassAPIs.contains(where: { sourceBytes(text, contain: $0) }) else { continue }
                 let rel = url.path.replacingOccurrences(of: appSources.path + "/", with: "")
                 var uses = false
                 for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
@@ -2816,6 +2820,7 @@ func runSourceContractTests() {
                 scanned += 1
                 let rel = url.path.replacingOccurrences(of: appSources.path + "/", with: "")
                 if rel == "AppExit.swift" { continue }
+                guard sourceBytes(text, contain: "terminate(") else { continue }
                 for (lineNo, line) in codeLines(text)
                 where line.contains("NSApp.terminate(") || line.contains("NSApplication.shared.terminate(") {
                     offenders.append("\(rel):\(lineNo)")
@@ -3094,7 +3099,8 @@ func runSourceContractTests() {
         var callSites: [String] = []
         if let walker = FileManager.default.enumerator(atPath: appSources.path) {
             for case let rel as String in walker where rel.hasSuffix(".swift") {
-                guard rel != "LyricsManager/LyricsSearchSheet.swift", let text = read(rel) else { continue }
+                guard rel != "LyricsManager/LyricsSearchSheet.swift", let text = read(rel),
+                      sourceBytes(text, contain: "LyricsSearchSheet(") else { continue }
                 let hit = text.split(separator: "\n").contains { raw in
                     let line = raw.trimmingCharacters(in: .whitespaces)
                     return !line.hasPrefix("//") && line.contains("LyricsSearchSheet(")
@@ -3532,6 +3538,11 @@ func runSourceContractTests() {
         for path in swiftFiles(under: "lyrimuse/Sources/LyrimuseCore") + swiftFiles(under: "lyrimuse/Sources/lyrimuse") {
             let name = path.split(separator: "/").last.map(String.init) ?? path
             if name == "LyrimuseIdentity.swift" { continue }
+            // 整个文件一个字面量都没有就不用逐行切(下面每一条都要求行里含其中之一)。
+            let markers = [".config/lyrimuse", "Library/Logs/lyrimuse", "\"com.lyrimuse.collector",
+                           "\"me.yudaotor.lyrimuse\"", "/Applications/Lyrimuse.app"]
+            guard let whole = try? String(contentsOfFile: path, encoding: .utf8),
+                  markers.contains(where: { sourceBytes(whole, contain: $0) }) else { continue }
             for (n, code) in codeLines(path) {
                 if code.contains("L10n.t(") { continue }   // 面向用户的文案里写路径是给人看的,不是取值
                 if code.contains(".config/lyrimuse") { offenders.append("\(name):\(n) .config/lyrimuse") }
@@ -3556,6 +3567,10 @@ func runSourceContractTests() {
         let ownPathMarkers = [".config", "library/logs", "lyrimuse", "clientname"]
         var externalHomeUses = 0
         for f in ((try? fm.contentsOfDirectory(atPath: goDir)) ?? []).filter({ $0.hasSuffix(".go") && !$0.hasSuffix("_test.go") && $0 != "paths.go" }).sorted() {
+            // 下面每一条都要求行里含这几段之一,整个文件都没有就不用逐行切。
+            guard let goText = try? String(contentsOfFile: goDir + "/" + f, encoding: .utf8),
+                  ["\".config\", clientName", ".config/lyrimuse\"", "Library/Logs", "os.UserHomeDir()"]
+                    .contains(where: { sourceBytes(goText, contain: $0) }) else { continue }
             let lines = codeLines(goDir + "/" + f)
             for (n, code) in lines {
                 if code.contains("\".config\", clientName") || code.contains(".config/lyrimuse\"") { goOffenders.append("\(f):\(n) 配置目录") }
@@ -4161,5 +4176,16 @@ func runSourceContractTests() {
         expectEqual(fonts.contains("CustomFontFile.isSupported(url)"), true, "设置判定走 Core: 导入字体的格式判断")
         expectEqual(fonts.contains("CTFontManagerCreateFontDescriptorsFromURL"), false, "设置判定走 Core: 族名读取不在 App 里另写一份")
         expectEqual(code("UI/FontFamilyPicker.swift").contains("CustomFontFile.importSummary("), true, "设置判定走 Core: 导入字体的失败提示")
+    }
+}
+
+/// 整个源文件里有没有这段文字,按 UTF-8 字节找。拿来先筛掉不相干的文件:`String.contains` 对整个文件
+/// 逐字符比,debug 构建下比逐行切还慢;按字节找得到的一定包含按字符找得到的,筛的时候不会漏。
+func sourceBytes(_ text: String, contain needle: String) -> Bool {
+    var hay = text, pattern = needle
+    return hay.withUTF8 { h in
+        pattern.withUTF8 { p in
+            p.isEmpty || (h.count >= p.count && memmem(h.baseAddress, h.count, p.baseAddress, p.count) != nil)
+        }
     }
 }

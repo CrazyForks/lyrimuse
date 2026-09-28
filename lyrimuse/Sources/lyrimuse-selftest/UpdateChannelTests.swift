@@ -47,15 +47,23 @@ func runUpdateChannelTests() {
             .deletingLastPathComponent().deletingLastPathComponent()
         let script = repoRoot.appendingPathComponent("lyrimuse/scripts/build-version.sh").path
         expectEqual(FileManager.default.isExecutableFile(atPath: script), true, "交叉校验: build-version.sh 在且可执行")
-        for tag in order + ["v0.0.0", "v2.0.0-rc.499", "v2.0.0-beta.399", "v2.0.0-alpha.99", "1.6.0-beta.2"] {
-            let result = ProcessRunner.run("/bin/bash", [script, tag], timeout: 10)
+        let accepted = order + ["v0.0.0", "v2.0.0-rc.499", "v2.0.0-beta.399", "v2.0.0-alpha.99", "1.6.0-beta.2"]
+        let rejected = ["v1.6", "v1.6.0-beta", "v1.6.0-foo.1", "v1.6.0-beta.400", "v01.6.0", "v1.6.0-beta.01",
+                        "1.6.0.1000", "v1.6.0-BETA.1", ""]
+        // 每个 tag 起一次 bash,各次互不相干:并发跑,串行要一秒多。
+        let tags = accepted + rejected
+        let results = UpdateChannelScriptResults(count: tags.count)
+        DispatchQueue.concurrentPerform(iterations: tags.count) { i in
+            results.slots[i] = ProcessRunner.run("/bin/bash", [script, tags[i]], timeout: 10)
+        }
+        for (i, tag) in accepted.enumerated() {
+            let result = results.slots[i]
             expectEqual(result?.succeeded, true, "交叉校验: 脚本接受 \(tag)")
             expectEqual(result?.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines), V(tag: tag)?.buildNumberString,
                         "交叉校验: \(tag) 两边构建号一致")
         }
-        for bad in ["v1.6", "v1.6.0-beta", "v1.6.0-foo.1", "v1.6.0-beta.400", "v01.6.0", "v1.6.0-beta.01",
-                    "1.6.0.1000", "v1.6.0-BETA.1", ""] {
-            let result = ProcessRunner.run("/bin/bash", [script, bad], timeout: 10)
+        for (i, bad) in rejected.enumerated() {
+            let result = results.slots[accepted.count + i]
             expectEqual(result?.succeeded, false, "交叉校验: 脚本同样拒绝 \(bad.isEmpty ? "空串" : bad)")
         }
     }
@@ -115,5 +123,18 @@ func runUpdateChannelTests() {
             let newest = U.newestRelease(live ?? [])
             expectEqual(newest != nil, true, "真网: 挑得出版本最高的 Release(\(newest?.tag ?? "-"))")
         }
+    }
+}
+
+/// 并发跑脚本时各自写自己那一格,互不重叠。
+private final class UpdateChannelScriptResults: @unchecked Sendable {
+    let slots: UnsafeMutableBufferPointer<ProcessRunner.Result?>
+    init(count: Int) {
+        slots = .allocate(capacity: count)
+        slots.initialize(repeating: nil)
+    }
+    deinit {
+        slots.deinitialize()
+        slots.deallocate()
     }
 }
