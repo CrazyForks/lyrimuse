@@ -265,14 +265,6 @@ func qqClientSearchAt(ctx context.Context, base, query string) ([]qqSearchItem, 
 	return qqClientSearchItems(out), nil
 }
 
-// qqSmartbox queries QQ Music's suggest endpoint. 它不再是歌名维度的
-// 主路线,而是 qqClientSearch 的兜底——理由和实测对比见 qqClientSearch 的头注。
-// Returns nil on error.
-func qqSmartbox(ctx context.Context, query string) []qqSmartboxItem {
-	d, _ := qqSmartboxRaw(ctx, query)
-	return d.Song.ItemList
-}
-
 // qqSmartboxAlbums 是同一个 suggest 接口的 **album 分类**——专辑维度检索路线
 // (resolveQQMatchViaAlbum)用它找专辑 mid。跟 song 分类同一次请求形态,条目字段也同形
 // (mid/name/singer)。error 非 nil 表示**网络层失败**(超时/非 200/解码失败),跟"接口
@@ -462,7 +454,7 @@ func qqSearchItemsFromSmartbox(items []qqSmartboxItem) []qqSearchItem {
 }
 
 // qqSingerAvatar 给"历史播放 Top10 歌手"(见 topartists.go)查一张歌手头像,复用
-// smartbox_new.fcg 这同一个免认证接口,但读的是响应里的"singer"分类(qqSmartbox 只读
+// smartbox_new.fcg 这同一个免认证接口,但读的是响应里的"singer"分类(歌名检索只读
 // "song"分类,两者是同一份 JSON 里并列的不同板块,需各自独立请求、不能共用同一个
 // http.Response)。只取第一个结果,不做 artistMatches 那类严格核验——这里只是找一张
 // 装饰用的头像,不是核实版权归属,找错了最多是头像不准,不像歌词/封面匹配错那样是
@@ -480,8 +472,8 @@ type qqSingerSuggestion struct {
 	Pic  string
 }
 
-// qqSingerSuggestions 查 QQ 音乐的歌手搜索建议——用 qqSmartbox 同一个免认证接口,读的是
-// "singer"分类(qqSmartbox 只读"song"分类,是同一份 JSON 里并列的不同板块)。
+// qqSingerSuggestions 查 QQ 音乐的歌手搜索建议——用 qqSmartboxRaw 同一个免认证接口,读的是
+// "singer"分类(歌名检索只读"song"分类,是同一份 JSON 里并列的不同板块)。
 //
 // 返回值第二项区分"服务端正常应答"(true,itemlist 可能是空——服务端明确说没有这个歌手)
 // 和"网络/状态码/解码失败"(false,这次没查到任何结论,不代表"确认没有")——调用方各自

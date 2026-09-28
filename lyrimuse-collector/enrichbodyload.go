@@ -138,13 +138,8 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 	return st
 }
 
-// readEnrichBody 读一份正文小文件,自洽才返回(读不到、解不开、校验值对不上内容都是 nil)。
-func readEnrichBody(path string) *enrichBody {
-	b, _ := readEnrichBodyChecked(path)
-	return b
-}
-
-// readEnrichBodyChecked 同 readEnrichBody,另外交回「文件在、却读不出来」的 I/O 错误(不存在、内容坏了都不算)。
+// readEnrichBodyChecked 读一份正文小文件,自洽才返回(不存在、解不开、校验值对不上内容都是 nil);
+// 另外交回「文件在、却读不出来」的 I/O 错误(不存在、内容坏了都不算)。
 func readEnrichBodyChecked(path string) (*enrichBody, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
