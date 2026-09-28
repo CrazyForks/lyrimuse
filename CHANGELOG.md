@@ -107,6 +107,9 @@ Fixed / 修复
 - Fixed lyrics and controls breaking when a browser video took over Now
   Playing
   修复浏览器视频抢走「正在播放」后，歌词消失、播放控制失灵的问题
+- Fixed lyrics freezing while AppleScript or Spotify stopped responding for a
+  moment
+  修复 AppleScript 或 Spotify 一时没有响应时，歌词跟着停住不动的问题
 - Fixed Apple Music links, covers and progress failing in some regions and
   languages
   修复部分地区和系统语言下，Apple Music 链接、封面和进度读不出来的问题
@@ -123,8 +126,8 @@ Fixed / 修复
 - Fixed web players showing songs late or with the browser's icon
   修复网页播放器歌曲出现延迟、来源图标不对的问题
 - Fixed cover flicker, stray clicks and display glitches in the desktop
-  lyrics, Dynamic Island and menu bar
-  修复切歌时封面闪烁、点击穿透到下层 App，以及悬浮歌词、灵动岛、菜单栏的多处显示问题
+  lyrics, lyrics window, Dynamic Island and menu bar
+  修复切歌时封面闪烁、点击穿透到下层 App，以及悬浮歌词、歌词窗口、灵动岛、菜单栏的多处显示问题
 - Fixed blurry or jagged lyrics on non-Retina displays and a menu bar that
   kept resizing
   修复普通分辨率显示器上歌词发虚、描边有锯齿，以及菜单栏宽度频繁跳动的问题
@@ -140,7 +143,7 @@ Fixed / 修复
 Not sure which one? Check your chip under **About This Mac**.
 不确定该下哪个？打开「关于本机」看芯片是 Apple M… 还是 Intel Core…
 
-227 commits since v1.8.0.
+239 commits since v1.8.0.
 
 **Full Changelog**: https://github.com/Yudaotor/lyrimuse/compare/v1.8.0...v1.9.0
 
