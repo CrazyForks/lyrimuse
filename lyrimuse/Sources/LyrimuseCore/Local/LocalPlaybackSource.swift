@@ -50,8 +50,9 @@ public final class LocalPlaybackSource: ObservableObject {
     @Published public private(set) var overlayLyrics = LyricsSyncEngine.SurfaceLyrics.empty
     @Published public private(set) var notchLyrics = LyricsSyncEngine.SurfaceLyrics.empty
     @Published public private(set) var menuBarLyrics = LyricsSyncEngine.SurfaceLyrics.empty
-    /// 菜单栏整首里最宽的一行(见 LyricsSyncEngine.widestRow);nil = 没开按宽度断句或还不知道。
-    @Published public private(set) var menuBarWidestRow: CGFloat?
+    /// 菜单栏自适应宽度给整首定的起步槽宽(文字部分):开了按宽度断句是整首最宽的一行(LyricsSyncEngine.widestRow),
+    /// 没开是按 `MenuBarSlotPolicy.songRowQuantile` 取的那一行(LyricsSyncEngine.rowWidth)。nil = 还不知道。
+    @Published public private(set) var menuBarSongRowWidth: CGFloat?
     /// 单行展示面(灵动岛 / 菜单栏)该显示的那一行(「唱完就切到下一句,
     /// 好提前看到歌词跟唱」)。跟 currentLine 的区别是**唱完就切走**;长间奏中段为 nil,
     /// 由 compactShowsPlaceholder 区分成因。规则见 CompactLyricLead —— 它跟歌词窗口的
@@ -235,15 +236,17 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 一个单行展示面报它的宽度预算(一行多宽 + 按它的字体量宽)。断句变了就立刻按当前位置重新发布。
     public func setLineLayoutBudget(_ budget: LineLayoutBudget?, for surface: LyricsSurface) {
         guard syncEngine.setLayoutBudget(budget, for: surface) else { return }
-        if surface == .menuBar { updateMenuBarWidestRow() }
+        if surface == .menuBar { updateMenuBarSongRowWidth() }
         if let pos = anchor?.extrapolatedPositionMs() ?? pausedPositionMs {
             publishSurfaceLyrics(atRawMs: pos)
         }
     }
 
-    private func updateMenuBarWidestRow() {
-        let widest = syncEngine.widestRow(.menuBar)
-        if widest != menuBarWidestRow { menuBarWidestRow = widest }
+    private func updateMenuBarSongRowWidth() {
+        let width = lineBreaks.isActive
+            ? syncEngine.widestRow(.menuBar)
+            : syncEngine.rowWidth(.menuBar, atQuantile: MenuBarSlotPolicy.songRowQuantile)
+        if width != menuBarSongRowWidth { menuBarSongRowWidth = width }
     }
 
     private func publishSurfaceLyrics(atRawMs pos: Int) {
@@ -3588,7 +3591,7 @@ public final class LocalPlaybackSource: ObservableObject {
             songIsHokkien: found?.isHokkien ?? false,
             lineBreaks: lineBreaks
         )
-        updateMenuBarWidestRow()
+        updateMenuBarSongRowWidth()
         // 以前按带 BOM 的正文算过指纹、存下的校正值,先挪到新 key 上(见 LyricsOffsetStore.adoptLegacyKey)。
         LyricsOffsetStore.shared.adoptLegacyKey(
             artist: snapshot.artist ?? "", title: snapshot.title ?? "",

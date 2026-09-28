@@ -46,8 +46,8 @@ func resegmentBenchmark(bodiesDir: String, stride step: Int) {
             engine.load(lyrics: lyrics, lyricsTr: body.lyricsTr ?? "", lyricsRoma: body.lyricsRoma ?? "",
                         lyricsYRC: yrc, lyricsBG: body.lyricsBG ?? "", lineBreaks: enabled ? .all : .off)
             for (surface, budget) in budgets { engine.setLayoutBudget(budget, for: surface) }
-            // 菜单栏整首最宽:开着时 App 加载完就算一次。
-            if enabled { _ = engine.widestRow(.menuBar) }
+            // 菜单栏起步槽宽:App 加载完就算一次,开着是整首最宽,关着按比例取一行。
+            if enabled { _ = engine.widestRow(.menuBar) } else { _ = engine.rowWidth(.menuBar, atQuantile: 0.9) }
             let loadSec = CFAbsoluteTimeGetCurrent() - t0
             let endMs = (engine.allLines(idPrefix: "b").last?.timeMs ?? 0) + 5000
             var tickSec = 0.0, ticks = 0, worst = 0.0

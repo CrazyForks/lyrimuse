@@ -2863,6 +2863,31 @@ public final class LyricsSyncEngine {
         return widest
     }
 
+    /// 一个展示面按原句(不重新断句)量出的每一行的宽,从窄到宽排好后取第 `quantile` 处的那个。一行的宽是
+    /// 主行和这个面显示的译文 / 罗马音那一行里宽的那个;「下一句」不算,同 `MenuBarSlotPolicy.naturalWidth`。
+    /// 那个面没报宽度、没有歌词时为 nil。菜单栏自适应宽度在没开重新断句时拿它给整首定起步槽宽。
+    public func rowWidth(_ surface: LyricsSurface, atQuantile quantile: Double) -> CGFloat? {
+        guard let budget = layoutBudgets[surface], budget.main.maxWidth > 0 else { return nil }
+        var widths: [CGFloat] = []
+        for i in 0..<displayLineCount {
+            let text = displayLineText(i)
+            guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            let lookupMs = usingWords ? wordLines[i].timeMs : baseLines[i].timeMs
+            var w = budget.main.measure(text)
+            if let row = budget.translation, let tr = translationText(timeMs: lookupMs, plainText: text) {
+                w = max(w, row.measure(tr))
+            }
+            if let row = budget.romanization, let ro = romanizationText(timeMs: lookupMs, plainText: text) {
+                w = max(w, row.measure(ro))
+            }
+            widths.append(w)
+        }
+        guard !widths.isEmpty else { return nil }
+        widths.sort()
+        let k = Int((Double(widths.count) * quantile).rounded(.up)) - 1
+        return widths[min(widths.count - 1, max(0, k))]
+    }
+
     /// 一个展示面此刻该显示什么,规则跟 tickQuery 的单行几项相同,只是按这个面的段算。
     public func surfaceTick(_ surface: LyricsSurface, atMs rawPosMs: Int, trackEndMs: Int? = nil) -> SurfaceLyrics {
         let posMs = rawPosMs + effectiveOffsetMs

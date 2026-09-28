@@ -400,6 +400,22 @@ func runSyncEngineTests() {
         expectEqual(oneChar.widestRow(.overlay), 60, "按宽度断句: 整首最宽一行按主行与各行量")
         expectEqual(LyricsSyncEngine().widestRow(.menuBar), nil, "按宽度断句: 没报宽度时不给整首最宽")
 
+        // 没开重新断句:按原句量,取从窄到宽第九成那一行;译文算进这一行的宽,空行不算。
+        let plain = LyricsSyncEngine()
+        let tenLines = zip(1...10, "abcdefghij").map { n, c in
+            String(format: "[00:%02d.00]", n * 3) + String(repeating: c, count: n)
+        }
+        plain.load(lyrics: tenLines.joined(separator: "\n") + "\n[00:40.00]\n",
+                   lyricsTr: "[00:03.00]一句十二个字那么长的一句译文\n", lyricsRoma: "", lyricsYRC: "")
+        expectEqual(plain.rowWidth(.menuBar, atQuantile: 0.9), nil, "起步槽宽: 没报宽度时为 nil")
+        plain.setLayoutBudget(LineLayoutBudget(key: "q", main: .init(maxWidth: 200, measure: measure),
+                                               translation: .init(maxWidth: 200, measure: measure)), for: .menuBar)
+        expectEqual(plain.widestRow(.menuBar), nil, "起步槽宽: 没开重新断句时不给整首最宽")
+        expectEqual(plain.rowWidth(.menuBar, atQuantile: 0.9), measure(String(repeating: "j", count: 10)),
+                    "起步槽宽: 取第九成那一行")
+        expectEqual(plain.rowWidth(.menuBar, atQuantile: 1), measure("一句十二个字那么长的一句译文"),
+                    "起步槽宽: 译文算进这一行的宽")
+
         // 最后两句也能并:最后一句的停留按它唱完的时刻算。
         func tail(_ start: Int, _ text: String, _ end: Int) -> LyricsSegmenter.Line {
             LyricsSegmenter.Line(startMs: start, text: text,

@@ -126,6 +126,11 @@ public enum MenuBarSlotPolicy {
     /// 欠宽均值 42pt、跟 30pt 那档的 39pt 几乎一样,不是新代价。
     public static let shortLineDriftCeiling: CGFloat = 120
 
+    /// 没开按宽度断句时,自适应宽度的起步槽宽取整首哪一行:按宽度从窄到宽排,取这个比例处的那一行
+    /// (`LyricsSyncEngine.rowWidth`)。这一行以内的句子都不改槽宽;更宽的少数几句照旧撑宽、唱完按地板的
+    /// 收缩容差缩回来。取整首最宽会让一句长句把整首都撑满,见 06 章决策 34。
+    public static let songRowQuantile: Double = 0.9
+
     /// 这次**改槽宽**该不该跳过(两个方向对称;原名 `skipsShrink`,只管收缩)。
     ///
     /// - 两个方向同样对待:变化量小于该方向的死区(`minimumShrinkPoints` /
