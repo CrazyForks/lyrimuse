@@ -84,7 +84,7 @@ public enum MediaControlClient {
     private static func artistlessContentNotMusic(bundleID: String, snapshot: MediaControlSnapshot) -> Bool {
         guard TrustedPlayers.artistlessContent(bundleID: bundleID, artist: snapshot.artist,
                                                duration: snapshot.duration, playing: snapshot.playing) else { return false }
-        setSnapshotFailure(.notASong)
+        setSnapshotFailure(.targetNotPlayingMusic)
         gapHoldLock.lock()
         defer { gapHoldLock.unlock() }
         if gapHoldLast?.snapshot.bundleIdentifier == bundleID {
@@ -581,6 +581,10 @@ public enum MediaControlClient {
         case notASong = "the reporting app is trusted but this is not a song"
         case appleScriptUnavailable = "AppleScript could not reach Music.app (no automation permission, not running, or stopped)"
         case playerNotSelected = "the reporting app is not among the players the user selected"
+        /// 报的就是我们要的播放器,但它此刻放的不是歌(KKBOX / Amazon 的播客单集、Amazon 上一次会话留下的陈旧元数据)。
+        /// 跟 `notASong`(别的 App 在放非歌曲内容)不同:这里焦点没被别人占,是这个播放器确实没在放音乐,按短宽限清
+        /// (collector 那边同样交回空状态,约 3 拍清掉)。
+        case targetNotPlayingMusic = "the selected player is reporting something that is not a song"
     }
 
     private static let failureLock = NSLock()
@@ -603,6 +607,14 @@ public enum MediaControlClient {
     /// —— 回退的唯一开关。
     private static let appleMusicFocusLock = NSLock()
     private static var lastAcceptedDirectQueryPlayer: PlaybackPlayer?
+    /// 回退已经问过、确认目标播放器不在了(退出 / stopped / 权限没了),之后还没接受过任何快照。这时焦点虽然还被别人占着,
+    /// 我们要的那个已经不在放:后面几拍回退入口没有目标可问,失败原因要记成「问不到」,不能停在「焦点被占」那一档挂 300 秒。
+    private static var fallbackTargetGone = false
+
+    /// 回退入口没有目标可问时,这一拍的失败原因要不要改记。纯函数,selftest 覆盖。
+    public static func failureWithoutFallbackTarget(targetConfirmedGone: Bool) -> SnapshotFailure? {
+        targetConfirmedGone ? .appleScriptUnavailable : nil
+    }
 
     /// 这个 bundle id 对应的播放器,焦点被占时有没有办法绕开 media-control 问到它自己。
     ///
@@ -674,6 +686,7 @@ public enum MediaControlClient {
         appleMusicFocusLock.lock()
         lastAcceptedDirectQueryPlayer = nextFocusFallbackPlayer(
             current: lastAcceptedDirectQueryPlayer, acceptedBundleID: bundleID, fallbackSucceeded: nil)
+        fallbackTargetGone = false
         let wasFallingBack = fallbackActive
         fallbackActive = false
         appleMusicFocusLock.unlock()
@@ -721,8 +734,12 @@ public enum MediaControlClient {
     private static func snapshotAfterFocusLost() -> MediaControlSnapshot? {
         appleMusicFocusLock.lock()
         let allowed = lastAcceptedDirectQueryPlayer
+        let targetGone = fallbackTargetGone
         appleMusicFocusLock.unlock()
-        guard let player = allowed else { return nil }
+        guard let player = allowed else {
+            if let failure = failureWithoutFallbackTarget(targetConfirmedGone: targetGone) { setSnapshotFailure(failure) }
+            return nil
+        }
         // 第一级:问播放器**自己的钟**(只有 Apple Music / Spotify 有 AppleScript 字典)。
         //
         // 顺序是这样定的,别调过来:per-client 探针拿回来的是**同一份 MediaRemote 载荷**,
@@ -744,11 +761,22 @@ public enum MediaControlClient {
         if snapshot == nil {
             snapshot = NowPlayingClientsProbe.snapshot(forBundleID: player.bundleIdentifier)
         }
+        // 回退问到的这一份跟主路径过同一道闸(collector 的 focusfallback.go 同样这么做):KKBOX / Amazon 在放播客单集、
+        // 开播那一帧还没有歌手的,主路径会挡下,从这里绕进来的却会被当成一首歌去查歌词、换一次曲目身份丢一次封面。
+        // 挡下时不动回退开关:播放器还是那一个,只是这一拍没有可报的歌。
+        if let s = snapshot {
+            if artistlessContentNotMusic(bundleID: player.bundleIdentifier, snapshot: s) { return nil }
+            if trustedPlaybackRejected(bundleID: player.bundleIdentifier, snapshot: s) {
+                setSnapshotFailure(.notASong)
+                return nil
+            }
+        }
         appleMusicFocusLock.lock()
         lastAcceptedDirectQueryPlayer = nextFocusFallbackPlayer(
             current: allowed, acceptedBundleID: nil, fallbackSucceeded: snapshot != nil)
         let firstTick = !fallbackActive
         fallbackActive = snapshot != nil
+        fallbackTargetGone = snapshot == nil
         fallbackViaAppleScript = viaAppleScript
         appleMusicFocusLock.unlock()
         guard snapshot != nil else {
@@ -950,7 +978,7 @@ public enum MediaControlClient {
         // (原生 Spotify 客户端不受这道闸约束 —— 内置播放器在 notASong 第一行就 return false,
         //  所以它一直是好的,只有浏览器里的 Spotify 掉在这个洞里。)
         if spotifyWebAdAccepted(bundleID: bundleID, snapshot: snapshot) { return false }
-        guard !(snapshot.artist ?? "").trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !(snapshot.artist ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return true
         }
         let key = YouTubeMusicAdProbe.trackKey(artist: snapshot.artist, title: snapshot.title)
@@ -1943,7 +1971,7 @@ public enum MediaControlClient {
                 pauseObservedAt: Self.lastPauseObservedAt(), now: sampledAt,
                 pid: raw.processIdentifier.map { pid_t($0) }, duration: raw.duration)
             if reading.staleMetadata {
-                setSnapshotFailure(.notASong)
+                setSnapshotFailure(.targetNotPlayingMusic)
                 return nil
             }
             amazonPosition = reading.position

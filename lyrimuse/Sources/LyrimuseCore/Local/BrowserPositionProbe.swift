@@ -467,6 +467,8 @@ public final class BrowserPositionProbe: @unchecked Sendable {
     private var attemptKey: String?
     private var attemptCount = 0
     private var lastAttemptEndedAt: Date?
+    /// 最近一次拖动进度的时刻(见 `discardReadings(before:)`)。这之前发起的探测回来也不采信。
+    private var seekBarrier: Date?
     private var platformBrowserPairsStorage: [String: Set<String>] = [:]
     /// 最近一次**探测成功**是在哪个浏览器上、命中了哪个平台的站点规则。
     /// 这是"这个浏览器此刻在放哪个网页音乐平台"最硬的证据 —— 它意味着我们刚从那个站点
@@ -714,7 +716,11 @@ public final class BrowserPositionProbe: @unchecked Sendable {
         tell application id "\(bundleID)"
             set out to ""
             repeat with wi from 1 to count of windows
-                repeat with ti from 1 to count of tabs of window wi
+                set tabCount to 0
+                try
+                    set tabCount to count of tabs of window wi
+                end try
+                repeat with ti from 1 to tabCount
                     try
                         set u to URL of tab ti of window wi
         \(checks)
@@ -737,6 +743,15 @@ public final class BrowserPositionProbe: @unchecked Sendable {
     /// 返回 nil 的情况:这首歌已经消费过一次 / 还没探测成功过 / 缓存的曲目跟当前曲目
     /// 对不上(换歌了)/ 缓存已经超过 `maxAge` 太旧——都应该原样退回既有的
     /// `resolvePositionSeconds` 逻辑(喂 `snapshot.elapsedTime`)。
+    /// 用户拖了进度条:丢掉拖动之前抓到的读数,在飞的那次回来也不采信(见 seekBarrier)。缓存的读数最长认 6 秒、按
+    /// `rate × age` 往前外推 —— 不丢的话,拖动后 1.2 秒的保护窗口一过就会被消费,位置被拽回拖动之前。
+    public func discardReadings(before moment: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        seekBarrier = moment
+        if let snapshot = cached, snapshot.capturedAt < moment { cached = nil }
+    }
+
     public func consumeCorrection(forKey key: String, rate: Double, now: Date, maxAge: TimeInterval = 6) -> Correction? {
         lock.lock()
         defer { lock.unlock() }
@@ -854,6 +869,7 @@ public final class BrowserPositionProbe: @unchecked Sendable {
         let attemptNumber = attemptCount
         inFlightKey = key
         let myGeneration = generation
+        let startedAt = Date()
         lock.unlock()
 
         Task.detached(priority: .utility) {
@@ -861,7 +877,7 @@ public final class BrowserPositionProbe: @unchecked Sendable {
                 bundleID: hostBundleID, family: family, platformIDs: platformIDs,
                 expectedDuration: expectedDuration, attempt: attemptNumber)
             self.applyProbeResult(hit, key: key, generation: myGeneration,
-                                  bundleID: hostBundleID)
+                                  bundleID: hostBundleID, startedAt: startedAt)
         }
     }
 
@@ -869,15 +885,18 @@ public final class BrowserPositionProbe: @unchecked Sendable {
     /// 错误(NSLock 的那两个方法不认为自己能安全地跨越 async 挂起点被调用)——拆成这个
     /// 普通同步函数,闭包里只是"调用"它,不在 async 上下文里直接摆弄锁,绕开这条限制。
     private func applyProbeResult(_ hit: ProbeHit?, key: String, generation myGeneration: Int,
-                                  bundleID: String) {
+                                  bundleID: String, startedAt: Date) {
         lock.lock()
         defer { lock.unlock() }
-        // 退避从"上一次探测**结束**"算起,而不是从发起算起 —— 一次探测本身现在要花
-        // 两次 osascript 往返 + `livenessGapSeconds`,按发起算等于没有退避。
-        lastAttemptEndedAt = Date()
         guard myGeneration == generation else { return } // 换歌了,这份结果作废
+        // 退避从"上一次探测**结束**"算起,而不是从发起算起 —— 一次探测本身现在要花
+        // 两次 osascript 往返 + `livenessGapSeconds`,按发起算等于没有退避。记在代次校验之后:上一首晚到的结果
+        // 不该给新歌的第一次探测加上退避(换歌后头一次纠偏正是最要紧的那次)。
+        lastAttemptEndedAt = Date()
         if inFlightKey == key { inFlightKey = nil }
         guard let hit else { return }
+        // 拖动之前发起的探测:读的是拖动之前的位置,采信了会把屏上位置拽回去。
+        if let barrier = seekBarrier, startedAt < barrier { return }
         // 精确读数的年龄从 JS 读数那一刻算;读数时刻晚于现在(两边钟不可能差这么多,多半是解析出了岔子)就不用它。
         if let precise = hit.precise, precise.readAt <= Date() {
             cached = CachedResult(key: key, seconds: precise.seconds, capturedAt: precise.readAt, isPrecise: true)
@@ -1213,7 +1232,11 @@ public final class BrowserPositionProbe: @unchecked Sendable {
                 end try
             end repeat
             repeat with wi from 1 to count of windows
-                repeat with ti from 1 to count of tabs of window wi
+                set tabCount to 0
+                try
+                    set tabCount to count of tabs of window wi
+                end try
+                repeat with ti from 1 to tabCount
                     try
                         if (URL of tab ti of window wi) contains "\(urlContains)" then
                             \(selectTab)

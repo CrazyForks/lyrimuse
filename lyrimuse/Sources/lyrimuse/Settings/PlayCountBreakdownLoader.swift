@@ -105,7 +105,9 @@ final class PlayCountBreakdownLoader: ObservableObject {
             else { continue } // 这一页没拿到:原地不动,下次再点再试;不把这一写法标成 failed
             // 等这一页的时候点了「重试」:inputs 已经是新的一批,这一轮补页整个作废。
             guard myGeneration == generation, i < inputs.count else { return }
-            inputs[i].plays.append(contentsOf: page.plays)
+            // 两页之间进来了新收听时,新一页开头会重复上一页末尾那几行(见 appendingPage)。
+            inputs[i].plays = PlayCountBreakdownMath.appendingPage(
+                existing: inputs[i].plays, page: page.plays, previousTotal: inputs[i].total, newTotal: page.total)
             // total 以最新一页为准(期间可能又 scrobble 了一次)。
             inputs[i].total = page.total
             pagesFetched[i] = next

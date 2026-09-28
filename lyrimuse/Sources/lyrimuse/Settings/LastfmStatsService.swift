@@ -156,6 +156,11 @@ final class LastfmStatsService: ObservableObject {
                                date: t.uts.map { Date(timeIntervalSince1970: $0) })
         }
         let completed = feed.tracks.filter { !$0.title.isEmpty }.map(toRow)
+        if LastfmPageComposer.lateInsertDetected(
+            previousUTS: feedCompletedRows.compactMap { $0.date?.timeIntervalSince1970 },
+            currentUTS: completed.compactMap { $0.date?.timeIntervalSince1970 }) {
+            dropDeepRecentPageCache(reason: "an older scrobble was inserted")
+        }
         feedCompletedRows = completed
         var page1 = Array(completed.prefix(Self.recentPageSize))
         if let np = feed.nowPlaying, !np.title.isEmpty { page1.insert(toRow(np), at: 0) }
@@ -604,6 +609,43 @@ final class LastfmStatsService: ObservableObject {
     /// 只在 feed 活着时用(总数的权威来源就是它;feed 陈旧时总数不可信,退回旧办法)。
     private func composeExactPage(_ page: Int) -> [RecentTrack]? {
         guard page >= 2, let feed = lastFeed, feed.isFresh() else { return nil }
+        return LastfmPageComposer.compose(page: page, pageSize: Self.recentPageSize, total: feed.total,
+                                          sources: recentComposeSources(total: feed.total),
+                                          identity: Self.recentComposeIdentity)
+    }
+
+    /// 当前这一页**之前**的所有已完成收听(绝对位置 0 起,倒序)—— 给「第 N 次听」减掉前几页里更新的同曲收听
+    /// (`RecentPlayOrdinal.ordinals` 的 `preceding`)。第 1 页是空数组;拼不齐(feed 不新鲜、中间有页没缓存)返回
+    /// nil,调用方这一页就不显示次数。
+    func precedingRecentRows() -> [RecentTrack]? {
+        guard recentPage >= 2 else { return [] }
+        guard let feed = lastFeed, feed.isFresh() else { return nil }
+        let hi = min((recentPage - 1) * Self.recentPageSize, feed.total)
+        guard hi > 0 else { return [] }
+        return LastfmPageComposer.composeRange(lo: 0, hi: hi, sources: recentComposeSources(total: feed.total),
+                                               identity: Self.recentComposeIdentity)
+    }
+
+    private static func recentComposeIdentity(_ r: RecentTrack) -> String {
+        "\(r.date?.timeIntervalSince1970 ?? -1)|\(r.artist)|\(r.title)"
+    }
+
+    /// 深页缓存(第 3 页起)作废:它们的绝对位置是按「新增都在最上面」推的,记录插进中间(回填、手机离线补交)之后
+    /// 就推错了。第 1、2 页由 feed 每次重写,不用动。
+    func dropDeepRecentPageCache(reason: String) {
+        let deep = recentPageCache.keys.filter { $0 >= 3 }
+        guard !deep.isEmpty else { return }
+        for p in deep {
+            recentPageCache[p] = nil
+            recentPageCacheTotal[p] = nil
+            fetchedAt[Self.recentPageCacheKey(p)] = nil
+        }
+        logger.notice("recent page cache: dropped \(deep.count, privacy: .public) deep page(s) (\(reason, privacy: .public))")
+        scheduleRecentPageCacheSave()
+    }
+
+    /// 拼页的数据源:feed 的 50 行在最前(最可信),缓存页按新鲜度降序排在后面。
+    private func recentComposeSources(total: Int) -> [LastfmPageComposer.Source<RecentTrack>] {
         typealias Src = LastfmPageComposer.Source<RecentTrack>
         var sources = [Src(firstPosition: 0, rows: feedCompletedRows)]
         // 缓存页按新鲜度降序排在 feed 后面:同一位置有多份时先到先占,越新的越可信。
@@ -613,14 +655,11 @@ final class LastfmStatsService: ObservableObject {
         for p in cachedPages {
             guard let rows = recentPageCache[p], let t = recentPageCacheTotal[p],
                   let first = LastfmPageComposer.firstPosition(page: p, pageSize: Self.recentPageSize,
-                                                                totalAtFetch: t, totalNow: feed.total)
+                                                                totalAtFetch: t, totalNow: total)
             else { continue }
             sources.append(Src(firstPosition: first, rows: rows.filter { $0.date != nil }))
         }
-        return LastfmPageComposer.compose(page: page, pageSize: Self.recentPageSize, total: feed.total,
-                                          sources: sources) { r in
-            "\(r.date?.timeIntervalSince1970 ?? -1)|\(r.artist)|\(r.title)"
-        }
+        return sources
     }
 
     /// 翻页预读:用户落在第 N 页时,把 N+1 页的原始行悄悄拉进缓存,顺翻下一页
@@ -3862,12 +3901,9 @@ final class LastfmStatsService: ObservableObject {
                 exact?.insert(np, at: 0)
             }
             if let exact {
+                // 拼出来的页不写回成「抓取态」缓存:它完全由已有来源推出来,写回去再盖上现在的总数和新鲜戳,
+                // 一次推错(记录插进了中间)就会被当成独立抓来的真值、之后一直自洽地错下去。
                 recentPage = target
-                if target >= 2 {
-                    recentPageCache[target] = exact
-                    recentPageCacheTotal[target] = feed.total
-                    fetchedAt[Self.recentPageCacheKey(target)] = Date()
-                }
                 applyRecent(exact)
                 prefetchNeighborPage(after: target)
                 return

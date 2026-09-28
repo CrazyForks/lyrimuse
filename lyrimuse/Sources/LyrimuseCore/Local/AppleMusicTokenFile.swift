@@ -29,14 +29,18 @@ public enum AppleMusicTokenFile {
               let token = obj["media_user_token"] as? String,
               !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
-        let saved = seconds(obj["saved_at"]).map(Date.init(timeIntervalSince1970:)) ?? fileDate
+        let savedAtField = seconds(obj["saved_at"])
+        let saved = savedAtField.map(Date.init(timeIntervalSince1970:)) ?? fileDate
         let expires = seconds(obj["expires_at"]).map(Date.init(timeIntervalSince1970:))
             ?? saved.addingTimeInterval(tokenLifetime)
         let rejectedAt = seconds(obj["rejected_at"])
+        // 老格式(没有 saved_at)拿文件时间兜底,而 collector 标记被拒时会重写整个文件:rejected_at 取整秒,总是略早于
+        // 新的文件时间,按「被拒晚于保存」比就永远判不成失效。老格式里有 rejected_at 就是被拒了(重新登录会写新格式)。
+        let rejected = rejectedAt.map { at in savedAtField == nil || at >= saved.timeIntervalSince1970 } ?? false
         return Info(savedAt: saved,
                     storefront: (obj["storefront"] as? String) ?? "",
                     expiresAt: expires,
-                    rejected: rejectedAt.map { $0 >= saved.timeIntervalSince1970 } ?? false)
+                    rejected: rejected)
     }
 
     /// 登录窗口落盘的内容。`expiresAt` 是 cookie 自带的过期时刻,没有就不写。

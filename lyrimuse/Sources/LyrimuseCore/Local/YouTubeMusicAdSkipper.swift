@@ -106,6 +106,7 @@ public enum YouTubeMusicAdSkipper {
     var badge = badgeEl ? String(badgeEl.textContent || '').trim() : '';\
     var v = p.querySelector('video');\
     var vt = v ? Math.floor(v.currentTime) : -1;\
+    var pz = (v && v.paused) ? 'PAUSED:' : '';\
     var sel = ['.ytp-skip-ad-button', '.ytp-ad-skip-button-modern', '.ytp-ad-skip-button', '.ytp-ad-skip-button-slot button', '.ytp-ad-skip-button-container button', '.ytp-skip-ad button', 'button[id^=skip-button]'];\
     var b = null;\
     for (var i = 0; i < sel.length && !b; i++) {\
@@ -118,25 +119,27 @@ public enum YouTubeMusicAdSkipper {
     if (!b) {\
     var prev = document.querySelector('.ytp-ad-preview-text-modern, .ytp-preview-ad__text, .ytp-ad-preview-text, .ytp-ad-preview-container');\
     var m = prev ? String(prev.textContent || '').match(/[0-9]+/) : null;\
-    return 'NOTYET|' + (m ? m[0] : '');\
+    return pz + 'NOTYET|' + (m ? m[0] : '');\
     }\
     var desc = b.tagName + '.' + String(b.className || '').split(' ').join('.');\
-    return 'SKIPPABLE|' + desc + '|' + badge + '|' + vt;\
+    return pz + 'SKIPPABLE|' + desc + '|' + badge + '|' + vt;\
     })()
     """
 
     /// 复核脚本:动完之后播放器还在不在广告态。`STILL|<徽章>|<视频整秒>` / `CLEAR` / `NOTFOUND`。
-    /// 多标签页时 `CLEAR` 也会让模板停在这一页 —— 复核只关心"刚动的那一页"。
+    /// 多标签页时暂停着的那几页带 `PAUSED:` 前缀、排到后面(见 `BrowserTabProbeScript`):刚按过跳过的那页还在放,
+    /// 另一页暂停着的回一个 `CLEAR` 不会被当成「跳过了」。
     public static let verifyJS = """
     (function(){\
     var p = document.querySelector('#movie_player') || document.querySelector('.html5-video-player');\
     if (!p) return 'NOTFOUND';\
-    if ((p.className || '').indexOf('ad-showing') < 0) return 'CLEAR';\
+    var v = p.querySelector('video');\
+    var pz = (v && v.paused) ? 'PAUSED:' : '';\
+    if ((p.className || '').indexOf('ad-showing') < 0) return pz + 'CLEAR';\
     var badgeEl = document.querySelector('.ytp-ad-simple-ad-badge, .ytp-ad-badge');\
     var badge = badgeEl ? String(badgeEl.textContent || '').trim() : '';\
-    var v = p.querySelector('video');\
     var vt = v ? Math.floor(v.currentTime) : -1;\
-    return 'STILL|' + badge + '|' + vt;\
+    return pz + 'STILL|' + badge + '|' + vt;\
     })()
     """
 
@@ -174,14 +177,30 @@ public enum YouTubeMusicAdSkipper {
     /// (「1/2」→「2/2」)也算 —— 那是跳过了这一条、插播里的下一条接上了。 **视频时间倒回不算**:
     /// 真机坐实,YouTube 对被 seek 的广告是从头重放(时间归 0、徽章不变),按"倒回 = 下一条了"会把重放误报成跳过。
     /// 徽章为空时只认离开广告态。`videoTime` 仍带着,只为日志。
+    ///
+    /// 徽章比的是**归一过的计数**(`normalizedBadgeCount`),不是原文:同一个元素上常挂着「· 0:20」这类剩余时长,
+    /// 按键到复核隔了 0.8 秒以上,倒计时必然变,拿原文比会把没跳过报成「已自动跳过」,这条广告也就不再重试了。
     public static func adAdvanced(afterClick click: ClickResult, verify: VerifyResult) -> Bool {
         switch verify {
         case .clear, .notFound:
             return true
         case .still(let badge, _):
             guard case .skippable(_, let gateBadge, _) = click else { return false }
-            return !badge.isEmpty && !gateBadge.isEmpty && badge != gateBadge
+            let now = normalizedBadgeCount(badge), before = normalizedBadgeCount(gateBadge)
+            return !now.isEmpty && !before.isEmpty && now != before
         }
+    }
+
+    /// 徽章文字归一成「序号/总数」(`1/2`),取不到计数返回空串。规则跟 `YouTubeMusicAdProbe` 注入页面的那段 JS
+    /// 逐条一致:先整段剔掉时间样式的数字(`0:20`),再抓「整数 + 1~12 个非数字 + 整数」。纯函数,selftest 覆盖。
+    public static func normalizedBadgeCount(_ raw: String) -> String {
+        let withoutTimes = raw.replacingOccurrences(of: "[0-9]+:[0-9]+", with: "", options: .regularExpression)
+        guard let range = withoutTimes.range(of: "([0-9]+)[^0-9]{1,12}([0-9]+)", options: .regularExpression) else {
+            return ""
+        }
+        let digits = withoutTimes[range].split(whereSeparator: { !("0"..."9").contains($0) })
+        guard digits.count >= 2 else { return "" }
+        return "\(digits[0])/\(digits[digits.count - 1])"
     }
 
     /// 切字段:先脱 AppleScript 偶尔包上的一层双引号(同 `YouTubeMusicAdProbe.parse`),再按 `|` 切。

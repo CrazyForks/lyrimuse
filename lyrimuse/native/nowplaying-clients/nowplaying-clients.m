@@ -58,6 +58,10 @@ typedef CFStringRef (*ItemGetIdentifierFn)(void *);
 /// ⚠️ 给不给还取决于**这一刻在放什么**:实测五家都给(汽水音乐 9KB、QQ音乐 113KB、Spotify 107KB、
 /// Apple Music 113KB),但 Spotify **放广告时不给** —— 一开始据此误判成"Spotify 不给封面",
 /// 换成真歌再测就有了。浏览器里的视频也不给。拿不到就是拿不到,调用方照旧退回既有来源。
+/// 状态查询那两段等待(取播放器列表、取单个播放器的信息)各等多久。两个调用方(App 的 NowPlayingClientsProbe、
+/// collector 的 focusfallback.go)都在 2 秒整体超时后杀掉这个进程,原来每段 3 秒,MediaRemote 一慢这条路就永远拿不到
+/// 结果;两段加起来要留在 2 秒以内。正常一次约 120ms。
+static const int64_t kStateWaitMs = 900;
 static const long kIncludeArtwork = 1;
 static const long kNoArtwork = 0;
 
@@ -171,7 +175,7 @@ void nowplaying_clients(void *my_perl, void *cv) {
             clients = cs;
             dispatch_semaphore_signal(s);
         });
-        if (dispatch_semaphore_wait(s, dispatch_time(DISPATCH_TIME_NOW, 3LL * NSEC_PER_SEC)) != 0) {
+        if (dispatch_semaphore_wait(s, dispatch_time(DISPATCH_TIME_NOW, kStateWaitMs * NSEC_PER_MSEC)) != 0) {
             emit(nil); return;
         }
 
@@ -191,7 +195,7 @@ void nowplaying_clients(void *my_perl, void *cv) {
                 if (raw) info = (__bridge_transfer NSDictionary *)CFRetain(raw);
                 dispatch_semaphore_signal(s2);
             });
-            if (dispatch_semaphore_wait(s2, dispatch_time(DISPATCH_TIME_NOW, 3LL * NSEC_PER_SEC)) != 0) continue;
+            if (dispatch_semaphore_wait(s2, dispatch_time(DISPATCH_TIME_NOW, kStateWaitMs * NSEC_PER_MSEC)) != 0) continue;
             NSDictionary *one = normalize(info, bid);
             if (one) [all addObject:one];
         }

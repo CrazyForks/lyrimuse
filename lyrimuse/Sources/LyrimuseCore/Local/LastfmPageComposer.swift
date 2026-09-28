@@ -27,6 +27,17 @@ public enum LastfmPageComposer {
         }
     }
 
+    /// 两份 feed 之间有没有**插进中间**的记录:新 feed 里有、旧 feed 里没有,而且比旧 feed 最新那条还旧。
+    ///
+    /// `firstPosition` 假设新增的都在最上面(新 scrobble)。回填、手机离线后补交的是过去的时间戳,插进来之后
+    /// 比它新的缓存行其实没挪位置,按偏移模型却被整体下推,拼出来的深页错位、跟相邻页重行或漏行。插入点在 feed 的
+    /// 50 行之内时这里认得出,调用方据此作废深页缓存;更早的插入只能靠回填那条路的显式作废。纯函数。
+    public static func lateInsertDetected(previousUTS: [Double], currentUTS: [Double]) -> Bool {
+        guard let newest = previousUTS.max() else { return false }
+        let known = Set(previousUTS)
+        return currentUTS.contains { !known.contains($0) && $0 < newest }
+    }
+
     /// 缓存页在当下的绝对起点。`totalAtFetch` 是抓那一页时的账号总数;总数变小(用户删过记录)
     /// 时偏移模型不成立,返回 nil 让这份来源作废。
     public static func firstPosition(page: Int, pageSize: Int, totalAtFetch: Int, totalNow: Int) -> Int? {
@@ -43,7 +54,15 @@ public enum LastfmPageComposer {
         guard page >= 1, pageSize > 0, total > 0 else { return nil }
         let lo = (page - 1) * pageSize
         let hi = min(page * pageSize, total)
-        guard lo < hi else { return nil }
+        return composeRange(lo: lo, hi: hi, sources: sources, identity: identity)
+    }
+
+    /// 拼绝对位置 `[lo, hi)` 这一段(0 起)。拼不齐、有重复、区间为空返回 nil。`compose` 按页取的就是它;
+    /// 「这一页之前的所有行」(给「第 N 次听」减掉前几页里更新的同曲收听)也用它拼,两处同一套位置模型。
+    public static func composeRange<Row>(
+        lo: Int, hi: Int, sources: [Source<Row>], identity: (Row) -> String
+    ) -> [Row]? {
+        guard lo >= 0, lo < hi else { return nil }
         var slots = [Row?](repeating: nil, count: hi - lo)
         for src in sources {
             guard src.firstPosition >= 0 else { continue }

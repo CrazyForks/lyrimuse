@@ -45,6 +45,7 @@ let groups: [TestGroup] = [
     TestGroup(name: "lyrics-offset", summary: "歌词时间轴偏移:基准 + 单曲微调 / 作用域 / 已校准名单", run: runLyricsOffsetTests),
     TestGroup(name: "lyrics-manager", summary: "歌词管理:列宽 / 写回合并 / 备份归档 / 重匹配 / 锁定 / 排序", run: runLyricsManagerTests),
     TestGroup(name: "playback-position", summary: "播放位置:外推伺服 / 锚点 / seek / 浏览器探针", run: runPlaybackPositionTests),
+    TestGroup(name: "playback-source", summary: "播放源加固:轮询单飞 / 停播清理 / 焦点宽限归类 / 最近记录计次与拼页 / 广告探针与跳过复核 / 资料库删除 / 缓存读取与退避", run: runPlaybackSourceHardeningTests),
     TestGroup(name: "position-replay", summary: "位置状态机回放:一串快照 + 暂停 / 恢复通知 → 屏上位置 / 暂停残差 / 偏置 / 学习表", run: runPositionReplayTests),
     TestGroup(name: "players", summary: "播放器身份 / 信任列表 / 播放模式 / 多选 / 广告判据 / 健康徽标", run: runPlayerIdentityTests),
     TestGroup(name: "amazon-music", summary: "Amazon Music 位置:日志重放 / 自记时 / 开播校准 / 陈旧元数据(样例与 collector 共用)", run: runAmazonMusicTests),

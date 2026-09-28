@@ -72,8 +72,9 @@ public struct EnrichCacheEntry: Decodable, Sendable {
     // 不是一回事:这个没有时间戳,只给"歌词窗口"当静态兜底用。collector 侧
     // enrichEntry.PlainLyrics 头注解释了为什么必须分开存。
     let plainLyrics: String?
-    // 播放器报的时长(秒,collector/enrich.go 的 DurationSecs)。解码,给「英文歌名 →
-    // 中文歌名」的本机别名推断当第二道闸(见 EnrichTitleAliases),此前 Swift 侧没人读它。
+    // 播放器报的时长(秒,collector/enrich.go 的 DurationSecs)。电台条目由 collector 换成 Apple 目录查到的真实曲长
+    // (radioduration.go,电台进度条的分母读它,见 trackDurationSecs)。也给「英文歌名 → 中文歌名」的本机别名推断当
+    // 第二道闸(见 EnrichTitleAliases)。
     let durationSecs: Double?
     // 所配歌词候选在来源上的时长(秒,collector 的 ResolvedDurationSecs)。同日起解码:跟 durationSecs
     // 差得远说明这条配到了别的歌的词,别名推断的 E2 路径据此判歌词可不可信。
@@ -343,7 +344,9 @@ public enum EnrichCacheReader {
         guard let all = loadEntries() else { return nil }
         let key = EnrichCacheKeys.normalizedKey(artist: artist, title: title, album: album)
         guard let entry = matchedEntry(key, in: all) else { return nil }
-        for candidate in [entry.resolvedDurationSecs, entry.durationSecs] {
+        // durationSecs 在前:collector 的 radioduration.go 只把真实曲长写进它、刻意不碰 resolvedDurationSecs ——
+        // 后者是配到的那份歌词在来源上的时长,专辑预取时可能是网易云另一个版本的,拿它当分母进度会提前顶满。
+        for candidate in [entry.durationSecs, entry.resolvedDurationSecs] {
             if let candidate, candidate > 0 { return candidate }
         }
         return nil
@@ -965,6 +968,9 @@ public enum EnrichCacheReader {
             var inputs: [EnrichTitleAliases.Entry] = []
             inputs.reserveCapacity(entries.count)
             for (key, entry) in entries {
+                // 同名不同录音的变体(`歌名~dur2`)不进推断:它跟基条目常常落到同一个平台曲目 id,会触发「一个 id 对多个
+                // 写法」那道闸,把整组本来成立的别名一起否决;标题里带着 `~durN` 本身也不是一种写法。
+                guard EnrichCacheKeys.strippingDurationVariant(key) == key else { continue }
                 let parts = key.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
                 guard parts.count == 3 else { continue }
                 inputs.append(.init(artist: String(parts[0]), title: String(parts[1]),
@@ -1075,6 +1081,12 @@ public enum EnrichCacheReader {
     /// 同步解码失败的那一版文件的 mtime(见 decodeSynchronously)。
     private static var failedDecodeMTime: Date?
 
+    /// 这一版文件是不是上次就没解开。mtime 取不到时不挡(那是文件不在,不是解不开)。纯函数,selftest 覆盖。
+    public nonisolated static func decodeAlreadyFailed(mtime: Date?, failedMTime: Date?) -> Bool {
+        guard let mtime else { return false }
+        return mtime == failedMTime
+    }
+
     private static func decodeSynchronously() {
         // mtime 取读文件**之前**的:rename 发生在 stat 与 read 之间时,读到的是更新的内容
         // 而记的是旧 mtime——下一拍会再解一次,方向安全;反过来记新 mtime 配旧内容会把
@@ -1102,10 +1114,13 @@ public enum EnrichCacheReader {
 
     private static func kickBackgroundDecode() {
         guard inFlightGeneration == nil else { return } // 在飞的完成后,下一拍 poll 自然再 kick(2s 节拍天然节流)
+        let source = currentSource()
+        // 同一版文件上次就没解开:等文件变了再试,口径同同步那条路(见 failedDecodeMTime)。不挡的话每拍(2 秒)
+        // 重读重解一遍几十 MB,而 App 一直停在旧的那一版。
+        if Self.decodeAlreadyFailed(mtime: source.mtime, failedMTime: failedDecodeMTime) { return }
         decodeGeneration += 1
         let gen = decodeGeneration
         inFlightGeneration = gen
-        let source = currentSource()
         let url = source.url
         let fromIndex = source.isIndex
         Task.detached(priority: .utility) {
@@ -1115,7 +1130,13 @@ public enum EnrichCacheReader {
             await MainActor.run {
                 if inFlightGeneration == gen { inFlightGeneration = nil }
                 guard gen == decodeGeneration else { return } // 被 reloadSoon/压力清空顶掉
-                guard let decoded else { return }             // 失败保留旧缓存,下一拍重试
+                guard let decoded else {
+                    // 失败保留旧缓存;记下这一版,文件变了才再试。解不开的是索引就作废这一版索引,下一次改读主缓存
+                    // (同同步那条路)。
+                    failedDecodeMTime = mtime
+                    if fromIndex, let mtime { indexRejectedAt = mtime; failedDecodeMTime = nil }
+                    return
+                }
                 adopt(entries: decoded, mtime: mtime, fromIndex: fromIndex, notify: true)
             }
         }

@@ -373,6 +373,18 @@ public final class LocalPlaybackSource: ObservableObject {
     private var posErrEMA: Double = 0
     /// 最近一次"播放器说状态变了"的信号到达时刻(只记真状态信号,不记纯锚点刷新)。
     private var posStateSignalAt: Date?
+
+    /// 这一拍的「恢复信号」还算不算数:只认几秒之内到的。靠轮询(暂停档 6 秒一拍)发现恢复时,手上那个是暂停那一刻的
+    /// 旧信号,拿它的年龄当前跳上界,会把起点砍到「暂停值 + 两秒多」,那一拍最多落后约 4 秒;这种时候跟拿不到信号
+    /// 一样处理(宁可不砍)。纯函数,selftest 覆盖。
+    public nonisolated static func freshResumeSignalAge(signalAt: Date?, now: Date) -> TimeInterval? {
+        guard let signalAt else { return nil }
+        let age = now.timeIntervalSince(signalAt)
+        return age >= 0 && age <= resumeSignalMaxAgeSecs ? age : nil
+    }
+
+    /// 恢复信号到轮询看到恢复实测 0.31~0.43s(见 resumeSeedSeconds),去抖 250ms 另算,留足余量。
+    public nonisolated static let resumeSignalMaxAgeSecs: TimeInterval = 3
     // nonisolated:被 shouldProbeLateAnchor(nonisolated 纯函数)引用,不可变 Sendable。
     private nonisolated static let seekJumpToleranceSecs = 2.0
     /// 已经为哪个锚点问过「晚锚点」确认(见 shouldProbeLateAnchor)。坏锚点在位期间偏差每拍都在,
@@ -1457,6 +1469,12 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 认成 MV 的那首歌的 trackKey(见 isMusicVideo)。
     private var musicVideoKey: String?
 
+    /// 挑同名不同录音变体(`~durN`)用的时长,口径跟 collector 的 `lyricsDurationSecs` 一致:电台(整档节目的时长)、
+    /// MV(视频比录音室版长)都当未知。纯函数,selftest 覆盖。
+    public nonisolated static func lyricsLookupDuration(isRadio: Bool, isMusicVideo: Bool, duration: Double?) -> Double? {
+        isRadio || isMusicVideo ? nil : duration
+    }
+
     /// 这一拍之后「认成 MV 的那首」是哪首。按曲目记住、换歌作废:Apple Music 暂停时不走 JXA
     /// (`MediaControlClient.adaptedSnapshot`),快照里没有这一位;网页那一位要等探针,也不是每拍都有。纯函数,selftest 覆盖。
     public nonisolated static func musicVideoTrackKey(previous: String?, currentKey: String, markedMusicVideo: Bool) -> String? {
@@ -1475,6 +1493,21 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 权威广告判据:AppleScript 的 `spotify url` 对广告返回 "spotify:ad:…"。
     /// 每次换曲最多一次、后台异步,失败静默退回字段启发式(不劣于旧状)。结果回来时先核对
     /// 还是不是同一首 —— 广告只有二三十秒,晚到的 true 不能扣在下一首真歌头上。
+    /// 「上次在听」这一拍写进去之前的样子(见 apply 里 np:lastTrack* 那一段)。只留最近一次。
+    private var lastTrackBeforeWrite: (key: String, title: String?, artist: String?, album: String?, persistedTitle: String?)?
+
+    /// 晚到的广告确认:这一首刚被记成「上次在听」,撤回成写之前的那首。
+    private func revertLastTrackAfterAd(key: String) {
+        guard let prev = lastTrackBeforeWrite, prev.key == key else { return }
+        lastTrackBeforeWrite = nil
+        let defaults = UserDefaults.standard
+        for (k, v) in [("np:lastTrackTitle", prev.title), ("np:lastTrackArtist", prev.artist), ("np:lastTrackAlbum", prev.album)] {
+            if let v { defaults.set(v, forKey: k) } else { defaults.removeObject(forKey: k) }
+        }
+        lastPersistedTrackTitle = prev.persistedTitle
+        logger.notice("spotify ad confirmed late; last-played track reverted")
+    }
+
     private func verifySpotifyAdViaAppleScript(forKey key: String) {
         Task.detached(priority: .utility) {
             let proc = Process()
@@ -1492,6 +1525,7 @@ public final class LocalPlaybackSource: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, self.lastSnapshot?.trackKey == key else { return }
                 if !self.isCurrentTrackAdBreak { self.isCurrentTrackAdBreak = true }
+                self.revertLastTrackAfterAd(key: key)
             }
         }
     }
@@ -1619,14 +1653,14 @@ public final class LocalPlaybackSource: ObservableObject {
             } else {
                 // 刚从暂停恢复播放 / 首次观察(同曲)。这一笔读数在暂停期间被 elapsedTimeNow
                 // 空转污染过,不能原样采信 —— 削掉"不可能发生的前跳",见 resumeSeedSeconds。
-                let sinceSignal = posStateSignalAt.map { now.timeIntervalSince($0) }
-                    ?? Self.resumeMaxForwardCapSecs
+                let freshSignalAge = Self.freshResumeSignalAge(signalAt: posStateSignalAt, now: now)
+                let sinceSignal = freshSignalAge ?? Self.resumeMaxForwardCapSecs
                 trackPosSeconds = Self.resumeSeedSeconds(
                     reported: reported,
                     frozen: pausedPositionMs.map { Double($0) / 1000 },
                     maxForwardSecs: sinceSignal)
                 // Spotify 自己的钟恢复播放后重新领先(见 resumeLead):播种值就是真声,差值折进偏置。
-                if gaplessLeadBundleID != nil, anchorElapsedTime == nil, posStateSignalAt != nil,
+                if gaplessLeadBundleID != nil, anchorElapsedTime == nil, freshSignalAge != nil,
                    pausedPositionMs != nil,
                    let lead = Self.resumeLead(raw: rawReported, seed: trackPosSeconds) {
                     logger.notice("resume lead: seed \(self.trackPosSeconds, format: .fixed(precision: 3))s, player clock leads audio by \(lead, format: .fixed(precision: 3))s (raw \(rawReported, format: .fixed(precision: 3)))")
@@ -2431,6 +2465,12 @@ public final class LocalPlaybackSource: ObservableObject {
         if settled != currentLineFillSettled { currentLineFillSettled = settled }
     }
 
+    /// `clearIfWasPlaying` 要不要清:在播,或者还留着这首歌的任何痕迹(曲名、曲目 key、暂停位置、锚点)。纯函数,selftest 覆盖。
+    public nonisolated static func hasTrackStateToClear(isPlaying: Bool, title: String, lastKey: String,
+                                                        pausedPositionMs: Int?, hasAnchor: Bool) -> Bool {
+        isPlaying || !title.isEmpty || !lastKey.isEmpty || pausedPositionMs != nil || hasAnchor
+    }
+
     // nil 快照(真的没有任何曲目在加载)和"有曲目但不是 Apple Music"共用同一套清理。
     //
     // 改:title/artist/album 以前**故意不清**,理由写的是"保留最近一次播放
@@ -2450,8 +2490,13 @@ public final class LocalPlaybackSource: ObservableObject {
     // 后,"歌词窗口"会无限期冻结显示停播前那首歌的完整歌词列表和封面模糊背景,直到下一次
     // 真正播放新曲目才会刷新——因为 LyricsWindowView 判断"有没有内容可展示"用的是
     // `allLines.isEmpty`,不清空这个数组,视图就没有任何理由切回"无歌词"占位态。
+    //
+    // 条件不能只看 isPlayingNow:「先暂停、再退出播放器 / 暂停后 stop」恰好走到这里,而这时 isPlayingNow 早就是 false,
+    // 只看它的话整段什么都不做,播放器都关了,悬浮窗、灵动岛、歌词窗口还一直挂着那首暂停的歌。改成「还有这首歌的
+    // 任何残留」就清;清完这几样都空了,之后每拍再进来什么都不做。
     private func clearIfWasPlaying() {
-        if isPlayingNow {
+        if Self.hasTrackStateToClear(isPlaying: isPlayingNow, title: title, lastKey: lastKey,
+                                     pausedPositionMs: pausedPositionMs, hasAnchor: anchor != nil) {
             isPlayingNow = false
             anchor = nil
             currentLine = nil
@@ -2542,6 +2587,25 @@ public final class LocalPlaybackSource: ObservableObject {
     // 挨得很近(通知先到、轮询紧随其后)时,后发起的那次赢,先发起的那次结果被丢弃,
     // 正是想要的行为。
     private var pollGeneration = 0
+    /// 单飞:同一时刻只有一轮 poll 在飞,在飞时来的请求合并成回来后补跑一次(见 PollSingleFlight)。
+    private var pollFlight = PollSingleFlight()
+
+    /// 阻塞的子进程调用(media-control / osascript 往返,最坏等满超时再补 SIGKILL)不放进 Swift 的协作线程池:那个池子
+    /// 只有 CPU 核数那么多线程,几次卡住的调用就能占满,取封面、算颜色、广告复核全跟着排队(探针实测十几秒)。
+    /// 轮询单飞,一条串行队列就够;取封面另走一条,两边互不排队。
+    private nonisolated static let pollQueue = DispatchQueue(label: "lyrimuse.playback.poll", qos: .userInitiated)
+    private nonisolated static let artworkQueue = DispatchQueue(label: "lyrimuse.playback.artwork", qos: .utility)
+
+    nonisolated static func runOffPool<T: Sendable>(_ queue: DispatchQueue, _ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: work()) }
+        }
+    }
+
+    /// 一轮 poll 收尾:放开单飞,期间有人要过就立刻补跑。
+    private func finishPoll() {
+        if pollFlight.finish() { poll() }
+    }
 
     /// 连续多少次 poll() 拿到了 nil 快照——给下面"snapshot failed"那行判断该不该打日志用。
     /// 实测坐实的问题:这条路径原来无条件每拍都打一遍 `.error`,而空闲档
@@ -2556,13 +2620,16 @@ public final class LocalPlaybackSource: ObservableObject {
     private var nilStreakStartedAt: Date?
 
     private func poll() {
+        guard pollFlight.begin() else { return }
         pollGeneration += 1
         let generation = pollGeneration
-        // 同步阻塞调用(内部 fork 子进程等待退出),挪到后台线程跑,避免卡住主线程/UI。
+        // 同步阻塞调用(内部 fork 子进程等待退出),挪到专用队列上跑,不卡主线程、不占协作线程池(见 pollQueue)。
+        // 失败原因跟快照在同一条队列上一起取:它是 MediaControlClient 的全局量,回到主线程再读就可能已经不是这一轮的。
         Task {
-            let snapshot = await Task.detached {
-                MediaControlClient.fetchSnapshot()
-            }.value
+            defer { self.finishPoll() }
+            let (snapshot, snapshotFailure) = await Self.runOffPool(Self.pollQueue) {
+                (MediaControlClient.fetchSnapshot(), MediaControlClient.lastSnapshotFailure)
+            }
             guard generation == self.pollGeneration else {
                 logger.debug("poll result discarded: stale generation (\(generation) vs \(self.pollGeneration))")
                 return
@@ -2573,8 +2640,7 @@ public final class LocalPlaybackSource: ObservableObject {
                 // 仍会给一个 playing=false 的正常快照,只有"压根没曲目"才会是 nil)。必须
                 // 清理播放状态(anchor=nil 时清 currentLine/nextLineText+停快速计时器,
                 // 加 isPlayingNow=false),否则从"正在播放"切到这种 nil 快照时,状态栏/
-                // 悬浮窗会卡在停播前那一刻不会自己恢复;title/artist/album 不清空,跟
-                // "暂停"时保留最近播放信息的既有行为保持一致。
+                // 悬浮窗会卡在停播前那一刻不会自己恢复。曲目信息(title/artist/album)也一起清,理由见 clearIfWasPlaying。
                 self.consecutiveNilSnapshots += 1
                 if self.nilStreakStartedAt == nil { self.nilStreakStartedAt = Date() }
                 if self.consecutiveNilSnapshots == 1 || self.consecutiveNilSnapshots % 30 == 0 {
@@ -2585,7 +2651,7 @@ public final class LocalPlaybackSource: ObservableObject {
                     // 说出**具体是哪一种**。原来这句把三种原因合成
                     // 一句话、还漏掉了第四种(焦点被别的 App 占走 / 私有通道坏了),用户交上来的
                     // 诊断日志里只有这一句,指不出任何方向。枚举见 MediaControlClient.SnapshotFailure。
-                    let reason = MediaControlClient.lastSnapshotFailure?.rawValue ?? "unknown"
+                    let reason = snapshotFailure?.rawValue ?? "unknown"
                     // notice 而不是 error:这多数时候是正常状态(Music 没开 / 没曲目在放),
                     // 落盘留线索就够,不该在 error 级别里跟真正的故障混在一起。后缀显式 .public ——
                     // 默认 private 会把它打成 <private>,24 小时日志里 36 条全是 <private> 尾巴。
@@ -2593,7 +2659,7 @@ public final class LocalPlaybackSource: ObservableObject {
                 }
                 // 单拍 nil 不清状态:判据与代价见
                 // MediaControlClient.nilSnapshotClearsState。
-                let failure = MediaControlClient.lastSnapshotFailure
+                let failure = snapshotFailure
                 let nilStreakSeconds = Date().timeIntervalSince(self.nilStreakStartedAt ?? Date())
                 if MediaControlClient.nilSnapshotClearsState(
                     consecutiveNilCount: self.consecutiveNilSnapshots,
@@ -2642,10 +2708,15 @@ public final class LocalPlaybackSource: ObservableObject {
         // 放在 apply 最前面而不是 MediaControlClient 里:EnrichCacheReader 是 @MainActor 隔离的,
         // 快照那条路是 nonisolated,够不着。
         // 这一拍之后所有针对这首的缓存查询都按它的时长挑同名不同录音的变体(见 EnrichCacheReader.matchedKey)。
-        // 电台的系统时长是整档节目,不给。
+        // 电台的系统时长是整档节目,不给。MV 也不给:collector 对 MV 按「时长未知」解析(snapshot.lyricsDurationSecs),
+        // 只用基条目、从不建时长变体;这边照传视频时长的话,听过音频版的歌再看 MV,视频时长跟基条目差出 12% 以上,
+        // 就去找一个 collector 永远不会建的 `~durN`,整首一直在转圈。是不是 MV 按下面同一套判据(这一拍还没更新 musicVideoKey)。
+        let playingMusicVideo = Self.musicVideoTrackKey(previous: musicVideoKey, currentKey: rawSnapshot.trackKey,
+                                                        markedMusicVideo: rawSnapshot.isMusicVideo == true) == rawSnapshot.trackKey
         EnrichCacheReader.notePlayingDuration(
             artist: rawSnapshot.artist ?? "", title: rawSnapshot.title ?? "", album: rawSnapshot.album ?? "",
-            secs: rawSnapshot.isRadio == true ? nil : rawSnapshot.duration)
+            secs: Self.lyricsLookupDuration(isRadio: rawSnapshot.isRadio == true, isMusicVideo: playingMusicVideo,
+                                            duration: rawSnapshot.duration))
         var snapshot = rawSnapshot
         if rawSnapshot.isRadio == true,
            let cached = EnrichCacheReader.trackDurationSecs(
@@ -2757,7 +2828,19 @@ public final class LocalPlaybackSource: ObservableObject {
         let adByFields = Self.adBreakByFields(
             isSpotifyNative: isSpotifyNative, title: newTitle, artist: newArtist, album: newAlbum,
             youTubeMusicVerdict: youTubeMusicVerdict, spotifyWebVerdict: spotifyWebVerdict)
-        if !newTitle.isEmpty, !adByFields, newTitle != lastPersistedTrackTitle {
+        // 原生 Spotify 的广告常常伪装成正常歌曲字段,字段启发式认不出:Spotify 刚广播的通知(同步,换曲那一拍就在)
+        // 说是广告就不写;通知没到、要等 AppleScript 复核的那条是异步的,确认之后由 revertLastTrackAfterAd 把写进去的撤回。
+        // 同一首已经确认是广告的(isCurrentTrackAdBreak 同曲只往 true 棘轮),之后几拍也不写。
+        let spotifyNoticeSaysAd = isSpotifyNative
+            && (spotifyNotificationHint.map { $0.isAd && $0.matches(title: snapshot.title, artist: snapshot.artist) } ?? false)
+        let knownAdThisTrack = isCurrentTrackAdBreak && snapshot.identityKey == lastKey
+        if !newTitle.isEmpty, !adByFields, !spotifyNoticeSaysAd, !knownAdThisTrack, newTitle != lastPersistedTrackTitle {
+            let defaults = UserDefaults.standard
+            lastTrackBeforeWrite = (key: snapshot.trackKey,
+                                    title: defaults.string(forKey: "np:lastTrackTitle"),
+                                    artist: defaults.string(forKey: "np:lastTrackArtist"),
+                                    album: defaults.string(forKey: "np:lastTrackAlbum"),
+                                    persistedTitle: lastPersistedTrackTitle)
             UserDefaults.standard.set(newTitle, forKey: "np:lastTrackTitle")
             UserDefaults.standard.set(newArtist, forKey: "np:lastTrackArtist")
             // 专辑才补上(停播页的唱片 hero 要显示「歌手 · 专辑」)。它跟着
@@ -2928,9 +3011,8 @@ public final class LocalPlaybackSource: ObservableObject {
             // 首歌没有封面(结果为 nil)就在那一刻清空——两种情况都只有一次视觉变化,没有
             // "先白闪再回来"。
             //
-            // 但完成回调不能是唯一出路:MediaControlClient.fetchArtwork() 用的是
-            // waitUntilExit() 且**没有超时**,子进程真挂住的话回调永远不来,旧封面就会一直
-            // 挂着。所以再加一道超时兜底,见 scheduleArtworkStaleTimeout。
+            // 但完成回调不能是唯一出路:MediaControlClient.fetchArtwork() 一次最长要等满子进程超时(10 秒),
+            // 重试几轮加起来更久,这段时间里旧封面一直挂着。所以再加一道超时兜底,见 scheduleArtworkStaleTimeout。
             scheduleArtworkStaleTimeout(forKey: key)
             fetchArtworkForCurrentTrack(expectedKey: key)
         }
@@ -2977,6 +3059,14 @@ public final class LocalPlaybackSource: ObservableObject {
         // 网页探针的每首额度换歌就重开,不管这一拍在不在播、有没有时长。别挪进下面 `if playing, let duration` 那支:
         // 页面内换歌的头一拍常常还没有时长,跳过这一步,探针就还记着上一次探过的 key,A → B → A 切回来时一次都不探。
         if trackChanged { env.browserProbeTrackChanged(previousKey, key) }
+        // 在播、但这一拍没有时长(网页播放器、汽水换歌的头一两拍常这样,见 MediaControlSnapshot.duration):位置这一拍
+        // 算不了,也不是暂停。别落进下面的暂停分支 —— 那一支清掉锚点之后,末尾照样把 posTrackingKey / posWasPlaying 推到
+        // 新曲,下一拍有了时长就被当成「同曲稳定播放」,换歌那一支(锚点滞后预置、自然切歌校正)整首都不跑。这一拍什么都
+        // 不记:同一首留着原来的锚点接着外推;换了歌先拿掉上一首的锚点,等有时长的那一拍按换歌处理。
+        if playing, (snapshot.duration ?? 0) <= 0 {
+            if key != posTrackingKey, anchor != nil { anchor = nil }
+            return
+        }
         // 暂停/恢复那一拍的诊断:用户看到"一按暂停歌词进度变一下",要量的就是
         // "暂停前一刻屏上外推到哪"与"冻结值"之差、以及"冻结值"与"恢复后第一笔"之差。两个
         // 变量只在状态翻转的那一拍非 nil,日志也只在那一拍打一行。
@@ -3350,6 +3440,7 @@ public final class LocalPlaybackSource: ObservableObject {
         lastSeekPrevSecs = trackPosSeconds
         lastSeekTargetSecs = seconds
         lastSeekAt = now
+        env.browserProbeSeeked(now)
         // 作废所有在飞的 poll:它们的快照是 seek **之前**抓的(子进程往返几十到几百毫秒),
         // 落地后会被 resolvePositionSeconds 当成"真实 seek 跳变"硬重锚回旧位置,表现成
         // 松手跳过去、一瞬间又弹回来。这一行只治"已经在飞"的那次;seek 本身还有 ~300ms
@@ -3357,6 +3448,8 @@ public final class LocalPlaybackSource: ObservableObject {
         // handlePlayerInfoChanged 那段注释),那之后**新发起**的 poll 同样会读到旧位置,
         // 靠上面那个接受窗兜。
         pollGeneration += 1
+        // 在飞的那一轮作废了,回来后补跑一轮拿拖动之后的状态(单飞,见 PollSingleFlight)。
+        pollFlight.invalidateInFlight()
         trackPosSeconds = seconds
         posPrevWall = now
         posErrEMA = 0
@@ -3777,10 +3870,10 @@ public final class LocalPlaybackSource: ObservableObject {
             // 拿到相同字节这些**注定丢弃**的路径上,预算的取色纯属白烧;改成确定采纳那一刻
             // 再算一次(仍在后台,见 hexFor)。
             func attempt() async -> (data: Data?, payloadKey: String?) {
-                await Task.detached { () -> (Data?, String?) in
+                await Self.runOffPool(Self.artworkQueue) { () -> (Data?, String?) in
                     guard let result = MediaControlClient.fetchArtwork() else { return (nil, nil) }
                     return (result.data, result.trackKey)
-                }.value
+                }
             }
             func hexFor(_ data: Data?) async -> String? {
                 guard let data else { return nil }

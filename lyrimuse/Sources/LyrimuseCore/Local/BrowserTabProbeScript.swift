@@ -22,7 +22,11 @@ import Foundation
 //    时候就是它。
 //  * `with timeout of N seconds` **不能省**:没有它时"浏览器不回"表现为 osascript 挂死到被
 //    进程级超时杀掉,裸 `try` 抓不住挂起。
-//  * 裸 `try … end try`:吞掉单个标签页的错误继续找下一个。
+//  * 裸 `try … end try`:吞掉单个标签页的错误继续找下一个。数标签页那一步也包着:扫到一半有窗口被关、或者是个
+//    没有标签页的非网页窗口时,不包的话整次脚本失败。
+//  * **暂停的标签页排在后面**:JS 在视频暂停时给结果加 `PAUSED:` 前缀,模板把它记成备选、接着找在播的那一页,
+//    都找完了才交回备选(去掉前缀)。开着好几个 YouTube Music 标签页时,排在前面的那页常常是暂停着、放着别的歌的,
+//    拿它的读数判广告、补专辑名、复核跳过都会错;只有一个标签页时结果跟原来一样。collector 的 ytmusicad.go 同一份。
 //  * Chromium 系和 Safari 的 JS 注入命令**不同名**(实测坐实,不是同一个词的两种
 //    写法):Chromium 是 `execute (tab) javascript "…"`,Safari 是 `do JavaScript "…" in tab`。
 //    窗口/标签枚举语法(`count of windows`/`tabs of window`/`URL of tab`)两边一致。
@@ -60,6 +64,7 @@ public enum BrowserTabProbeScript {
         return """
         tell application id "\(bundleID)"
             set winCount to count of windows
+            set fallback to ""
             repeat with wi from 1 to winCount
                 try
                     if (URL of \(activeTab)) contains "\(hostMarker)" then
@@ -67,13 +72,21 @@ public enum BrowserTabProbeScript {
                             set r to \(executeActive)
                         end timeout
                         if r does not contain "NOTFOUND" then
-                            return r
+                            if r starts with "PAUSED:" then
+                                if fallback is "" then set fallback to text 8 thru -1 of r
+                            else
+                                return r
+                            end if
                         end if
                     end if
                 end try
             end repeat
             repeat with wi from 1 to winCount
-                set tabCount to count of tabs of window wi
+                try
+                    set tabCount to count of tabs of window wi
+                on error
+                    set tabCount to 0
+                end try
                 repeat with ti from 1 to tabCount
                     try
                         if (URL of tab ti of window wi) contains "\(hostMarker)" then
@@ -81,12 +94,17 @@ public enum BrowserTabProbeScript {
                                 set r to \(executeTab)
                             end timeout
                             if r does not contain "NOTFOUND" then
-                                return r
+                                if r starts with "PAUSED:" then
+                                    if fallback is "" then set fallback to text 8 thru -1 of r
+                                else
+                                    return r
+                                end if
                             end if
                         end if
                     end try
                 end repeat
             end repeat
+            if fallback is not "" then return fallback
             return "NOTFOUND"
         end tell
         """

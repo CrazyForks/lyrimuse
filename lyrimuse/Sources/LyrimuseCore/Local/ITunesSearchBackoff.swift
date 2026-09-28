@@ -1,8 +1,8 @@
 import Foundation
 
 /// App 侧 iTunes Search(`itunes.apple.com/search`)的限流退避,口径同 collector `apple.go` 的
-/// `noteITunesSearchStatus`:429 按 Retry-After(没给默认 60 秒、封顶 300 秒),403 固定 30 秒且
-/// 不缩短已有的更长窗口,其余状态码清掉窗口。两边的数字要一起改。
+/// `noteITunesSearchStatus`:429 按 Retry-After(没给默认 60 秒、封顶 300 秒),403 与网络层失败(状态码记 0:连接被掐、
+/// 超时 —— iTunes 限流时常直接断连接)固定 30 秒且不缩短已有的更长窗口,其余状态码清掉窗口。两边的数字要一起改。
 ///
 public enum ITunesSearchBackoff {
     public static let forbiddenCooldown: TimeInterval = 30
@@ -14,7 +14,7 @@ public enum ITunesSearchBackoff {
         switch status {
         case 429:
             return now.addingTimeInterval(retryAfterSeconds(retryAfter))
-        case 403:
+        case 403, 0:
             let candidate = now.addingTimeInterval(forbiddenCooldown)
             if let current, current > candidate { return current }
             return candidate

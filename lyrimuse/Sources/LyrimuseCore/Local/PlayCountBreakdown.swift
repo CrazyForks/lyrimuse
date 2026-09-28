@@ -114,6 +114,26 @@ public struct PlayCountBreakdown: Equatable {
 }
 
 public enum PlayCountBreakdownMath {
+    /// 「加载更早的」补一页:按偏移分页,两页请求之间进来了 k 次新收听,整张表往后挪 k 格,新一页开头 k 行就是上一页的
+    /// 末尾。按总数的增量算出 k,新一页开头最多 k 行、跟已有末尾逐条对得上的去掉 —— 不去的话会被 `build` 当成真的
+    /// 双端重复(dup=1),编号整体偏一位。真正的双端重复(同一秒两条)不在这个位置、也不会逐条对得上尾巴,不受影响。纯函数。
+    public static func appendingPage(existing: [(date: Date, album: String?)], page: [(date: Date, album: String?)],
+                                     previousTotal: Int, newTotal: Int) -> [(date: Date, album: String?)] {
+        let shift = max(0, newTotal - previousTotal)
+        var drop = 0
+        let limit = min(shift, page.count, existing.count)
+        if limit > 0 {
+            for k in stride(from: limit, through: 1, by: -1) {
+                let tail = existing.suffix(k).map(\.date)
+                if Array(page.prefix(k).map(\.date)) == Array(tail) {
+                    drop = k
+                    break
+                }
+            }
+        }
+        return existing + page.dropFirst(drop)
+    }
+
     /// App 侧喂进来的一种写法:身份 + Last.fm 报的总数 + 已拉到的那些条。
     public struct VariantInput {
         public var artist: String

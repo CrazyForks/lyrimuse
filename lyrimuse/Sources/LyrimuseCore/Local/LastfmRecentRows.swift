@@ -27,9 +27,10 @@ public enum LastfmRecentRows {
         }
     }
 
-    /// 没有曲名的行跳过;`track` 不是数组时返回空。
+    /// 没有曲名的行跳过。`track` 只有一条时 Last.fm 给的是对象不是数组(同 `LastfmRecentTracksPage`),两种都认。
     public static func parse(_ json: [String: Any]) -> [Row] {
-        let items = ((json["recenttracks"] as? [String: Any])?["track"] as? [[String: Any]]) ?? []
+        let raw = (json["recenttracks"] as? [String: Any])?["track"]
+        let items = (raw as? [[String: Any]]) ?? (raw as? [String: Any]).map { [$0] } ?? []
         var dupCount: [String: Int] = [:]
         return items.compactMap { item in
             let title = item["name"] as? String ?? ""

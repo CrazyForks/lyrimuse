@@ -152,6 +152,8 @@ final class ScrobbleBackfillService: ObservableObject {
             // 或下次换歌。补进过去那些天的条数由热力图增量同步收进来(每次重扫最近 14 天,
             // 盖住回填窗口)。accepted == 0(全被忽略/隔离)时 Last.fm 侧什么都没变,不白发请求。
             if let out, out.accepted > 0 {
+                // 补进去的是过去的时间戳,插在最近记录中间:深页缓存的绝对位置全推错了(见 LastfmPageComposer.lateInsertDetected)。
+                LastfmStatsService.shared.dropDeepRecentPageCache(reason: "backfill accepted \(out.accepted)")
                 LastfmStatsService.shared.refreshBaseline(force: true)
                 // 补,更正。Last.fm 把刚收到的 scrobble 并进 recenttracks 要
                 // 一两秒,紧接着上面那一发强刷多半还看不到刚补的记录;而 feed 时代最近记录的主来源

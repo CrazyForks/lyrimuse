@@ -156,24 +156,48 @@ public enum MusicPlaybackController {
     public static func removeCurrentTrackFromLibrary(expectedName: String? = nil) -> Bool {
         // 给了歌名却是空的(界面这一刻没有歌名)就不删:核对不了,删掉的可能不是用户选的那首。
         if let expectedName, expectedName.isEmpty { return false }
-        return runAppleScriptCapturing(#"""
+        return runAppleScriptCapturing(removeFromLibraryScript(expectedName: expectedName)) != nil
+    }
+
+    /// 「从资料库移除」的脚本。公开只为 selftest 能对它做文本断言。
+    ///
+    /// 删是不可恢复的(播放次数、评分、所在歌单一起没了),所以认身份要准:
+    /// 1. 先按当前曲目的 **persistent ID** 在资料库里找 —— 这是资料库自己的唯一身份,不会有歧义;
+    /// 2. 找不到(当前曲目是从目录页播的、不是资料库那一条)才按元数据兜底,而且收紧:专辑名为空不删;
+    ///    歌名、歌手、专辑**区分大小写**逐字相同(`whose` 本身不区分大小写,在脚本里再比一遍)的必须**恰好一条**;
+    ///    时长差在 1 秒以内。原来按「歌名 + 歌手(+ 专辑)」删第一条匹配,资料库里另一张专辑的同名录音会被删掉。
+    public static func removeFromLibraryScript(expectedName: String?) -> String {
+        #"""
         tell application "Music"
             set t to current track
             set tName to name of t
         """# + currentTrackNameGuard(expectedName) + #"""
 
+            set tPID to persistent ID of t
+            set byID to (every track of library playlist 1 whose persistent ID is tPID)
+            if (count of byID) is 1 then
+                delete (item 1 of byID)
+                return "ok"
+            end if
             set tArtist to artist of t
             set tAlbum to album of t
-            if tAlbum is not "" then
-                set matches to (every track of library playlist 1 whose name is tName and artist is tArtist and album is tAlbum)
-            else
-                set matches to (every track of library playlist 1 whose name is tName and artist is tArtist)
-            end if
-            if (count of matches) is 0 then error "not in library"
-            delete (item 1 of matches)
+            if tAlbum is "" then error "no album to confirm the library entry"
+            set tDur to duration of t
+            set cands to (every track of library playlist 1 whose name is tName and artist is tArtist and album is tAlbum)
+            set exact to {}
+            considering case
+                repeat with c in cands
+                    if (name of c) is tName and (artist of c) is tArtist and (album of c) is tAlbum then set end of exact to (contents of c)
+                end repeat
+            end considering
+            if (count of exact) is not 1 then error "not exactly one matching library entry"
+            set m to item 1 of exact
+            set d to (duration of m) - tDur
+            if d > 1 or d < -1 then error "library entry duration does not match"
+            delete m
             return "ok"
         end tell
-        """#) != nil
+        """#
     }
 
     /// 恢复播放(歌词窗口欢迎态「继续播放」,Apple Music)。 裸 `play` 对空队列是

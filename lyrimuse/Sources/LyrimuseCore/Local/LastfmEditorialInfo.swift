@@ -42,10 +42,13 @@ public enum LastfmEditorialInfo {
         return .none
     }
 
-    /// 去掉末尾「Read more on Last.fm / 授权声明」那一段,解常见 HTML 实体,压掉首尾空白。
+    /// 去掉末尾「Read more on Last.fm / 授权声明」那一段,去掉其余 HTML 标签,解常见 HTML 实体,压掉首尾空白。
+    ///
+    /// 从**最后一个**链接截:正文中间也可能有内嵌链接(提到别的歌手、专辑),从第一个截会把后面的正文整段丢掉。
     public static func cleaned(_ raw: String) -> String {
         var text = raw
-        if let range = text.range(of: "<a href=") { text = String(text[..<range.lowerBound]) }
+        if let range = text.range(of: "<a href=", options: .backwards) { text = String(text[..<range.lowerBound]) }
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         // `&amp;` 放最后:先解它的话 `&amp;lt;` 会被多解一层。
         let entities = [("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&amp;", "&")]
         for (entity, char) in entities { text = text.replacingOccurrences(of: entity, with: char) }

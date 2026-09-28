@@ -65,7 +65,11 @@ public enum TrustedPlayers {
     /// 「自动识别」下真正的成员判断:内置播放器 + 用户信任的。跟 collector 的
     /// `isAcceptedPlayerBundleID` 是同一套语义,两侧必须同时改。
     public static func isAccepted(_ bundleID: String?) -> Bool {
-        isAccepted(bundleID, trusted: current)
+        // 内置播放器是编译期常量,先判掉:`current` 每次都读盘解码 features.json,这条在轮询热路径上。
+        if let bundleID, PlaybackPlayer.allCases.contains(where: { $0 != .auto && $0.bundleIdentifier == bundleID }) {
+            return true
+        }
+        return isAccepted(bundleID, trusted: current)
     }
 
     /// 同上,但信任名单由调用方传入 —— 纯函数,selftest 直接覆盖(不然断言会去读这台机器

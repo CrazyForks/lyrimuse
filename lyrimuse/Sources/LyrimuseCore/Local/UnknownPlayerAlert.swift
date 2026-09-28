@@ -40,8 +40,8 @@ public enum UnknownPlayerAlert {
         guard now.timeIntervalSince(observedAt) < freshWindow else { return false }
         // trim 后判空,跟 TrustedPlayers.notASong 完全一致。卡片原来写的是裸 isEmpty,
         // 于是 album = " " 的播放能过卡片、过不了守卫 —— 那是个既有 bug,这次一并抹平。
-        guard !artist.trimmingCharacters(in: .whitespaces).isEmpty,
-              !album.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        guard !artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return !isAccepted(id)
     }
 

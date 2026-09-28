@@ -119,6 +119,7 @@ const ytmusicAdProbeJS = `(function(){` +
 	`var hasTime = !!document.querySelector('.time-info');` +
 	`if (!p && !hasTime) return 'NOTFOUND';` +
 	`var cls = p ? (p.className || '') : '';` +
+	`var vid = p ? p.querySelector('video') : null;` +
 	`var adShowing = cls.indexOf('ad-showing') >= 0 ? '1' : '0';` +
 	`var badge = document.querySelector('.ytp-ad-badge, .ytp-ad-simple-ad-badge, .ytp-ad-text, .ytp-ad-preview-container') ? '1' : '0';` +
 	`var slotEl = document.querySelector('.ytp-ad-simple-ad-badge, .ytp-ad-badge');` +
@@ -132,7 +133,8 @@ const ytmusicAdProbeJS = `(function(){` +
 	`var h = bl[i].getAttribute('href') || '';` +
 	`if (h.indexOf('browse/MPREb') >= 0) { album = (bl[i].textContent || '').trim(); break; }` +
 	`}` +
-	`return adShowing + '|' + badge + '|' + bare + '|' + slot + '|' + album;` +
+	`var out = adShowing + '|' + badge + '|' + bare + '|' + slot + '|' + album;` +
+	`return (vid && vid.paused) ? 'PAUSED:' + out : out;` +
 	`})()`
 
 // browserScriptFamily 回答"这个 bundle id 该用哪种 AppleScript 方言"。
@@ -172,8 +174,11 @@ func browserScriptFamily(bundleID string) string {
 // 跟 Swift 侧 `YouTubeMusicAdProbe.parse` 是同一套语义,两边必须同时改。
 func parseYTMusicAdProbe(raw string) (ytmusicAdVerdict, string) {
 	s := strings.TrimSpace(raw)
-	// AppleScript 有时会把返回值再包一层双引号,脱掉。
-	s = strings.Trim(s, "\"")
+	// AppleScript 有时会把返回值再包一层双引号:只脱两头恰好一对,再把里面被转义的 `\"` / `\\` 还原(Chromium 会把
+	// 返回值里的双引号真的转义成 `\"`)。原来首尾的双引号全剥,专辑名以引号结尾时会被吃掉一个、中间的还带着反斜杠。
+	if len(s) >= 2 && strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
+		s = strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(s[1 : len(s)-1])
+	}
 	s = strings.TrimSpace(s)
 	if s == "" || strings.Contains(s, "NOTFOUND") {
 		return ytmusicAdUnknown, ""
@@ -268,6 +273,7 @@ func buildBrowserTabAppleScript(bundleID, family, host, js string) string {
 	t := strconv.Itoa(ytmusicAdProbeEventTimeout)
 	return "tell application id \"" + bundleID + "\"\n" +
 		"\tset winCount to count of windows\n" +
+		"\tset fallback to \"\"\n" +
 		"\trepeat with wi from 1 to winCount\n" +
 		"\t\ttry\n" +
 		"\t\t\tif (URL of " + activeTab + ") contains \"" + host + "\" then\n" +
@@ -275,13 +281,21 @@ func buildBrowserTabAppleScript(bundleID, family, host, js string) string {
 		"\t\t\t\t\tset r to " + executeActive + "\n" +
 		"\t\t\t\tend timeout\n" +
 		"\t\t\t\tif r does not contain \"NOTFOUND\" then\n" +
-		"\t\t\t\t\treturn r\n" +
+		"\t\t\t\t\tif r starts with \"PAUSED:\" then\n" +
+		"\t\t\t\t\t\tif fallback is \"\" then set fallback to text 8 thru -1 of r\n" +
+		"\t\t\t\t\telse\n" +
+		"\t\t\t\t\t\treturn r\n" +
+		"\t\t\t\t\tend if\n" +
 		"\t\t\t\tend if\n" +
 		"\t\t\tend if\n" +
 		"\t\tend try\n" +
 		"\tend repeat\n" +
 		"\trepeat with wi from 1 to winCount\n" +
-		"\t\tset tabCount to count of tabs of window wi\n" +
+		"\t\ttry\n" +
+		"\t\t\tset tabCount to count of tabs of window wi\n" +
+		"\t\ton error\n" +
+		"\t\t\tset tabCount to 0\n" +
+		"\t\tend try\n" +
 		"\t\trepeat with ti from 1 to tabCount\n" +
 		"\t\t\ttry\n" +
 		"\t\t\t\tif (URL of tab ti of window wi) contains \"" + host + "\" then\n" +
@@ -289,12 +303,17 @@ func buildBrowserTabAppleScript(bundleID, family, host, js string) string {
 		"\t\t\t\t\t\tset r to " + executeTab + "\n" +
 		"\t\t\t\t\tend timeout\n" +
 		"\t\t\t\t\tif r does not contain \"NOTFOUND\" then\n" +
-		"\t\t\t\t\t\treturn r\n" +
+		"\t\t\t\t\t\tif r starts with \"PAUSED:\" then\n" +
+		"\t\t\t\t\t\t\tif fallback is \"\" then set fallback to text 8 thru -1 of r\n" +
+		"\t\t\t\t\t\telse\n" +
+		"\t\t\t\t\t\t\treturn r\n" +
+		"\t\t\t\t\t\tend if\n" +
 		"\t\t\t\t\tend if\n" +
 		"\t\t\t\tend if\n" +
 		"\t\t\tend try\n" +
 		"\t\tend repeat\n" +
 		"\tend repeat\n" +
+		"\tif fallback is not \"\" then return fallback\n" +
 		"\treturn \"NOTFOUND\"\n" +
 		"end tell\n"
 }

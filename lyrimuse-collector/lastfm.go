@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -658,31 +659,56 @@ func lastfmRecentRateLimited(now time.Time) bool {
 
 // parseLastfmRecent 把 `user.getrecenttracks` 的响应体解成 lastfmRecentPage。拆出来是为了
 // 能用样本 JSON 单测(lastfmfeed_test.go);网络部分在 lastfmRecent。
+// lastfmRecentTrackJSON 是 recenttracks.track 里的一条。
+type lastfmRecentTrackJSON struct {
+	Name   string `json:"name"`
+	Artist struct {
+		Text string `json:"#text"`
+	} `json:"artist"`
+	Album struct {
+		Text string `json:"#text"`
+	} `json:"album"`
+	Image []struct {
+		Size string `json:"size"`
+		Text string `json:"#text"`
+	} `json:"image"`
+	Date struct {
+		UTS string `json:"uts"`
+	} `json:"date"`
+	Attr struct {
+		NowPlaying string `json:"nowplaying"`
+	} `json:"@attr"`
+}
+
+// decodeLastfmTrackList 解 recenttracks.track:Last.fm 的老毛病,多条是数组、只有一条时是对象(backfill.go 的
+// parseScrobbleEntries 同一个坑)。只按数组解的话,账号里只有一条记录(或者只剩一条加正在播放)时整份解不开,
+// feed 永远写不出来。
+func decodeLastfmTrackList(raw json.RawMessage) ([]lastfmRecentTrackJSON, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '{' {
+		var one lastfmRecentTrackJSON
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return nil, err
+		}
+		return []lastfmRecentTrackJSON{one}, nil
+	}
+	var many []lastfmRecentTrackJSON
+	if err := json.Unmarshal(trimmed, &many); err != nil {
+		return nil, err
+	}
+	return many, nil
+}
+
 func parseLastfmRecent(body []byte) (lastfmRecentPage, error) {
 	var out struct {
 		RecentTracks struct {
 			Attr struct {
 				Total string `json:"total"`
 			} `json:"@attr"`
-			Track []struct {
-				Name   string `json:"name"`
-				Artist struct {
-					Text string `json:"#text"`
-				} `json:"artist"`
-				Album struct {
-					Text string `json:"#text"`
-				} `json:"album"`
-				Image []struct {
-					Size string `json:"size"`
-					Text string `json:"#text"`
-				} `json:"image"`
-				Date struct {
-					UTS string `json:"uts"`
-				} `json:"date"`
-				Attr struct {
-					NowPlaying string `json:"nowplaying"`
-				} `json:"@attr"`
-			} `json:"track"`
+			Track json.RawMessage `json:"track"`
 		} `json:"recenttracks"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -697,9 +723,13 @@ func parseLastfmRecent(body []byte) (lastfmRecentPage, error) {
 	if json.Unmarshal(body, &errBody) == nil && errBody.Error != 0 {
 		return lastfmRecentPage{}, &lastfmAPIError{Code: errBody.Error, Message: errBody.Message, Method: "user.getrecenttracks"}
 	}
+	tracks, err := decodeLastfmTrackList(out.RecentTracks.Track)
+	if err != nil {
+		return lastfmRecentPage{}, err
+	}
 	var page lastfmRecentPage
 	page.Total, _ = strconv.Atoi(out.RecentTracks.Attr.Total)
-	for _, t := range out.RecentTracks.Track {
+	for _, t := range tracks {
 		if t.Name == "" {
 			continue
 		}

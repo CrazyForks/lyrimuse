@@ -104,11 +104,15 @@ public enum AlbumEditorialNotes {
               let root = try? JSONSerialization.jsonObject(with: Data(json.utf8)) else { return nil }
         let want = String(albumID)
         var page: AlbumPage?
+        var pageHasNotes = false
         visit(root) { dict in
             // 只认专辑头部那一项:标识对得上这张专辑,且带简介描述符或署名链接(播放按钮等别的节点也引用同一个
             // ID)。没有标识的形状不放行,宁可不显示也不配错专辑。
-            guard page == nil, storeAdamID(of: dict, kind: nil) == want,
+            //
+            // 字典的遍历顺序每次不一样:两个节点都对得上时,带简介的那个优先,别让简介时有时无。
+            guard !pageHasNotes, storeAdamID(of: dict, kind: nil) == want,
                   dict["modalPresentationDescriptor"] != nil || dict["subtitleLinks"] != nil else { return }
+            if page != nil, dict["modalPresentationDescriptor"] == nil { return }
             var notes: Notes?
             if let descriptor = dict["modalPresentationDescriptor"] as? [String: Any],
                let paragraph = descriptor["paragraphText"] as? String {
@@ -119,7 +123,9 @@ public enum AlbumEditorialNotes {
                                   text: text)
                 }
             }
+            if page != nil, notes == nil { return }
             page = AlbumPage(notes: notes, artists: artistLinks(in: dict))
+            pageHasNotes = notes != nil
         }
         return page
     }

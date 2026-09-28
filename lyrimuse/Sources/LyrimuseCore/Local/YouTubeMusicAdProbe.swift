@@ -178,6 +178,7 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
     var hasTime = !!document.querySelector('.time-info');\
     if (!p && !hasTime) return 'NOTFOUND';\
     var cls = p ? (p.className || '') : '';\
+    var vid = p ? p.querySelector('video') : null;\
     var adShowing = cls.indexOf('ad-showing') >= 0 ? '1' : '0';\
     var badge = document.querySelector('.ytp-ad-badge, .ytp-ad-simple-ad-badge, .ytp-ad-text, .ytp-ad-preview-container') ? '1' : '0';\
     var slotEl = document.querySelector('.ytp-ad-simple-ad-badge, .ytp-ad-badge');\
@@ -191,7 +192,8 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
     var h = bl[i].getAttribute('href') || '';\
     if (h.indexOf('browse/MPREb') >= 0) { album = (bl[i].textContent || '').trim(); break; }\
     }\
-    return adShowing + '|' + badge + '|' + bare + '|' + slot + '|' + album;\
+    var out = adShowing + '|' + badge + '|' + bare + '|' + slot + '|' + album;\
+    return (vid && vid.paused) ? 'PAUSED:' + out : out;\
     })()
     """
 
@@ -281,6 +283,8 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
     private var inFlightKey: String?
     private var notFoundKey: String?
     private var notFoundAt: Date?
+    /// 没读到(nil,不是 NOTFOUND)之后的退避,见 ProbeFailureBackoff。
+    private var failureBackoff = ProbeFailureBackoff()
     /// 探针结果落地(缓存已更新)时的回调 —— `LocalPlaybackSource` 挂上"立刻 poll 一次",
     /// 不等下一拍 2s 轮询来消费。照 `SpotifyPositionProbe.setResultSink`
     /// 那条成熟先例:poll() 自己会核对曲目身份,消费那边还有 key 一道门,多查一次完全无害。
@@ -372,8 +376,15 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
     /// 那时计数为空是**常态**不是异常。
     public static func parse(_ raw: String) -> Reading? {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // AppleScript 有时把返回值再包一层双引号,脱掉。
-        s = s.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        // AppleScript 有时把返回值再包一层双引号,只脱**两头恰好一对**,再把里面被转义的 `\"` / `\\` 还原
+        // (Chromium 的 `execute … javascript` 会把返回值里的双引号真的转义成 `\"`,见 BrowserTabProbeScript 头注)。
+        // 原来把首尾所有双引号都剥掉:专辑名以引号结尾时末尾那个被吃掉,中间的还带着反斜杠,这个脏值会被补进快照、
+        // 当成歌词缓存 key 的专辑段。collector 的 parseYTMusicAdProbe 同一套。
+        if s.count >= 2, s.hasPrefix("\""), s.hasSuffix("\"") {
+            s = String(s.dropFirst().dropLast())
+                .replacingOccurrences(of: "\\\"", with: "\"")
+                .replacingOccurrences(of: "\\\\", with: "\\")
+        }
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty || s.contains("NOTFOUND") { return nil }
         let parts = s.split(separator: "|", maxSplits: 4, omittingEmptySubsequences: false)
@@ -502,6 +513,10 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
             lock.unlock()
             return
         }
+        if failureBackoff.suppresses(key: key, now: Date()) {
+            lock.unlock()
+            return
+        }
         inFlightKey = key
         lock.unlock()
 
@@ -516,6 +531,11 @@ public final class YouTubeMusicAdProbe: @unchecked Sendable {
             } else if reading != nil, self.notFoundKey == key {
                 self.notFoundKey = nil
                 self.notFoundAt = nil
+            }
+            if reading == nil, !notFound {
+                self.failureBackoff.noteFailure(key: key, now: Date())
+            } else {
+                self.failureBackoff.reset()
             }
             // nil 不进缓存:那多半是"这一下没读到"(超时/标签页刚好在切),下一轮该重试,
             // 缓存住它等于把一次偶发失败按整首歌的时长放大。

@@ -381,8 +381,11 @@ func runLastfmTests() {
         grown["recenttracks"] = ["track": [track("Song", "A", uts: "1700000200")]
             + ((json["recenttracks"] as? [String: Any])?["track"] as? [[String: Any]] ?? [])]
         expectEqual(R.parse(grown).dropFirst().map(\.dup), rows.map(\.dup), "最近记录: 头部新增一条,旧行序号不变")
-        expectEqual(R.parse(["recenttracks": ["track": ["name": "Solo"]]]).isEmpty, true,
-                    "最近记录: track 不是数组时返回空")
+        // 只有一条时 Last.fm 给的是对象不是数组(同 LastfmRecentTracksPage):照样解出这一条。
+        expectEqual(R.parse(["recenttracks": ["track": ["name": "Solo"]]]).map(\.title), ["Solo"],
+                    "最近记录: track 是单个对象时解出这一条")
+        expectEqual(R.parse(["recenttracks": ["track": "garbage"]]).isEmpty, true,
+                    "最近记录: track 既不是数组也不是对象时返回空")
         expectEqual(R.parse([:]).isEmpty, true, "最近记录: 缺字段")
     }
 

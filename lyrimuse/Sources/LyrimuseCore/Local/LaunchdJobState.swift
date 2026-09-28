@@ -85,7 +85,8 @@ public enum LaunchdPrintParser {
             // 正常情况下 running 必然带 pid;真缺了也不该退回"没在跑",state 字段本身
             // 才是权威,pid 只是附带信息。
             return .running(pid: pid ?? 0)
-        case "not running", "waiting":
+        // `spawn scheduled`:崩溃后 launchd 按节流间隔排着要重新拉起 —— 注册着、此刻没在跑,不是「未知」。
+        case "not running", "waiting", "spawn scheduled":
             return .registeredNotRunning(lastExitCode: sawLastExitCodeField ? lastExitCode : nil)
         case .some:
             return .unknown

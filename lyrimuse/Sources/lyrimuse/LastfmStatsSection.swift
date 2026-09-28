@@ -937,10 +937,12 @@ struct LastfmStatsSection: View {
     /// 「更新的同曲收听」用 PlayCountFold.familyKey 的折叠族),复制一份就等于把用户
     /// 报的「第 15 次听下面紧跟第 21 次听」的成因复制一份。细节与理由见那边的注释。
     private var recentRows: [(track: LastfmStatsService.RecentTrack, count: Int?)] {
+        // 第 2 页起要减掉前几页里更新的同曲收听;前几页拼不齐时这一页不显示次数(见 precedingRecentRows)。
         let counts = RecentPlayOrdinal.ordinals(
             rows: recentHistory.map { (artist: $0.artist, title: $0.title) },
             totals: stats.trackPlayCounts,
-            playCountKey: { LastfmStatsService.playCountKey(artist: $0, title: $1) })
+            playCountKey: { LastfmStatsService.playCountKey(artist: $0, title: $1) },
+            preceding: stats.precedingRecentRows()?.filter { $0.date != nil }.map { (artist: $0.artist, title: $0.title) })
         return zip(recentHistory, counts).map { (track: $0, count: $1) }
     }
 

@@ -145,6 +145,8 @@ public final class SpotifyWebAdProbe: @unchecked Sendable {
     private var cachedVerdictValue: Verdict?
     private var cachedAt: Date?
     private var inFlightKey: String?
+    /// 没读到之后的退避,见 ProbeFailureBackoff。
+    private var failureBackoff = ProbeFailureBackoff()
     /// 探针结果落地时的回调,语义与 `YouTubeMusicAdProbe.resultSink` 逐字相同 ——
     /// 换曲那一拍新 key 下必然没有缓存,挂上它把"干等一整个 2s 轮询周期"压成探针往返本身。
     private var resultSink: (@Sendable (_ key: String) -> Void)?
@@ -212,6 +214,11 @@ public final class SpotifyWebAdProbe: @unchecked Sendable {
             lock.unlock()
             return
         }
+        // 上几次没读到(超时 / 授权被拒 / 标签页不在):退避一段再探,别每拍起一个注定失败的 osascript。
+        if failureBackoff.suppresses(key: key, now: Date()) {
+            lock.unlock()
+            return
+        }
         inFlightKey = key
         lock.unlock()
 
@@ -222,6 +229,11 @@ public final class SpotifyWebAdProbe: @unchecked Sendable {
             if self.inFlightKey == key { self.inFlightKey = nil }
             // nil 不进缓存:那多半是"这一下没读到"(超时/标签页刚好在切),下一轮该重试,
             // 缓存住它等于把一次偶发失败按整条广告的时长放大。
+            if verdict == nil {
+                self.failureBackoff.noteFailure(key: key, now: Date())
+            } else {
+                self.failureBackoff.reset()
+            }
             if let verdict {
                 self.cachedKey = key
                 self.cachedVerdictValue = verdict

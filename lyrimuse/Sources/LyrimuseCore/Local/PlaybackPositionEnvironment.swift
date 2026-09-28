@@ -18,6 +18,8 @@ public struct PlaybackPositionEnvironment {
     public var browserProbeKick: (_ bundleID: String?, _ key: String, _ expectedDuration: Double) -> Void
     public var browserProbeConsume: (_ key: String, _ rate: Double, _ now: Date) -> BrowserPositionProbe.Correction?
     public var browserProbeReopenAfterResume: (_ key: String) -> Void
+    /// 用户拖了进度条(`LocalPlaybackSource.seek`):探针丢掉拖动之前的读数。
+    public var browserProbeSeeked: (_ at: Date) -> Void
 
     public var spotifyProbeTrackChanged: (_ key: String, _ isSpotifyNative: Bool) -> Void
     public var spotifyProbeConsume: (_ key: String, _ rate: Double, _ now: Date) -> Double?
@@ -37,8 +39,10 @@ public struct PlaybackPositionEnvironment {
         spotifyProbeTrackChanged: @escaping (String, Bool) -> Void,
         spotifyProbeConsume: @escaping (String, Double, Date) -> Double?,
         spotifyProbeRequestConfirmation: @escaping (String) -> Void,
-        latestAnchorPublishedWhilePaused: @escaping () -> Bool
+        latestAnchorPublishedWhilePaused: @escaping () -> Bool,
+        browserProbeSeeked: @escaping (Date) -> Void = { _ in }
     ) {
+        self.browserProbeSeeked = browserProbeSeeked
         self.defaults = defaults
         self.readPositionBias = readPositionBias
         self.writePositionBias = writePositionBias
@@ -66,6 +70,7 @@ public struct PlaybackPositionEnvironment {
             spotifyProbeTrackChanged: { SpotifyPositionProbe.shared.trackChanged(to: $0, isSpotifyNative: $1) },
             spotifyProbeConsume: { SpotifyPositionProbe.shared.consumeCorrection(forKey: $0, rate: $1, now: $2) },
             spotifyProbeRequestConfirmation: { SpotifyPositionProbe.shared.requestConfirmation(forKey: $0) },
-            latestAnchorPublishedWhilePaused: { MediaControlClient.latestAnchorPublishedWhilePaused() })
+            latestAnchorPublishedWhilePaused: { MediaControlClient.latestAnchorPublishedWhilePaused() },
+            browserProbeSeeked: { BrowserPositionProbe.shared.discardReadings(before: $0) })
     }
 }
