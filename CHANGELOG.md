@@ -20,6 +20,130 @@ each version's git tag annotation and on its
   完整流程见 docs/releasing.md。
 -->
 
+## v1.9.0
+
+New / 新功能
+- Added Soda Music, KKBOX and Amazon Music as built-in players, bringing the
+  total to eight
+  新增汽水音乐、KKBOX 和 Amazon Music 三个内置播放器，一共支持八个
+- Lyrics for the next songs in your queue are now ready before they play
+  按播放队列提前准备好接下来几首的歌词和翻译
+- Lyrics your players already saved on your Mac are now used directly,
+  without a search
+  播放器已经存在本机的歌词会直接拿来用，找得更快、更准
+- The lyrics window now shows background vocals, overlapping duet lines and
+  Apple Music-style word emphasis
+  歌词窗口支持和声、对唱重叠句，以及 Apple Music 式的长音强调
+- Added a mini size to the lyrics window, plus background, colour and font
+  options
+  歌词窗口新增迷你尺寸，背景、文字颜色和字体都能自己调
+- Refreshed the desktop lyrics with a theme gallery, interlude dots and
+  drag-to-resize
+  悬浮歌词新增主题卡片墙、间奏提示，还能拖动边缘调宽度
+- Long lines can now be split, and short ones joined, to fit the desktop
+  lyrics, Dynamic Island and menu bar
+  悬浮歌词、灵动岛和菜单栏可以把长句拆开、短句合并，让每行刚好放得下
+- Added album notes and artist bios for the song that is playing
+  新增正在播放歌曲的专辑简介和歌手介绍
+- The Dynamic Island gains shuffle and repeat for Apple Music and steps aside
+  for full-screen apps
+  灵动岛新增 Apple Music 的随机和循环播放，遇到全屏 App 会自动隐藏
+- Added optional ad skipping and better lyrics timing for YouTube Music
+  videos
+  YouTube Music 新增可选的广告自动跳过，MV 的歌词也对得更准
+- Added new Last.fm stats: listening hours, artist regions, rank changes and
+  loved tracks
+  Last.fm 统计新增收听时段、歌手地区、名次升降和红心喜欢
+- Scrobbles can now match Last.fm's own spelling of artists and song titles
+  打卡可以自动对齐 Last.fm 上的歌手名和歌名写法
+- Added monthly and yearly listening summaries, and Telegram as a push
+  channel
+  推送新增月度和年度听歌小结，并支持 Telegram
+- You can now add any app as a player without waiting for it to play
+  可以手动把任意 App 加成播放器，不用等它正在播放
+- The lyrics manager can now fill in missing lyrics and tells you when it
+  finishes
+  歌词管理可以直接补搜缺失的歌词，完成后会发通知
+
+Improved / 改进
+- From this version on, updates keep Accessibility, Automation and Full Disk
+  Access permissions
+  从这个版本起，更新后不再需要重新授权辅助功能等系统权限
+- Your lyrics library is now better protected against damaged files and
+  failed saves
+  歌词库更不容易因为文件损坏或保存失败而丢数据
+- Lyrics appear noticeably faster, and more songs get word timing,
+  translations and readings
+  歌词出现得更快，更多歌曲有逐字时间轴、译文和读音
+- Improved lyrics matching, so fewer songs get the wrong version or
+  misaligned timing
+  歌词匹配更准，选错版本、时间轴错位的情况更少
+- Covers now load sharper from most sources, and faster in lists
+  大多数来源的封面改为高清原图，列表里的小图也加载得更快
+- Lyrimuse now uses much less CPU, memory and disk space
+  整体更省 CPU、内存和磁盘空间
+- Lyrimuse copes better with rate limits, outages and changes on the
+  services it relies on
+  遇到限流、断网或上游服务变动时，运行得更稳
+- Renamed the background service to the lyrics engine, and settings now
+  apply without restarting it
+  后台服务改称「歌词引擎」，改设置不再需要重启它
+- Streamlined the first-run guide and made permissions clearer throughout
+  Settings
+  首次引导更简洁，设置里的权限说明更清楚
+- Last.fm stats are more accurate and sync faster, with missing covers
+  filled in from your library
+  Last.fm 统计更准、同步更快，缺的封面会用本机已有的补上
+- Failed Last.fm scrobbles are now resent, and you are notified if the
+  connection drops
+  没发出去的 Last.fm 打卡会自动重发，授权失效时会弹通知提醒
+- Export Diagnostics now includes the complete logs, with credentials
+  removed
+  「导出诊断」改为包含完整日志，并去掉账号凭据
+- Polished the wording and layout across Settings and the lyrics manager
+  打磨了设置和歌词管理里的文案与布局
+
+Fixed / 修复
+- Fixed lyrics and controls breaking when a browser video took over Now
+  Playing
+  修复浏览器视频抢走「正在播放」后，歌词消失、播放控制失灵的问题
+- Fixed Apple Music links, covers and progress failing in some regions and
+  languages
+  修复部分地区和系统语言下，Apple Music 链接、封面和进度读不出来的问题
+- Fixed several cases where songs found no lyrics or showed the wrong artist
+  修复几类找不到歌词、或者歌手名显示错误的问题
+- Fixed Last.fm issues with music video scrobbles, play counts and switching
+  accounts
+  修复 MV 不打卡、播放数不准、重新授权后统计被清空等 Last.fm 问题
+- Fixed edits in the lyrics manager landing on the wrong song or going stale
+  修复歌词管理里修改存错歌、列表不自动更新等问题
+- Fixed lyrics export, timing offsets and translations falling out of sync
+  in edge cases
+  修复个别情况下歌词导出失败、时间轴校正和译文对不上的问题
+- Fixed web players showing songs late or with the browser's icon
+  修复网页播放器歌曲出现延迟、来源图标不对的问题
+- Fixed cover flicker, stray clicks and display glitches in the desktop
+  lyrics, Dynamic Island and menu bar
+  修复切歌时封面闪烁、点击穿透到下层 App，以及悬浮歌词、灵动岛、菜单栏的多处显示问题
+- Fixed blurry or jagged lyrics on non-Retina displays and a menu bar that
+  kept resizing
+  修复普通分辨率显示器上歌词发虚、描边有锯齿，以及菜单栏宽度频繁跳动的问题
+- Fixed custom fonts, light themes, shortcuts, update checks and Apple Music
+  reconnect in Settings
+  修复设置里自定义字体、浅色主题、快捷键、检查更新和 Apple Music 重新连接的问题
+
+| Chip / 芯片 | dmg | zip |
+|---|---|---|
+| **Apple Silicon** (M1 and later, recommended) / **Apple M 系列**（推荐） | [Lyrimuse-v1.9.0-macos.dmg](https://github.com/Yudaotor/lyrimuse/releases/download/v1.9.0/Lyrimuse-v1.9.0-macos.dmg) | [Lyrimuse-v1.9.0-macos.zip](https://github.com/Yudaotor/lyrimuse/releases/download/v1.9.0/Lyrimuse-v1.9.0-macos.zip) |
+| **Intel** / **Intel 芯片**（也能在 Apple Silicon 上跑，但体积更大、没必要） | [Lyrimuse-v1.9.0-macos-intel.dmg](https://github.com/Yudaotor/lyrimuse/releases/download/v1.9.0/Lyrimuse-v1.9.0-macos-intel.dmg) | [Lyrimuse-v1.9.0-macos-intel.zip](https://github.com/Yudaotor/lyrimuse/releases/download/v1.9.0/Lyrimuse-v1.9.0-macos-intel.zip) |
+
+Not sure which one? Check your chip under **About This Mac**.
+不确定该下哪个？打开「关于本机」看芯片是 Apple M… 还是 Intel Core…
+
+227 commits since v1.8.0.
+
+**Full Changelog**: https://github.com/Yudaotor/lyrimuse/compare/v1.8.0...v1.9.0
+
 ## v1.8.0
 
 New / 新功能
