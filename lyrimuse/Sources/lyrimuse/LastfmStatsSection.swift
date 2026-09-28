@@ -534,7 +534,9 @@ struct LastfmStatsSection: View {
                 .buttonStyle(.plain)
                 .disabled(!interactive)
                 .rowHoverHighlight(enabled: interactive)
-                .modifier(ChartRowContextMenu(enabled: interactive && chartRowHasMenu(e)) { chartRowMenu(e) })
+                .modifier(ChartRowContextMenu(enabled: interactive && Self.appLinksHaveMenu(stats.appLinks(kind: kind, entry: e))) {
+                    Self.appLinksMenu(stats.appLinks(kind: kind, entry: e), artistName: e.name)
+                })
                 if expanded {
                     // 缩进对齐到缩略图那一列:名次 16 + 间距 10(有升降列再加 34 + 10)
                     artistTracksPanel(e, indent: showMovement ? 70 : 26)
@@ -544,18 +546,17 @@ struct LastfmStatsSection: View {
         .padding(.vertical, 5)
     }
 
-    /// 榜单行的右键菜单:只放能直接进 App 打开的(Apple Music / Spotify / KKBOX,链接来自本机歌词缓存,
-    /// 没装的播放器不列)。落到浏览器的平台页不放;一项都没有的行不弹菜单。
+    /// 榜单行、最近记录行和实时行的右键菜单:只放能直接进 App 打开的(Apple Music / Spotify / KKBOX,链接来自本机歌词缓存,
+    /// 没装的播放器不列)。落到浏览器的平台页不放;一项都没有的行不弹菜单。`artistName` 只在歌手行取歌手页时用。
     @ViewBuilder
-    private func chartRowMenu(_ e: LastfmStatsService.ChartEntry) -> some View {
-        let links = stats.appLinks(kind: kind, entry: e)
+    fileprivate static func appLinksMenu(_ links: ChartAppLinks?, artistName: String) -> some View {
         if let url = links?.appleMusic {
             Button(L10n.t("在 Apple Music 中打开")) { Self.openInMusic(url) }
         } else if let url = links?.artistPages?.appleMusic {
             Button(L10n.t("在 Apple Music 中打开")) { Self.openInMusic(url) }
         } else if let links, links.artistMBID != nil || links.artistAlbum != nil {
             Button(L10n.t("在 Apple Music 中打开")) {
-                Self.openArtistInMusic(name: e.name, mbid: links.artistMBID, album: links.artistAlbum)
+                Self.openArtistInMusic(name: artistName, mbid: links.artistMBID, album: links.artistAlbum)
             }
         }
         if let url = links?.spotify ?? links?.artistPages?.spotify, Self.isInstalled(.spotify) {
@@ -568,8 +569,8 @@ struct LastfmStatsSection: View {
         }
     }
 
-    private func chartRowHasMenu(_ e: LastfmStatsService.ChartEntry) -> Bool {
-        guard let links = stats.appLinks(kind: kind, entry: e) else { return false }
+    fileprivate static func appLinksHaveMenu(_ links: ChartAppLinks?) -> Bool {
+        guard let links else { return false }
         return links.appleMusic != nil || links.artistAlbum != nil || links.artistMBID != nil
             || links.artistPages?.appleMusic != nil
             || ((links.spotify ?? links.artistPages?.spotify) != nil && Self.isInstalled(.spotify))
@@ -1017,6 +1018,9 @@ struct LastfmStatsSection: View {
             if let url = Self.trackURL(artist: t.artist, title: t.title) { NSWorkspace.shared.open(url) }
         }
         .rowHoverHighlight()
+        .modifier(ChartRowContextMenu(enabled: Self.appLinksHaveMenu(stats.trackAppLinks(artist: t.artist, title: t.title))) {
+            Self.appLinksMenu(stats.trackAppLinks(artist: t.artist, title: t.title), artistName: t.artist)
+        })
     }
 
     /// 组头歌名后面的「×N」:连续听了 N 次,点它展开/收起。自己是一颗按钮 —— 整行的点击是
@@ -1851,17 +1855,24 @@ private struct LiveScrobbleRow: View {
                 }
                 .environment(\.recentRowHovered, hovered)
                 .onHover { hovered = $0 }
+                .modifier(ChartRowContextMenu(
+                    enabled: LastfmStatsSection.appLinksHaveMenu(stats.trackAppLinks(artist: live.artist, title: live.title))) {
+                    LastfmStatsSection.appLinksMenu(stats.trackAppLinks(artist: live.artist, title: live.title),
+                                                    artistName: live.artist)
+                })
             } else {
                 Color.clear.frame(height: 0)
             }
         }
         .onAppear {
             if let live { stats.refreshNowPlayingCount(title: live.title, artist: live.artist) }
+            stats.setLiveLinksTrack(artist: live?.artist, title: live?.title)
             stats.liveAbsorbedRecentID = absorbedRecent?.id
         }
         .onChange(of: liveKey) { _, _ in
             // 本机换歌、远端换歌、来源切换都要重取"第 N 次听"
             if let live { stats.refreshNowPlayingCount(title: live.title, artist: live.artist) }
+            stats.setLiveLinksTrack(artist: live?.artist, title: live?.title)
         }
         // 吸收状态是从(播放进度 × 最近记录)算出来的,两个源任何一个动了都可能翻转 ——
         // onChange 在每次 body 重算时都重评这个值,变了才写回 service(列表靠它隐藏行)。

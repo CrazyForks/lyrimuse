@@ -650,10 +650,13 @@ final class LastfmStatsService: ObservableObject {
     @Published private(set) var chartLocalCovers: [String: URL] = [:]
     /// 上一次算 chartLocalCovers 用的输入(要查的行 + 本机缓存版本),没变就不重算。
     private var chartLocalCoversInputs: (keys: [String], cacheVersion: Date?)?
-    /// 榜单每一行能直接进 App 打开的目标(右键菜单用),键同 chartLocalCovers。从本机歌词缓存现算,不进快照,
-    /// 见 refreshChartAppLinks。
+    /// 榜单每一行、最近记录每一行能直接进 App 打开的目标(右键菜单用),键同 chartLocalCovers(最近记录按歌曲榜的键)。
+    /// 从本机歌词缓存现算,不进快照,见 refreshChartAppLinks。
     @Published private(set) var chartAppLinks: [String: ChartAppLinks] = [:]
     private var chartAppLinksInputs: (keys: [String], cacheVersion: Date?, pagesVersion: Date?)?
+    /// 统计页实时行那首歌(不一定在 recent 里:本机刚开播、Last.fm 还没确认时没有 nowplaying 条目)。
+    /// refreshChartAppLinks 把它跟最近记录一起算进 chartAppLinks。
+    private var liveLinksTrack: (artist: String, title: String)?
     /// 各时段的收听总次数(榜单卡底概况用),键是时段 rawValue。「全部」不在这里,直接用 overview.total。
     @Published private(set) var periodListens: [String: Int] = [:]
     /// 专辑 / 歌曲榜在 Last.fm 那边的总条目数(榜单接口返回的 @attr.total),键同 charts。歌手榜不记:界面上的
@@ -875,6 +878,19 @@ final class LastfmStatsService: ObservableObject {
     /// 榜单一行能直接进 App 打开的目标,见 refreshChartAppLinks。
     func appLinks(kind: ChartKind, entry e: ChartEntry) -> ChartAppLinks? {
         chartAppLinks[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)]
+    }
+
+    /// 最近记录一行 / 实时行能直接进 App 打开的目标,跟歌曲榜同一口径。
+    func trackAppLinks(artist: String, title: String) -> ChartAppLinks? {
+        chartAppLinks[Self.chartLocalCoverKey(kind: .tracks, artist: artist, name: title)]
+    }
+
+    /// 实时行换歌时登记这首歌,让它也有右键菜单的链接;没有实时行时传 nil。
+    func setLiveLinksTrack(artist: String?, title: String?) {
+        let next = artist.flatMap { a in title.map { (artist: a, title: $0) } }
+        guard next?.artist != liveLinksTrack?.artist || next?.title != liveLinksTrack?.title else { return }
+        liveLinksTrack = next
+        refreshChartAppLinks()
     }
 
     /// 一个时段的收听总次数;还没取到时 nil。
@@ -3065,7 +3081,7 @@ final class LastfmStatsService: ObservableObject {
         if out != chartLocalCovers { chartLocalCovers = out }
     }
 
-    /// 给所有榜单行算一遍能直接进 App 打开的目标(本机歌词缓存里存的链接、歌手的 MusicBrainz mbid、collector
+    /// 给所有榜单行、当前这页最近记录和实时行那首算一遍能直接进 App 打开的目标(本机歌词缓存里存的链接、歌手的 MusicBrainz mbid、collector
     /// 预取的平台主页,零网络)。行没变、两份缓存版本都没变就不重算;
     /// 缓存还没加载好时这一轮什么都查不到,等缓存版本推进(refreshLocalCoversIfCacheChanged)再算。
     private func refreshChartAppLinks() {
@@ -3075,6 +3091,12 @@ final class LastfmStatsService: ObservableObject {
             for e in entries {
                 rows[Self.chartLocalCoverKey(kind: kind, artist: e.detail, name: e.name)] = (kind, e.detail, e.name)
             }
+        }
+        for t in recent {
+            rows[Self.chartLocalCoverKey(kind: .tracks, artist: t.artist, name: t.title)] = (.tracks, t.artist, t.title)
+        }
+        if let live = liveLinksTrack {
+            rows[Self.chartLocalCoverKey(kind: .tracks, artist: live.artist, name: live.title)] = (.tracks, live.artist, live.title)
         }
         let keys = rows.keys.sorted()
         let cacheVersion = EnrichCacheReader.decodedContentVersion
@@ -3321,6 +3343,7 @@ final class LastfmStatsService: ObservableObject {
         // 本机封面兜底跟着这一批行重算一次。放在这里而不是视图里,理由见 localCovers。
         refreshLocalCovers()
         rebuildRecentCoverIndex()
+        refreshChartAppLinks()
         let next = rows.first(where: \.nowPlaying)
         let nextKey = next.map { "\($0.artist)|\($0.title)" }
         let prevKey = apiNowPlaying.map { "\($0.artist)|\($0.title)" }
