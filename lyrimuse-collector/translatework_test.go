@@ -96,7 +96,9 @@ func TestTranslationLanguageHotReloadClearsStaleMachineTranslations(t *testing.T
 	}
 	setFeatures(loadFeatureFlags(path))
 	setFeaturesPath(path)
-	if err := os.WriteFile(path, []byte(`{"lyrics_translation_language":"zh-Hans"}`), 0o644); err != nil {
+	// 必须是设置枚举里的代码(lyricsTranslationLanguageCodes):不认识的值按 auto 解析成系统语言,
+	// 在英文系统上会解析回 "en",跟改之前一样,热重读就不算「语言换了」。
+	if err := os.WriteFile(path, []byte(`{"lyrics_translation_language":"zh"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	featuresCheckedAt.Store(time.Now().Add(-2 * featuresReloadInterval).UnixNano())
