@@ -52,7 +52,7 @@ func resetKugouLocalIndex(t *testing.T, dir string) {
 	t.Helper()
 	kugouLocalMu.Lock()
 	kugouLocalIndex, kugouLocalReady, kugouLocalScanned = nil, false, time.Time{}
-	kugouLocalDirMod = time.Time{}
+	kugouLocalDirMod, kugouLocalFiles = time.Time{}, nil
 	kugouLocalMu.Unlock()
 	old := kugouLocalDirOverride
 	kugouLocalDirOverride = dir
@@ -60,7 +60,7 @@ func resetKugouLocalIndex(t *testing.T, dir string) {
 		kugouLocalDirOverride = old
 		kugouLocalMu.Lock()
 		kugouLocalIndex, kugouLocalReady, kugouLocalScanned = nil, false, time.Time{}
-		kugouLocalDirMod = time.Time{}
+		kugouLocalDirMod, kugouLocalFiles = time.Time{}, nil
 		kugouLocalMu.Unlock()
 	})
 }
@@ -114,7 +114,7 @@ func TestKugouLocalLyricHit(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "artistsInfo-周杰伦 - 搁浅_abc"), []byte("<?xml?>"), 0o644)
 	resetKugouLocalIndex(t, dir)
 
-	r, ok := kugouLocalLyric("周杰伦", "搁浅", "七里香")
+	r, ok := kugouLocalLyric("周杰伦", "搁浅", "七里香", 0)
 	if !ok {
 		t.Fatal("本地缓存里有这首歌,应该命中")
 	}
@@ -134,13 +134,13 @@ func TestKugouLocalLyricHit(t *testing.T) {
 
 	// 繁简 / 大小写 / 标点的差异由 normLoose 折掉 —— 本地曲库标的是简体、播放器报的是
 	// 繁体(或反过来)时照样要命中,这正是 normLoose 存在的理由。
-	if _, ok := kugouLocalLyric("周杰倫", "擱淺", ""); !ok {
+	if _, ok := kugouLocalLyric("周杰倫", "擱淺", "", 0); !ok {
 		t.Error("繁体歌名应该能命中同一份缓存")
 	}
-	if _, ok := kugouLocalLyric("周杰伦", "不存在的歌", ""); ok {
+	if _, ok := kugouLocalLyric("周杰伦", "不存在的歌", "", 0); ok {
 		t.Error("没有的歌不该命中")
 	}
-	if _, ok := kugouLocalLyric("", "搁浅", ""); ok {
+	if _, ok := kugouLocalLyric("", "搁浅", "", 0); ok {
 		t.Error("歌手为空时不该拿歌名硬匹配")
 	}
 }
@@ -152,7 +152,7 @@ func TestKugouLocalLyricPicksByAlbum(t *testing.T) {
 	writeTestKRC(t, dir, "b.krc", live)
 	resetKugouLocalIndex(t, dir)
 
-	r, ok := kugouLocalLyric("周杰伦", "搁浅", "无与伦比演唱会")
+	r, ok := kugouLocalLyric("周杰伦", "搁浅", "无与伦比演唱会", 0)
 	if !ok {
 		t.Fatal("应该命中")
 	}
@@ -160,14 +160,14 @@ func TestKugouLocalLyricPicksByAlbum(t *testing.T) {
 		t.Errorf("同名两份时该挑专辑对得上的那份,得到 %q", r.album)
 	}
 	// 专辑对不上时不硬挑,返回第一份交给下游打分去比 —— 不在这一层武断否掉。
-	if _, ok := kugouLocalLyric("周杰伦", "搁浅", "完全不相干的专辑"); !ok {
+	if _, ok := kugouLocalLyric("周杰伦", "搁浅", "完全不相干的专辑", 0); !ok {
 		t.Error("专辑对不上也该给出候选,由 scoreLyricCandidate 决定用不用")
 	}
 }
 
 func TestKugouLocalLyricMissingDir(t *testing.T) {
 	resetKugouLocalIndex(t, filepath.Join(t.TempDir(), "没有这个目录"))
-	if _, ok := kugouLocalLyric("周杰伦", "搁浅", ""); ok {
+	if _, ok := kugouLocalLyric("周杰伦", "搁浅", "", 0); ok {
 		t.Error("目录不存在时必须安静地当作没命中(没装酷狗的人是多数)")
 	}
 }
@@ -217,7 +217,7 @@ func TestKugouLocalLyricLooseTitle(t *testing.T) {
 	writeTestKRC(t, dir, "by2.krc", long)
 	resetKugouLocalIndex(t, dir)
 
-	r, ok := kugouLocalLyric("BY2", "我知道", "")
+	r, ok := kugouLocalLyric("BY2", "我知道", "", 0)
 	if !ok {
 		t.Fatal("干净歌名应该能命中带副标题的那份")
 	}
@@ -228,7 +228,7 @@ func TestKugouLocalLyricLooseTitle(t *testing.T) {
 	dir2 := t.TempDir()
 	writeTestKRC(t, dir2, "clean.krc", strings.NewReplacer("[ti:搁浅]", "[ti:大梦]", "[ar:周杰伦]", "[ar:周深]").Replace(testKRCGeLian))
 	resetKugouLocalIndex(t, dir2)
-	if _, ok := kugouLocalLyric("周深", "大梦 (《归兰香故》电视剧主题曲)", ""); !ok {
+	if _, ok := kugouLocalLyric("周深", "大梦 (《归兰香故》电视剧主题曲)", "", 0); !ok {
 		t.Error("播放器报的标题带后缀时也该命中干净的那份")
 	}
 
@@ -236,13 +236,13 @@ func TestKugouLocalLyricLooseTitle(t *testing.T) {
 	dir3 := t.TempDir()
 	writeTestKRC(t, dir3, "duet.krc", strings.NewReplacer("[ar:周杰伦]", "[ar:周杰伦、杨瑞代]").Replace(testKRCGeLian))
 	resetKugouLocalIndex(t, dir3)
-	if _, ok := kugouLocalLyric("周杰伦", "搁浅", ""); ok {
+	if _, ok := kugouLocalLyric("周杰伦", "搁浅", "", 0); ok {
 		t.Error("歌手对不上(合唱 vs 单人)不该命中")
 	}
 
 	// 不相干的歌名不该被宽松匹配拽进来。
 	resetKugouLocalIndex(t, dir)
-	if _, ok := kugouLocalLyric("BY2", "完全不相干", ""); ok {
+	if _, ok := kugouLocalLyric("BY2", "完全不相干", "", 0); ok {
 		t.Error("歌名毫无包含关系时不该命中")
 	}
 }
@@ -260,7 +260,14 @@ func TestKugouLocalTitleMatches(t *testing.T) {
 		{"我知道(电视剧《比赛开始》片尾曲 / LG冰淇淋手机代言曲)", "我知道", true, "括号副标题"},
 		{"她 (《早春晴朗》电视剧栾念人物曲 and 片头曲)", "她", true, "空格+括号副标题"},
 		{"大梦", "大梦 (《兰香如故》电视剧主题曲)", true, "反方向:播放器报的带后缀"},
-		{"晴天 - Live", "晴天", true, "破折号分隔的版本标记仍算副标题(交给打分去比)"},
+		// 版本限定词不是副标题:本地命中会让网络那条整个不问(kugouLyric),打分只能在「只有这一份」里挑,
+		// 所以另一次录音必须在这里就拒掉,好让网络那条去找对的那一版。两个方向都要挡。
+		{"晴天 - Live", "晴天", false, "破折号后是版本标记,是另一次录音"},
+		{"大梦 (Live)", "大梦", false, "括号里是版本标记"},
+		{"大梦(伴奏)", "大梦", false, "中文版本标记"},
+		{"晴天 (DJ阿若版)", "晴天", false, "DJ 版"},
+		{"大梦", "大梦 (Live)", false, "反方向:放的是 Live 版,缓存里是录音室版"},
+		{"晴天 (Live) (《某节目》)", "晴天 (Live)", true, "两边都是 Live,多出来的是节目副标题"},
 		{"大梦归 (《兰香如故》电视剧主题曲)", "大梦", false, "⚠️ 误配:多出来的是「归」,那是另一首歌"},
 		{"我知道你很难过", "我知道", false, "多出来的是词,不是副标题"},
 		{"Song Name Live", "Song Name", false, "Live 是另一个录音,多出来的是字母"},

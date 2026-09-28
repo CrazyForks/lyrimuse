@@ -159,10 +159,14 @@ func kugouLoadQueue(artist, title string) (list []kugouQueueSong, pos int, handl
 	defer cancel()
 	// 文件现在就是 XML,但 plist 随时可能被客户端存成二进制;统一过一遍 plutil,同 QQ 那条路。
 	out, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-convert", "xml1", "-o", "-", path).Output()
-	if err != nil || len(out) > kugouQueuePlistMaxBytes {
+	if err != nil {
+		noteLocalCacheReadFailure("kugou", path)
 		return nil, -1, false
 	}
 	noteLocalCacheReadable("kugou")
+	if len(out) > kugouQueuePlistMaxBytes {
+		return nil, -1, false
+	}
 	root, err := parsePlistXML(out)
 	if err != nil {
 		return nil, -1, false
@@ -352,8 +356,10 @@ func kugouAlbumsByHash(songs []kugouQueueSong) map[string]string {
 	uri := (&neturl.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
 	out, err := exec.CommandContext(ctx, "/usr/bin/sqlite3", "-json", uri, query).Output()
 	if err != nil {
+		noteLocalCacheReadFailure("kugou", path)
 		return nil
 	}
+	noteLocalCacheReadable("kugou")
 	trimmed := bytes.TrimSpace(out)
 	if len(trimmed) == 0 {
 		return nil // 零行时 sqlite3 -json 输出空串,不是 "[]"

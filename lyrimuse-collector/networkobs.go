@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptrace"
@@ -103,7 +105,11 @@ func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, err
 		summaryKey += " method=" + m
 	}
 	if err != nil {
-		atomic.AddInt32(&networkFailureCount, 1)
+		// 调用方自己取消的(救急支线被叫停、切歌)不算网络失败:算进去会让这一轮的失败数虚高,
+		// 偏向误报「网络不通」。熔断那边同样把它滤掉了(sourcebreaker.go)。
+		if !errors.Is(err, context.Canceled) {
+			atomic.AddInt32(&networkFailureCount, 1)
+		}
 		// Go 的 http.Client.Do 失败时返回的是 *url.Error,它的 Error() 会把**完整
 		// 请求 URL**(含 query string)拼进错误文案——这正是 LogRedactor.swift 头部
 		// 注释记录过的那类泄漏(当时是 App 侧读到 collector 原始日志文件时才发现)。

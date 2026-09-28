@@ -172,8 +172,6 @@ func refreshNeteaseLocalIndexLocked(ctx context.Context) {
 		neteaseLocalIndex, neteaseLocalReady = nil, true
 		return
 	}
-	// 读到了就撤掉「被拒」—— 授权之后设置页那个提示要能自己消失。
-	noteLocalCacheReadable("netease")
 	now := time.Now()
 	if neteaseLocalReady && st.ModTime().Equal(neteaseLocalDBMod) && st.Size() == neteaseLocalDBSize {
 		return
@@ -181,17 +179,20 @@ func refreshNeteaseLocalIndexLocked(ctx context.Context) {
 	if neteaseLocalReady && now.Sub(neteaseLocalScanned) < neteaseLocalRescanMin {
 		return
 	}
-	neteaseLocalDBMod, neteaseLocalDBSize = st.ModTime(), st.Size()
 	neteaseLocalScanned, neteaseLocalReady = now, true
 
 	tracks, err := queryNeteaseLocalTracks(ctx, path)
 	if err != nil {
 		// 保留上一次的索引,理由同 qqlocal.go:重建失败是常态化的偶发。
+		noteLocalCacheReadFailure("netease", path)
 		if sqliteSchemaMismatch(err) {
 			noteParserUnrecognized("netease-local-library", sqliteErrorDetail(err))
 		}
 		return
 	}
+	// 版本读成功才记、真读到才撤掉「被拒」,理由同 qqlocal.go。
+	neteaseLocalDBMod, neteaseLocalDBSize = st.ModTime(), st.Size()
+	noteLocalCacheReadable("netease")
 	noteParserRecognized("netease-local-library")
 	idx := map[string][]neteaseLocalTrack{}
 	for _, t := range tracks {

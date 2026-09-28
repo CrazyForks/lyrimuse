@@ -139,7 +139,7 @@ func lyricSourceDialContext(ctx context.Context, network, addr string) (net.Conn
 		}
 	}
 
-	ips := lyricSourceDoHLookup(host)
+	ips := lyricSourceDoHLookup(ctx, host)
 	if len(ips) == 0 {
 		if trace != nil && trace.DNSDone != nil {
 			trace.DNSDone(httptrace.DNSDoneInfo{Err: sysErr})

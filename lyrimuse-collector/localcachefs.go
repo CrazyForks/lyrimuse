@@ -101,6 +101,21 @@ func noteLocalCacheDenied(source, path string, err error) {
 		source, path, err)
 }
 
+// noteLocalCacheReadFailure:经子进程(sqlite3 / plutil)读的那几条,读失败只拿得到退出码,
+// 拿不到 fs.ErrPermission —— 补一次 os.Open 把「被系统拒了」认出来。Open 成功就什么都不记:
+// 那是锁、表结构这类别的原因,不是授权问题。
+//
+// 这几条的「读得到」也只能在子进程成功之后才发布:没授权时 stat 照样过、读才被拒,
+// 在 stat 之后就发布会把启动探测记下的「被拒」盖掉,设置页据此显示「已授权」。
+func noteLocalCacheReadFailure(source, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		noteLocalCacheDenied(source, path, err)
+		return
+	}
+	_ = f.Close()
+}
+
 // noteLocalCacheReadable 是上面那个的对偶:真的读到了就把这个来源从"被拒"挪到"读得到"。
 // 授权之后界面上的提示要能自己消失,靠的就是它。
 func noteLocalCacheReadable(source string) {

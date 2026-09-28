@@ -1049,14 +1049,15 @@ func runSourceContractTests() {
                         "配置热重读: 改了 lyrics_dir 要拉起 switchLyricsDir,否则歌词文件夹停在启动时那个")
 
             // ②' config.json 热重读:main() 登记路径,坏 JSON 保留当前快照。
-            expectEqual(goMain?.contains("setLiveConfig(*cfgPath, cfg)") ?? false, true,
-                        "配置热重读: main() 要有 setLiveConfig(*cfgPath, cfg),否则 config.json 永远停在启动值")
+            // 基线取读之前那一刻的 stat(setLiveConfigAt 的第三个参数):读完到登记之间还要跑完整串启动迁移。
+            expectEqual(goMain?.contains("setLiveConfigAt(*cfgPath, cfg, cfgBaseline)") ?? false, true,
+                        "配置热重读: main() 要有 setLiveConfigAt(*cfgPath, cfg, cfgBaseline),否则 config.json 永远停在启动值")
             expectEqual(configReloadGo?.contains("json.Unmarshal(data, &probe)") ?? false, true,
                         "配置热重读: configreload.go 要先确认整份 JSON 能解析,半截文件不能把凭据清空")
 
             // ③ main() 要登记路径,否则整套热重读静默失效(features() 永远返回启动那份)。
-            expectEqual(goMain?.contains("setFeaturesPath(featureFlagsPath)") ?? false, true,
-                        "配置热重读: main() 要有 setFeaturesPath(featureFlagsPath),否则配置永远停在启动值")
+            expectEqual(goMain?.contains("setFeaturesPathAt(featureFlagsPath, featuresBaseline)") ?? false, true,
+                        "配置热重读: main() 要有 setFeaturesPathAt(featureFlagsPath, featuresBaseline),否则配置永远停在启动值")
 
             // ④ 热重读必须走**不吞错**的那条读取路径。用 loadFeatureFlags 的话,文件坏一下就等于
             //    把用户所有设置当场重置成出厂值 —— 比"这次没更新成"严重得多。
@@ -3799,6 +3800,9 @@ func runSourceContractTests() {
         expectEqual(exporter.contains("(\"report.txt\", report)"), true, "诊断包: 报告单独成文件")
         expectEqual(exporter.contains("LogFiles.collector.lastPathComponent, fullCollectorLogText(secrets: secrets)"),
                     true, "诊断包: collector 完整日志单独成文件")
+        // 刚轮转完就导出时历史全在 .old 里:最近一份归档也要进包,同样过脱敏。
+        expectEqual(exporter.contains("files.append((LogFiles.collector.lastPathComponent + \".old\", archived))"),
+                    true, "诊断包: collector 最近一份轮转归档也进包")
         expectEqual(exporter.contains("(\"app-log.txt\", fullAppLogText(secrets: secrets))"),
                     true, "诊断包: App 完整日志单独成文件")
         // 这两个函数各自是完整日志的唯一出口,漏掉任何一处 redactAll 就是把原始日志发出去。

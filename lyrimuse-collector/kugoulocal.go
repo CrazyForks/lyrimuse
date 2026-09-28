@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	neturl "net/url"
 	"os"
 	"os/exec"
@@ -73,9 +74,11 @@ func kugouLocalLyricDir() string {
 // 混进一个异常大的文件"时白读白解压,不是格式约束。
 const kugouLocalMaxFileBytes = 1 << 20
 
-// kugouLocalRescanMin:两次重扫之间的最小间隔。目录 mtime 变了才重扫,这个节流是防
-// "酷狗正在连续写缓存"时每首歌都全量重扫一遍。
-const kugouLocalRescanMin = 30 * time.Second
+// kugouLocalRescanMin:两次重扫之间的最小间隔。目录 mtime 变了才重扫,这个节流只防同一拍里的
+// 重复调用。设大了会输掉要赢的那场竞速(同 applemusiclocal.go):酷狗是播放时才落盘,
+// collector 换歌那一拍抢先扫过一次,窗口内新写进来的那份 KRC 就整轮查不到。重扫只解密新增 /
+// 变过的文件(kugouLocalFiles),没变的沿用上一轮的解析结果,所以这里不必省。
+const kugouLocalRescanMin = 2 * time.Second
 
 type kugouLocalEntry struct {
 	path   string
@@ -84,9 +87,19 @@ type kugouLocalEntry struct {
 	album  string
 }
 
+// kugouLocalFile 是单个 .krc 上一轮的解析结果,按 mtime+size 判断要不要重新解密。
+// ok=false 表示解不开或没有 [ar:]/[ti:](AI 字幕那类),同样记下,免得每轮重解一遍。
+type kugouLocalFile struct {
+	mod   time.Time
+	size  int64
+	entry kugouLocalEntry
+	ok    bool
+}
+
 var (
 	kugouLocalMu      sync.Mutex
 	kugouLocalIndex   map[string][]kugouLocalEntry
+	kugouLocalFiles   map[string]kugouLocalFile
 	kugouLocalDirMod  time.Time
 	kugouLocalScanned time.Time
 	kugouLocalReady   bool
@@ -125,47 +138,59 @@ func refreshKugouLocalIndexLocked() {
 	if kugouLocalReady && now.Sub(kugouLocalScanned) < kugouLocalRescanMin {
 		return
 	}
-	kugouLocalDirMod, kugouLocalScanned, kugouLocalReady = st.ModTime(), now, true
+	kugouLocalScanned, kugouLocalReady = now, true
 
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		// stat 过了不代表这一步也过:TCC 允许 stat 一个目录却拒绝列它的内容。
 		noteLocalCacheDenied("kugou", dir, err)
-		kugouLocalIndex = nil
+		kugouLocalIndex, kugouLocalFiles = nil, nil
 		return
 	}
+	// 目录版本列成功才记:先记的话,一次偶发失败之后直到目录再变都不会重试。
+	kugouLocalDirMod = st.ModTime()
 	// 读到了就撤掉「被拒」—— 授权之后设置页那个提示要能自己消失。
 	noteLocalCacheReadable("kugou")
 	idx := map[string][]kugouLocalEntry{}
+	files := make(map[string]kugouLocalFile, len(ents))
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".krc") {
 			// 同目录下还有 `artistsInfo-…` 那批 plist(歌手资料),不是歌词。
 			continue
 		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
 		path := filepath.Join(dir, e.Name())
-		krc := decryptKRCFile(path)
-		if krc == "" {
-			continue
+		f, seen := kugouLocalFiles[path]
+		if !seen || !f.mod.Equal(info.ModTime()) || f.size != info.Size() {
+			f = kugouLocalFile{mod: info.ModTime(), size: info.Size()}
+			if krc := decryptKRCFile(path); krc != "" {
+				_, body := splitKRCLanguageLine(krc)
+				artist, title := krcTag(body, "ar"), krcTag(body, "ti")
+				if kugouLocalKey(artist, title) != "" {
+					f.entry = kugouLocalEntry{path: path, artist: artist, title: title, album: krcTag(body, "al")}
+					f.ok = true
+				}
+			}
 		}
-		_, body := splitKRCLanguageLine(krc)
-		artist, title := krcTag(body, "ar"), krcTag(body, "ti")
-		key := kugouLocalKey(artist, title)
-		if key == "" {
-			continue
+		files[path] = f
+		if f.ok {
+			key := kugouLocalKey(f.entry.artist, f.entry.title)
+			idx[key] = append(idx[key], f.entry)
 		}
-		idx[key] = append(idx[key], kugouLocalEntry{
-			path: path, artist: artist, title: title, album: krcTag(body, "al"),
-		})
 	}
-	kugouLocalIndex = idx
+	kugouLocalIndex, kugouLocalFiles = idx, files
 	if len(idx) > 0 {
 		log.Printf("kugou local: indexed %d tracks from client cache", len(idx))
 	}
 }
 
 // kugouLocalLyric 在酷狗客户端的本地缓存里找这首歌。第二个返回值 false = 没命中,
-// 调用方照常走网络那条。
-func kugouLocalLyric(artist, title, album string) (kugouResult, bool) {
+// 调用方照常走网络那条。durationSecs 是播放器报的时长(0 = 不知道),只用来挡「歌词比歌还长」
+// 的另一个版本,见 kugouLocalLyricFitsDuration。
+func kugouLocalLyric(artist, title, album string, durationSecs float64) (kugouResult, bool) {
 	key := kugouLocalKey(artist, title)
 	if key == "" {
 		return kugouResult{}, false
@@ -173,6 +198,7 @@ func kugouLocalLyric(artist, title, album string) (kugouResult, bool) {
 	kugouLocalMu.Lock()
 	refreshKugouLocalIndexLocked()
 	entries := append([]kugouLocalEntry(nil), kugouLocalIndex[key]...)
+	loose := false
 	if len(entries) == 0 {
 		// 精确键对不上就退到宽松匹配 —— 缺了这一步,本地明明有这首歌也命中不了:酷狗
 		// 的 [ti:] 常常**带着一长串副标题**(「我知道(电视剧《比赛开始》片尾曲 / LG冰淇淋
@@ -180,6 +206,7 @@ func kugouLocalLyric(artist, title, album string) (kugouResult, bool) {
 		// normLoose 之后两串仍然不相等。实测:干净歌名一首都命中不了,拿 KRC 里那串完整
 		// 标题才命中。跟网易云 pick() 那次"打不平手就放弃、漏判候选"是同一个形态。
 		entries = looseKugouLocalMatchesLocked(artist, title)
+		loose = true
 	}
 	kugouLocalMu.Unlock()
 	if len(entries) == 0 {
@@ -196,6 +223,9 @@ func kugouLocalLyric(artist, title, album string) (kugouResult, bool) {
 	if lrc == "" {
 		return kugouResult{}, false
 	}
+	if !kugouLocalLyricFitsDuration(lrc, durationSecs) {
+		return kugouResult{}, false
+	}
 	tr, roma := krcLanguageTracks(lang, body)
 	// 每首歌最多一行:上游 kugouLyric 对同一个 (artist,title,album) 有缓存,不会重复问。
 	// 这行是"这份歌词是从客户端缓存来的、没走网络"的唯一凭据 —— 决策面板只记得到源名。
@@ -204,7 +234,8 @@ func kugouLocalLyric(artist, title, album string) (kugouResult, bool) {
 		lrc: lrc, yrc: krcToYRC(body), tr: tr, roma: roma,
 		title: hit.title, artist: hit.artist, album: hit.album,
 		// 身份来自客户端为这一版录音下的那份 KRC,不经搜索 —— 同源加权的准入条件。
-		fromLocalClient: true,
+		// 宽松命中不算:那是按歌名前缀猜出来的,跟搜索打分一样可能认错版本,不配拿这份加权。
+		fromLocalClient: !loose,
 		// durationSecs 留 0:KRC 的 [total:] 实测恒为 0,没有可信时长。打分那边把 0 当
 		// "该源没给"处理(见 sourceReportedDurationSecs),不会因此扣分。
 	}, true
@@ -244,7 +275,29 @@ func kugouLocalTitleMatches(cached, want string) bool {
 	if rest == "" {
 		return true
 	}
-	return strings.ContainsRune("([{（【《<-–—/|·:：~", []rune(rest)[0])
+	if !strings.ContainsRune("([{（【《<-–—/|·:：~", []rune(rest)[0]) {
+		return false
+	}
+	// 多出来的副标题要是版本限定词(「大梦 (Live)」「大梦(伴奏)」「大梦 - Remix」「(DJ版)」),那是
+	// **另一次录音**,不是副标题。两个方向都要挡:放 Live 版时拿录音室那份同样错。
+	// 集合比较跟打分层扣 -600 的那道闸是同一把尺子(versionTagsMismatch)。
+	return !versionTagsMismatch(cached, "", want, "")
+}
+
+// kugouLocalLyricFitsDuration:歌词最后一句的时间戳明显超过歌曲时长,就是另一个(更长的)版本。
+//
+// 本地 KRC 没有可信的时长([total:] 恒为 0,见 kugouLocalLyric),打分层最硬的「源报时长」信号
+// 缺席,只能拿歌词自己的最后一句兜一道上限。只挡「比歌长」这一侧:歌词在曲终前就唱完(长尾奏)
+// 是常态,不能拿来判短。余量取 12% 与 5 秒里大的那个,同 sourceDurationFits 的口径。
+func kugouLocalLyricFitsDuration(lrc string, durationSecs float64) bool {
+	if durationSecs <= 0 {
+		return true
+	}
+	last, ok := lastLRCTimestampSecs(lrc)
+	if !ok {
+		return true
+	}
+	return last <= durationSecs+math.Max(5, durationSecs*0.12)
 }
 
 // looseKugouLocalMatchesLocked:精确键落空时的兜底 —— **歌手仍然要精确相等**(normLoose 后),
@@ -507,7 +560,6 @@ func kugouUpcomingFromSQLite(artist, title string, n int) ([]upcomingTrack, bool
 		noteLocalCacheDenied("kugou", path, err)
 		return nil, false
 	}
-	noteLocalCacheReadable("kugou")
 	ctx, cancel := context.WithTimeout(context.Background(), kugouUpcomingQueryTimeout)
 	defer cancel()
 	// mode=ro + net/url 组 URI 的理由同 queryQQLocalSongs:路径里带空格要转义,
@@ -515,8 +567,10 @@ func kugouUpcomingFromSQLite(artist, title string, n int) ([]upcomingTrack, bool
 	uri := (&neturl.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
 	out, err := exec.CommandContext(ctx, "/usr/bin/sqlite3", "-json", uri, kugouUpcomingSQL).Output()
 	if err != nil {
+		noteLocalCacheReadFailure("kugou", path)
 		return nil, false
 	}
+	noteLocalCacheReadable("kugou")
 	trimmed := bytes.TrimSpace(out)
 	if len(trimmed) == 0 {
 		return nil, false // 零行时 sqlite3 -json 输出空串,不是 "[]"

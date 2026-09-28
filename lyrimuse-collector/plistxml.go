@@ -95,7 +95,12 @@ func plistElement(dec *xml.Decoder, se xml.StartElement, depth int) (any, error)
 		}
 		n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("plist: integer %q: %w", s, err)
+			// plist 的整数是 64 位无符号也合法(哈希、id 这类字段超过 2^63 是常事)。一个字段读不成
+			// 不该让整份归档作废:认得出就交 uint64,再认不出就当这个值缺席(nil),其余字段照读。
+			if u, uerr := strconv.ParseUint(strings.TrimSpace(s), 10, 64); uerr == nil {
+				return u, nil
+			}
+			return nil, nil
 		}
 		return n, nil
 	case "real":

@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -53,12 +54,18 @@ var (
 
 // sensitiveQueryRe 是第二道防线:按**参数名**打掉 query string 里的值。
 //
-// 词根匹配(key/token/secret/sig/sign/password/auth)覆盖 api_key、access_token、
+// 词根匹配(key/token/secret/sig/sign/signature/password/auth)覆盖 api_key、access_token、
 // api_sig 这些;`sk` 不含任何词根,单列 —— 它是 Last.fm session key 的参数名。
-// 值那一段刻意不吃引号/空白/&:错误信息里的 URL 通常被包在双引号里,吃掉引号会把
-// 后面的 `: context canceled` 一起吞掉,反而看不出失败原因。
+//
+// 词根要落在**一段的末尾**(段按 `_` `.` `-` 分):apikey、api_key、x-api-key、access_token、token_type 都算,
+// keyword、author 不算 —— 词根只要出现在名字里就算的话,酷狗搜索地址 `?keyword=` 一出错就变成 `keyword=***`,
+// 看不出当时搜的是什么词。
+//
+// 值那一段刻意不吃引号/空白/&/反斜杠:错误信息里的 URL 通常被包在双引号里,吃掉引号会把
+// 后面的 `: context canceled` 一起吞掉,反而看不出失败原因;slog 把 msg 里的引号转义成 `\"`,
+// 吃掉那个反斜杠会剩下一个裸引号,整行按 logfmt 就解析错了。
 var sensitiveQueryRe = regexp.MustCompile(
-	`(?i)([?&](?:sk|[a-z0-9_.\-]*(?:key|token|secret|sig|sign|password|passwd|pwd|auth)[a-z0-9_.\-]*)=)[^&\s"'` + "`" + `]+`)
+	`(?i)([?&](?:sk|(?:[a-z0-9]+[_.\-])*[a-z0-9]*(?:key|token|secret|sig|sign|signature|password|passwd|pwd|auth|authorization)(?:[_.\-][a-z0-9]+)*)=)[^&\s"'\\` + "`" + `]+`)
 
 // registerSecrets 登记一批凭据明文。可以重复调用,内部累积去重。
 func registerSecrets(values ...string) {
@@ -91,12 +98,67 @@ func registerSecretsMinLen(minLen int, values ...string) {
 	secretReplace.Store(strings.NewReplacer(pairs...))
 }
 
-// scrubSecrets 对一段将要写进日志的文本做两道脱敏。
+// scrubSecrets 对一段将要写进日志的文本做两道脱敏,再把本机家目录换成 `~`。
 func scrubSecrets(s string) string {
 	if r := secretReplace.Load(); r != nil {
 		s = r.Replace(s)
 	}
-	return sensitiveQueryRe.ReplaceAllString(s, "${1}"+redactedMark)
+	s = sensitiveQueryRe.ReplaceAllString(s, "${1}"+redactedMark)
+	return scrubHomeDir(s, logHomeDir())
+}
+
+// logHomeDirValue:日志里要换成 `~` 的家目录。没设过时取一次 os.UserHomeDir;单测直接设。
+var (
+	logHomeDirOnce  sync.Once
+	logHomeDirValue atomic.Pointer[string]
+)
+
+func logHomeDir() string {
+	logHomeDirOnce.Do(func() {
+		if logHomeDirValue.Load() != nil {
+			return
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			logHomeDirValue.Store(&home)
+		}
+	})
+	if p := logHomeDirValue.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// scrubHomeDir 把 home 换成 `~`,跟 App 侧 LogRedactor.redactHomePath 同一条规则:只换**路径**,
+// 紧跟的字符不能是用户名里会出现的(字母、数字、`.` `_` `-`),`/Users/ann` 不会把 `/Users/anna` 切掉一截。
+//
+// 为什么写日志时就换、不只靠导出:Mac 账户名常常就是真名,而这个文件用户会直接打开、复制几行贴出来
+// (设置页有打开日志的入口),那条路不经过导出。路径前缀人人一样,换掉不丢排查信息。
+// Last.fm 的 `user=` 不在这里处理:那是公开的主页名,排查时要知道是哪个账号(见 TestScrubSecretsRedactsAPIKeyByParamName)。
+func scrubHomeDir(s, home string) string {
+	home = strings.TrimSuffix(home, "/")
+	if len(home) <= 1 || !strings.Contains(s, home) {
+		return s
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, home)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		end := i + len(home)
+		b.WriteString(s[:i])
+		if end < len(s) && isUserNameByte(s[end]) {
+			b.WriteString(home)
+		} else {
+			b.WriteString("~")
+		}
+		s = s[end:]
+	}
+}
+
+func isUserNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
 }
 
 // rememberConfigSecrets 把配置里的凭据登记进脱敏表。在 loadConfig 里调用,这样每个

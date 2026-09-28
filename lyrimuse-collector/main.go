@@ -62,7 +62,10 @@ const (
 	// 只是短暂假死、同一首歌很快又重新读到,在这个宽限期内续接旧 session(而非清零重开),避免
 	// 一次连续收听被假死切成两段、各自达到阈值后向 LB 提交两条 listen。
 	nullResumeGraceWindow = 60 * time.Second
-	submitTimeout         = 15 * time.Second
+	// nullClearMinWait:连续读空至少持续这么久才当停播(见 poller.nullSince)。两个 ticker 间隔再让出一秒,
+	// 正常节奏下第三拍读空恰好满足,不会因为定时器的毫秒级抖动被推迟到第四拍。
+	nullClearMinWait = 2*pollInterval - time.Second
+	submitTimeout    = 15 * time.Second
 	// 单次提交超时：playing_now 失败无妨(≤playingNowRefresh 会再发)，快超时保持 poll 循环
 	// 灵敏(暂停/切歌能及时反映)；single(完成收听)丢了就永久少一条，用更长超时并重试。
 	playingNowTimeout = 8 * time.Second
@@ -213,7 +216,11 @@ func main() {
 	cfgPath := flag.String("config", filepath.Join(defaultConfigDir, "config.json"), "config file path")
 	dryRun := flag.Bool("dry-run", false, "log submissions instead of calling ListenBrainz")
 	flag.Parse()
+	// -config 指到别处时让 configDir() 跟过去,两套落盘口径才一致(见 alignConfigDirWithFlag)。
+	alignConfigDirWithFlag(*cfgPath, defaultConfigDir)
 
+	// 热重读的基线取**读之前**的 stat(见 setLiveConfigAt):读完到登记之间还要跑完整串启动迁移。
+	cfgBaseline, _ := os.Stat(*cfgPath)
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		// 走到这儿只剩"文件在但读不出来"(权限/IO)一种情况——内容有问题已经在
@@ -244,12 +251,15 @@ func main() {
 		logExit(exitReasonAlreadyRunning, "another collector instance holds the lock; exiting so shared caches are not clobbered, launchd KeepAlive will retry")
 		os.Exit(0)
 	}
+	// 日志轮转等拿到锁之后才放开(见 installLogSink):没拿到锁的那个实例只追加几行就退出,不去动正在用的那份。
+	releaseLogRotation()
 	// 本地缓存可读性:设置页 / 引导页「完全磁盘访问」与「歌词来源」锁的数据源,由 collector 独家
 	// 发布(见 localcachefs.go)。必须在拿到单实例锁之后(设路径会删掉旧文件)、下面那串耗时的
 	// 启动迁移之前 —— 重启后台服务之后界面等的就是这份结论。
 	setLocalCacheAccessPath(configFilePath(clientName + "-local-cache-access.json"))
 	probeLocalCacheAccess()
 	featureFlagsPath := filepath.Join(filepath.Dir(*cfgPath), clientName+"-features.json")
+	featuresBaseline, _ := os.Stat(featureFlagsPath)
 	setFeatures(loadFeatureFlags(featureFlagsPath))
 	// 改设置**不再需要重启**:登记这个路径之后,features() 会按 mtime 自己重读(featuresreload.go)。
 	// 只有常驻进程登记 —— 上面那些一次性 CLI 子命令都在更早的分支里 return 了,它们不长跑、
@@ -257,7 +267,7 @@ func main() {
 	//
 	// lyrics_dir 换了要搬一次家(导入新目录 + 整份导出),那一步等下面的启动迁移跑完才放开,
 	// 见 lyricsdirswitch.go 的 enableLyricsDirSwitch。
-	setFeaturesPath(featureFlagsPath)
+	setFeaturesPathAt(featureFlagsPath, featuresBaseline)
 	// 这两项在全局热重读之前就各自做过一份按键的 mtime 重读。现在 features() 整体会重读,它们其实
 	// 已经冗余了 —— 留着不改是因为它们读的是同一个文件、结论必然一致,而合并要动 lyricSourceEnabled /
 	// lastfmExcluded 两条判定链上的每个调用点,风险与收益不成比例。后续清理时连同这条注释一起删。
@@ -452,9 +462,15 @@ func main() {
 	lb := &lbClient{root: cfg.APIRoot, token: cfg.Token, hc: &http.Client{}, dryRun: *dryRun, alerter: alerterFromConfig(cfg)}
 	// 从这里起 config.json 改了就热重读,不用重启(configreload.go)。放在上面那些按 cfg 设好的
 	// 状态之后:热重读换快照时要拿它们当"旧值"比。
-	setLiveConfig(*cfgPath, cfg)
+	setLiveConfigAt(*cfgPath, cfg, cfgBaseline)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 第一个信号只用来开始收尾(run 里的最后一次提交 + 整份缓存保存,最长十几秒)。收到之后马上恢复
+	// 默认处置:收尾卡住时再按一次 Ctrl-C / 再发一次 SIGTERM 就直接退出,而不是被 NotifyContext 一直吞掉。
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 
 	log.Printf("%s %s starting (bundles: %v, dry-run: %v)",
 		clientName, clientVersion, cfg.BundleIDs, *dryRun)

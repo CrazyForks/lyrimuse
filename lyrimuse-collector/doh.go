@@ -42,6 +42,10 @@ import (
 const (
 	dohTimeout  = 4 * time.Second
 	dohCacheTTL = 30 * time.Minute
+	// dohNegativeTTL:两个端点都没答上来时,空结果只记这么久。跟系统 DNS 的负缓存
+	// (lyricSourceSystemDNSFailTTL)同一个量级:现在八个歌词源都靠这里兜底,合盖唤醒、切网那几秒
+	// 恰好查失败的话,记 30 分钟就是网络恢复之后这半小时它们全报「DNS 失败」。
+	dohNegativeTTL = 60 * time.Second
 	// 单个地址的拨号上限。有了 dohDialRace 的并发拨号之后,这个值不再决定"整体等多久"
 	// (黑洞地址不会再挡住好地址),真正卡总时长的是调用方 ctx 上的 deadline
 	// —— dohHTTPClient 那条路上是 proxyFallbackTransport 的 3s 直连预算。
@@ -70,7 +74,15 @@ type dohEntry struct {
 var (
 	dohMu    sync.Mutex
 	dohCache = map[string]dohEntry{}
+	// dohInflight:正在查的域名。同一个域名同时只查一次,后来的等它的结果(几个歌词源的请求常常同时
+	// 撞上同一台主机的系统 DNS 失败)。受 dohMu 保护。
+	dohInflight = map[string]*dohFlight{}
 )
+
+type dohFlight struct {
+	done chan struct{}
+	ips  []string
+}
 
 func dohShouldResolve(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))
@@ -82,8 +94,11 @@ func dohShouldResolve(host string) bool {
 	return false
 }
 
-// dohLookup 返回这个域名的 A 记录。查不到/查询失败返回 nil,调用方据此退回系统解析。
-func dohLookup(host string) []string {
+// dohLookup 返回这个域名的 A 记录。查不到/查询失败/调用方的 ctx 先结束了返回 nil,调用方据此退回系统解析。
+//
+// 查询本身在自己的 goroutine 里跑、不跟任何一个调用方的 ctx 走:结果要缓存下来给别人用,一个调用方被取消
+// 不该让等着同一个结果的其他人跟着落空。调用方只是不再等(每个端点 dohTimeout,最多两个)。
+func dohLookup(ctx context.Context, host string) []string {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 
 	dohMu.Lock()
@@ -92,8 +107,24 @@ func dohLookup(host string) []string {
 		dohMu.Unlock()
 		return ips
 	}
+	f, running := dohInflight[host]
+	if !running {
+		f = &dohFlight{done: make(chan struct{})}
+		dohInflight[host] = f
+		go dohResolve(host, f)
+	}
 	dohMu.Unlock()
 
+	select {
+	case <-f.done:
+		return f.ips
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// dohResolve 把 host 按顺序问两个端点,结果写进缓存并交给等着的人。
+func dohResolve(host string, f *dohFlight) {
 	var ips []string
 	for _, endpoint := range dohEndpoints {
 		if got := dohQuery(endpoint, host); len(got) > 0 {
@@ -101,11 +132,17 @@ func dohLookup(host string) []string {
 			break
 		}
 	}
-	// 失败也缓存(空结果),避免每次请求都为一个解析不出来的域名重试一遍 DoH。
+	// 失败也缓存(空结果),避免每次请求都为一个解析不出来的域名重试一遍 DoH;只是记得短(dohNegativeTTL)。
+	ttl := dohCacheTTL
+	if len(ips) == 0 {
+		ttl = dohNegativeTTL
+	}
 	dohMu.Lock()
-	dohCache[host] = dohEntry{ips: ips, expires: time.Now().Add(dohCacheTTL)}
+	dohCache[host] = dohEntry{ips: ips, expires: time.Now().Add(ttl)}
+	delete(dohInflight, host)
+	f.ips = ips
 	dohMu.Unlock()
-	return ips
+	close(f.done)
 }
 
 func dohQuery(endpoint, host string) []string {
@@ -167,7 +204,7 @@ func dohDialContext(ctx context.Context, network, addr string) (net.Conn, error)
 	if err != nil || !dohShouldResolve(host) {
 		return dohDialer().DialContext(ctx, network, addr)
 	}
-	conn, raceErr := dohDialRace(ctx, network, dohLookup(host), port)
+	conn, raceErr := dohDialRace(ctx, network, dohLookup(ctx, host), port)
 	if conn != nil {
 		return conn, nil
 	}
@@ -250,6 +287,15 @@ func dohDialRaceWith(ctx context.Context, dial func(context.Context, string, str
 			}(remaining - 1)
 			return out.conn, nil
 		case <-dialCtx.Done():
+			// 调用方不等了,但还有 remaining 路拨号没回来:恰好在这一刻连上的那条没人关,只能等 GC 收 fd。
+			// 跟赢家那一支一样起个收尾 goroutine 排干(ch 的缓冲开满,不会卡住拨号的那几个)。
+			go func(n int) {
+				for i := 0; i < n; i++ {
+					if o := <-ch; o.conn != nil {
+						_ = o.conn.Close()
+					}
+				}
+			}(remaining)
 			cancel()
 			return nil, dialCtx.Err()
 		}

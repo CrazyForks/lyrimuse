@@ -1182,11 +1182,11 @@ func mediaControlPositionSecs(raw *mediaControlRawState, now time.Time) (elapsed
 		if bias, ok := currentPositionBias(raw.Artist, raw.Title, raw.BundleID, raw.ElapsedTime, anchorTS, now); ok {
 			elapsed -= bias
 		}
-		rememberPlayingPosition(trackKey, elapsed)
+		rememberPlayingPositionAt(trackKey, elapsed, now)
 	} else {
-		age, hasAge := mediaControlAnchorAge(raw.Timestamp, now)
-		last, hasLast := rememberedPlayingPosition(trackKey)
-		elapsed = pausedPositionSecs(raw.ElapsedTime, age, hasAge, last, hasLast)
+		anchorAt, hasAnchor := mediaControlAnchorInstant(raw.Timestamp)
+		last, lastAt, hasLast := rememberedPlayingSample(trackKey)
+		elapsed = pausedPositionSecsAt(raw.ElapsedTime, anchorAt, hasAnchor, last, lastAt, hasLast, now)
 	}
 	return elapsed, sodaPreviewPending
 }

@@ -116,8 +116,8 @@ func TestParseSCUtilProxyPriorityAndFallbacks(t *testing.T) {
 	}
 }
 
-// ExceptionsList 里那些 `0 : 127.0.0.1` 形状的行,键是纯数字,不能污染 HTTPSProxy 这些
-// 真键 —— 解析器故意不做括号配对,靠的就是这个前提,钉住它。
+// ExceptionsList 里那些 `0 : 127.0.0.1` 形状的行(连同值恰好是 HTTPSProxy 这种写法的)不能污染最外层的
+// HTTPSProxy 这些真键 —— 解析器只收最外层字典的键,嵌套的 <array> / <dictionary> 整段跳过。
 func TestParseSCUtilProxyIgnoresExceptionsListRows(t *testing.T) {
 	in := "<dictionary> {\n  ExceptionsList : <array> {\n    0 : 127.0.0.1\n" +
 		"    1 : HTTPSProxy\n  }\n  HTTPSEnable : 1\n  HTTPSPort : 7897\n  HTTPSProxy : 9.9.9.9\n}"

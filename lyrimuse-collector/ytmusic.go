@@ -213,7 +213,11 @@ func ytmusicFetchVisitorID(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
-	html := string(body)
+	return ytmusicVisitorFromHome(string(body))
+}
+
+// ytmusicVisitorFromHome 从首页 HTML 取 visitor id,顺带记下 / 撤掉「地区限制」这个失败原因。纯文本进出,可单测。
+func ytmusicVisitorFromHome(html string) string {
 	v := ytmusicExtractVisitorID(html)
 	if v == "" {
 		// 一种具体失败原因:YouTube Music 按 IP 地理位置限定可用
@@ -227,6 +231,9 @@ func ytmusicFetchVisitorID(ctx context.Context) string {
 			// lyricsourcefailure.go 头注,两侧必须同步维护。
 			ytmusicSetLastFailureReason(lyricFailureReasonLyricFindRegionRestricted)
 		}
+	} else {
+		// 拿到了就撤掉早先的地区限制结论(换了网络 / 节点),理由同 musixmatch.go 那处。
+		ytmusicSetLastFailureReason("")
 	}
 	return v
 }

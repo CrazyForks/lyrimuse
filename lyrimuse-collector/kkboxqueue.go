@@ -139,7 +139,13 @@ func kkboxUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 	for attempt := 0; ; attempt++ {
 		tracks, ok, retry := kkboxUpcomingOnce(artist, title, n)
 		if retry == "" {
-			return kkboxNamedTracks(tracks), ok
+			named := kkboxNamedTracks(tracks)
+			if ok && len(tracks) > 0 && len(named) == 0 {
+				// 接下来那几首的详情都没进缓存(收藏库 @all 常见):队列读到了,却一首也叫不出名字。
+				// 交一个空列表出去等于什么都不预取,不如退回同专辑预取。
+				return nil, false
+			}
+			return named, ok
 		}
 		if attempt >= len(kkboxUpcomingRetryDelays) {
 			kkboxUpcomingNote("retry:"+retry, "kkbox upcoming: %s after waiting for the app to save it; falling back to album prefetch", retry)
@@ -215,7 +221,8 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 	}
 	q.adoptObserved(pos, artist)
 	if pb.shuffle {
-		picked := shuffleCandidates(len(q.tracks), pos, func(i int) (upcomingTrack, bool) { return q.tracks[i], true })
+		// 叫不出名字的(详情没进缓存)不占候选名额,理由同下面顺序播放那支。
+		picked := shuffleCandidates(len(q.tracks), pos, func(i int) (upcomingTrack, bool) { return q.tracks[i], q.tracks[i].title != "" })
 		var idx []int
 		for _, t := range picked {
 			for i := range q.tracks {
@@ -230,9 +237,18 @@ func kkboxUpcomingOnce(artist, title string, n int) (tracks []upcomingTrack, ok 
 	if pos+1 >= len(q.tracks) {
 		return nil, false, ""
 	}
+	// 取接下来 n 首**叫得出名字的**:先截 n 首再滤,详情没进缓存的那几首会把后面叫得出名字的一起挤掉。
+	// 一首也没有时仍交出(没名字的)那几首,由 kkboxUpcoming 判「读到了却一首也解析不了」、退回同专辑预取。
 	var idx []int
-	for i := pos + 1; i < min(pos+1+n, len(q.tracks)); i++ {
-		idx = append(idx, i)
+	for i := pos + 1; i < len(q.tracks) && len(idx) < n; i++ {
+		if q.tracks[i].title != "" {
+			idx = append(idx, i)
+		}
+	}
+	if len(idx) == 0 {
+		for i := pos + 1; i < min(pos+1+n, len(q.tracks)); i++ {
+			idx = append(idx, i)
+		}
 	}
 	return q.picked(idx), true, ""
 }
@@ -718,6 +734,20 @@ const kkboxBatchTracksPath = "/v2/tracks/"
 // kkboxRelatedTracksPrefix 是自动续播曲目表的路径前缀,后面跟开播那首歌的 id。
 const kkboxRelatedTracksPrefix = "/v2/related-tracks/"
 
+// kkboxScanMemo:每个缓存文件上一次读开头认出来的地址,按路径 + 修改时间 + 大小记(url 为 nil = 不是
+// KKBOX 接口的响应)。这个目录里是整个 App 的 HTTP 缓存(实测两千来个文件),一次换歌要扫好几遍
+// (预取重读、歌词、专辑各一遍),每遍都把每个文件打开读 4KB 是白花的 —— 条目写下之后不再改,认过一次就够了。
+var (
+	kkboxScanMemoMu sync.Mutex
+	kkboxScanMemo   = map[string]kkboxScanMemoEntry{}
+)
+
+type kkboxScanMemoEntry struct {
+	mod  time.Time
+	size int64
+	url  *url.URL
+}
+
 func scanKKBOXCache(dir string) kkboxCache {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -725,33 +755,62 @@ func scanKKBOXCache(dir string) kkboxCache {
 	}
 	var out kkboxCache
 	head := make([]byte, 4096)
+	seen := make(map[string]bool, len(ents))
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_0") {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		n, _ := io.ReadFull(f, head)
-		f.Close()
-		key, ok := chromiumCacheEntryKey(head[:n])
-		if !ok {
-			continue
-		}
-		u, ok := chromiumCacheKeyURL(key)
-		if !ok || !strings.HasPrefix(u.Host, "api-webapps.kkbox.") {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		out = append(out, kkboxCacheEntry{file: p, mod: info.ModTime(), url: u})
+		p := filepath.Join(dir, e.Name())
+		seen[p] = true
+		kkboxScanMemoMu.Lock()
+		m, hit := kkboxScanMemo[p]
+		kkboxScanMemoMu.Unlock()
+		if !hit || !m.mod.Equal(info.ModTime()) || m.size != info.Size() {
+			m = kkboxScanMemoEntry{mod: info.ModTime(), size: info.Size(), url: kkboxCacheEntryURL(p, head)}
+			kkboxScanMemoMu.Lock()
+			kkboxScanMemo[p] = m
+			kkboxScanMemoMu.Unlock()
+		}
+		if m.url == nil {
+			continue
+		}
+		out = append(out, kkboxCacheEntry{file: p, mod: info.ModTime(), url: m.url})
 	}
+	// 已经不在目录里的(Chromium 淘汰了)从记忆里清掉,不然这张表只涨不落。只清这个目录下的。
+	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	kkboxScanMemoMu.Lock()
+	for p := range kkboxScanMemo {
+		if strings.HasPrefix(p, prefix) && !seen[p] {
+			delete(kkboxScanMemo, p)
+		}
+	}
+	kkboxScanMemoMu.Unlock()
 	sort.SliceStable(out, func(i, j int) bool { return out[i].mod.After(out[j].mod) })
 	return out
+}
+
+// kkboxCacheEntryURL 读一个缓存文件的开头、认出它存的是哪个地址;不是 KKBOX 接口的响应、读不动返回 nil。
+// head 是调用方给的缓冲,免得每个文件都分配一份。
+func kkboxCacheEntryURL(path string, head []byte) *url.URL {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	n, _ := io.ReadFull(f, head)
+	f.Close()
+	key, ok := chromiumCacheEntryKey(head[:n])
+	if !ok {
+		return nil
+	}
+	u, ok := chromiumCacheKeyURL(key)
+	if !ok || !strings.HasPrefix(u.Host, "api-webapps.kkbox.") {
+		return nil
+	}
+	return u
 }
 
 // body 读出一条的正文;太大或读不动当没有。
@@ -865,42 +924,23 @@ func (c kkboxCache) trackDetails(ids []string) map[string]kkboxTrack {
 			if !want[single] || hasKey(out, single) {
 				continue
 			}
-			body, ok := e.body()
-			if !ok {
+		} else if e.url.Path == kkboxBatchTracksPath {
+			wanted := false
+			for _, id := range strings.Split(e.url.Query().Get("ids"), ",") {
+				if want[id] && !hasKey(out, id) {
+					wanted = true
+					break
+				}
+			}
+			if !wanted {
 				continue
 			}
-			var r struct {
-				Data kkboxTrack `json:"data"`
-			}
-			if json.Unmarshal(body, &r) == nil && r.Data.ID == single {
-				out[single] = r.Data
-			}
+		} else {
 			continue
 		}
-		if e.url.Path != kkboxBatchTracksPath {
-			continue
-		}
-		wanted := false
-		for _, id := range strings.Split(e.url.Query().Get("ids"), ",") {
-			if want[id] && !hasKey(out, id) {
-				wanted = true
-				break
-			}
-		}
-		if !wanted {
-			continue
-		}
-		body, ok := e.body()
-		if !ok {
-			continue
-		}
-		var r struct {
-			Data []kkboxTrack `json:"data"`
-		}
-		if json.Unmarshal(body, &r) != nil {
-			continue
-		}
-		for _, t := range r.Data {
+		// 走 detailTracks 的记忆:同一份详情一次换歌里会被问好几遍(每份候选列表一遍、重读又一遍),
+		// 每遍都重新读盘 + 解压 + 解 JSON 是白花的。
+		for _, t := range e.detailTracks() {
 			if want[t.ID] && !hasKey(out, t.ID) {
 				out[t.ID] = t
 			}

@@ -165,8 +165,6 @@ func refreshQQLocalIndexLocked(ctx context.Context) {
 		qqLocalIndex, qqLocalReady = nil, true
 		return
 	}
-	// 读到了就撤掉「被拒」—— 授权之后设置页那个提示要能自己消失。
-	noteLocalCacheReadable("qq")
 	now := time.Now()
 	if qqLocalReady && st.ModTime().Equal(qqLocalDBMod) && st.Size() == qqLocalDBSize {
 		return
@@ -174,18 +172,22 @@ func refreshQQLocalIndexLocked(ctx context.Context) {
 	if qqLocalReady && now.Sub(qqLocalScanned) < qqLocalRescanMin {
 		return
 	}
-	qqLocalDBMod, qqLocalDBSize = st.ModTime(), st.Size()
 	qqLocalScanned, qqLocalReady = now, true
 
 	rows, err := queryQQLocalSongs(ctx, path)
 	if err != nil {
-		// 库被锁 / sqlite3 不在 / 表结构变了。保留上一次的索引:它可能仍然有用,而且
+		// 库被锁 / sqlite3 不在 / 表结构变了 / 被系统拒了。保留上一次的索引:它可能仍然有用,而且
 		// 重建失败是常态化的偶发(客户端切歌时正好在写),不该每次都把命中率清零。
+		noteLocalCacheReadFailure("qq", path)
 		if sqliteSchemaMismatch(err) {
 			noteParserUnrecognized("qq-local-library", sqliteErrorDetail(err))
 		}
 		return
 	}
+	// 库的版本(mtime/size)读成功才记:先记的话,一次偶发失败之后直到库再变都不会重试。
+	qqLocalDBMod, qqLocalDBSize = st.ModTime(), st.Size()
+	// 真读到了才撤掉「被拒」(见 noteLocalCacheReadFailure)。
+	noteLocalCacheReadable("qq")
 	noteParserRecognized("qq-local-library")
 	idx := map[string][]qqLocalEntry{}
 	for _, r := range rows {
@@ -385,15 +387,22 @@ func qqLoadPlayingList(artist, title string) (qqPlayingList, bool) {
 	}
 	// 零外部依赖:用系统自带的 plutil 把 bplist 转成 XML 再解,同这个文件里 exec
 	// /usr/bin/sqlite3 的路数。 只能转 xml1,json 会因为 UID 直接失败,见 plistxml.go。
+	st, err := os.Stat(path)
+	if err != nil {
+		// 没装 QQ 音乐 / 没播过是常态,静默;被 TCC 拒了不是,那一种要留痕(见 localcachefs.go)。
+		noteLocalCacheDenied("qq", path, err)
+		return qqPlayingList{}, false
+	}
+	// XML 只会比二进制归档更大:归档本身就过了上限,转出来也要被下面那道闸拒掉,不必先整份缓冲。
+	if st.Size() > qqUpcomingMaxBytes {
+		return qqPlayingList{}, false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), qqLocalQueryTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-convert", "xml1", "-o", "-", path).Output()
 	if err != nil {
-		// plutil 对读不到的文件是退出码非零 + stderr,拿不到 fs.ErrPermission。先 Stat 一次
-		// 把"被 TCC 拒"这一种单独认出来 —— 它不是常态,要在设置页留痕(见 localcachefs.go)。
-		if _, statErr := os.Stat(path); statErr != nil {
-			noteLocalCacheDenied("qq", path, statErr)
-		}
+		// plutil 对读不到的文件是退出码非零 + stderr,拿不到 fs.ErrPermission(见 noteLocalCacheReadFailure)。
+		noteLocalCacheReadFailure("qq", path)
 		return qqPlayingList{}, false
 	}
 	noteLocalCacheReadable("qq")

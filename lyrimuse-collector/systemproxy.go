@@ -157,14 +157,32 @@ func envProxyURL() *neturl.URL {
 // 连不上的域名要不要试一下代理"。
 func parseSCUtilProxy(out string) *neturl.URL {
 	kv := map[string]string{}
-	// ExceptionsList 那个嵌套 <array> 里的行形如 `0 : 127.0.0.1`,键是纯数字,跟下面认的
-	// 键都不重名,所以不需要为它做括号配对。
+	// 只收最外层那个字典的键:`__SCOPED__ : <dictionary> {` 底下还有按网卡(VPN 的 utun 等)的整套
+	// HTTPSEnable / HTTPSProxy,拍平成一张表的话后出现的会盖掉顶层真正生效的那份 —— 顶层关着代理时
+	// 凭空冒出一个代理,或者本机 Clash 被某块网卡自己的代理顶掉。ExceptionsList 那个嵌套 <array> 同理跳过。
+	// 最外层要是没有 `<dictionary> {` 这一行(只剩裸的键值行),就把第 0 层当最外层。
+	top, depth := 0, 0
 	for _, line := range strings.Split(out, "\n") {
-		k, v, ok := strings.Cut(line, " : ")
-		if !ok {
+		t := strings.TrimSpace(line)
+		if t == "" {
 			continue
 		}
-		kv[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		if t == "}" {
+			depth--
+			continue
+		}
+		opens := strings.HasSuffix(t, "{")
+		if opens && depth == 0 && !strings.Contains(t, " : ") {
+			top = 1 // 最外层那一行 `<dictionary> {`
+		}
+		if depth == top {
+			if k, v, ok := strings.Cut(t, " : "); ok && !opens {
+				kv[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+		if opens {
+			depth++
+		}
 	}
 	for _, c := range []struct{ enable, host, port, scheme string }{
 		{"HTTPSEnable", "HTTPSProxy", "HTTPSPort", "http"},

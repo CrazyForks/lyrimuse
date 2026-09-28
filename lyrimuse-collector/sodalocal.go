@@ -222,8 +222,10 @@ func refreshSodaLocalIndexLocked() {
 	if sodaLocalReady && now.Sub(sodaLocalScanned) < sodaLocalRescanMin {
 		return
 	}
-	sodaLocalMod, sodaLocalSize = st.ModTime(), st.Size()
 	sodaLocalScanned, sodaLocalReady = now, true
+	if st.Size() > sodaLocalMaxBytes {
+		return // 文件异常膨胀:不读进内存,保留上一次的索引
+	}
 
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -238,6 +240,8 @@ func refreshSodaLocalIndexLocked() {
 	if err != nil {
 		return
 	}
+	// 文件版本解析成功才记:客户端正写到一半时读到的半截文件解不开,先记的话直到文件再变都不会重试。
+	sodaLocalMod, sodaLocalSize = st.ModTime(), st.Size()
 	idx := map[string][]sodaLocalTrack{}
 	for _, t := range tracks {
 		if t.Name == "" || len(t.Artists) == 0 {
@@ -373,6 +377,9 @@ func sodaUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 	path := sodaLocalQueuePath()
 	if path == "" {
 		return nil, false
+	}
+	if st, err := os.Stat(path); err == nil && st.Size() > sodaLocalMaxBytes {
+		return nil, false // 同 refreshSodaLocalIndexLocked:异常膨胀的文件不读进内存
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

@@ -23,6 +23,9 @@ import "strings"
 // 播放的 bundle 算,所以 LB 那三个键只在 Spotify 原生播放时写(lb.go)。
 var spotifyTrackIDHints = map[string]string{}
 
+// spotifyTrackIDLastKey 是最近一次换曲记下的那条的 key(见 spotifyTrackIDHintFor)。受 enrichMu 保护。
+var spotifyTrackIDLastKey string
+
 // spotifyTrackIDHintCap 防无界增长:超过就整个清掉 —— 提示只在换曲后几秒内有用,丢了也只是这首歌
 // 这次没记上 ID,下次播到再记。
 const spotifyTrackIDHintCap = 512
@@ -109,6 +112,7 @@ func noteSpotifyTrackID(artist, title, album, id string) {
 		spotifyTrackIDHints = map[string]string{}
 	}
 	spotifyTrackIDHints[key] = id
+	spotifyTrackIDLastKey = key
 	// 同一个 ID 再给歌词侧留一份:amll 有一份按 Spotify 曲目 ID 组织的索引
 	// (spotify-lyrics/),而它此前只能靠网易云 / QQ 搜出来的 songID 去取。
 	// 两份存的原因见 platformtrackid.go 头注(生命周期不同:那份是内存提示,

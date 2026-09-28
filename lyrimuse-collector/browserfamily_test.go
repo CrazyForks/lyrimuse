@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // fakeApp 在临时目录造一个最小的 .app:Info.plist 里写 OSAScriptingDefinition,Resources 下放 sdef。
@@ -61,10 +62,12 @@ func TestBrowserScriptFamilyUsesTrustedDetection(t *testing.T) {
 		detectBrowserScriptFamily = savedDetect
 		browserFamilyMu.Lock()
 		browserFamilyCache = map[string]string{}
+		browserFamilyMissAt = map[string]time.Time{}
 		browserFamilyMu.Unlock()
 	})
 	browserFamilyMu.Lock()
 	browserFamilyCache = map[string]string{}
+	browserFamilyMissAt = map[string]time.Time{}
 	browserFamilyMu.Unlock()
 	featuresRef().TrustedPlayers = map[string]string{"com.vivaldi.Vivaldi": "Vivaldi"}
 	calls := map[string]int{}

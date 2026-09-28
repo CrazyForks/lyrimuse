@@ -131,23 +131,47 @@ func ytmusicQueueCurrent(items []ytmusicQueueItem, artist, title string, duratio
 			return i
 		}
 	}
-	for i, it := range items {
-		if matches(it) {
-			return i
-		}
-	}
-	if durationSecs <= 0 {
-		return -1
-	}
+	// 高亮对不上(换歌那一拍它常常还停在上一首):队列里重名的歌是常态(重复曲目、电台回流、不同歌手的
+	// 「Home」「Intro」),取第一个命中会把已经播过的那首当成当前、交出去的「接下来」全是播过的。
+	// 先认歌手+歌名都对得上的;只剩歌名对得上的不止一条时,认高亮之后的第一条(高亮停在上一首时
+	// 当前这首就在它后面),没有高亮可参照就不猜。
 	selected := -1
 	for i, it := range items {
 		if !it.selected {
 			continue
 		}
 		if selected >= 0 {
-			return -1 // 不止一条 selected,不猜
+			selected = -2 // 不止一条 selected,当没有参照
+			break
 		}
 		selected = i
+	}
+	var full, byTitle []int
+	for i, it := range items {
+		if loosenEnrichKey(it.artist+"|"+it.title) == wantFull {
+			full = append(full, i)
+		}
+		if matches(it) {
+			byTitle = append(byTitle, i)
+		}
+	}
+	for _, cands := range [][]int{full, byTitle} {
+		if len(cands) == 1 {
+			return cands[0]
+		}
+		if len(cands) > 1 {
+			if selected >= 0 {
+				for _, i := range cands {
+					if i > selected {
+						return i
+					}
+				}
+			}
+			return -1
+		}
+	}
+	if durationSecs <= 0 {
+		return -1
 	}
 	if selected >= 0 && items[selected].seconds > 0 &&
 		math.Abs(items[selected].seconds-durationSecs) <= ytmusicSelectedDurationToleranceSecs {

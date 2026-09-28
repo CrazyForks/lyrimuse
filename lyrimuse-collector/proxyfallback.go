@@ -69,6 +69,8 @@ type proxyFallbackTransport struct {
 
 	mu          sync.Mutex
 	stickyUntil time.Time
+	// hintChecked:这个进程里已经看过磁盘提示里有没有这台主机的连续失败计数(见 RoundTrip 直连成功那一支)。
+	hintChecked map[string]bool
 }
 
 func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -86,6 +88,12 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 		if err == nil {
 			return resp, nil
 		}
+		// 调用方自己取消 / 到期了(切歌、救急支线被叫停、调用方的时限比代理预算短):那不是代理坏了。
+		// 照「代理坏了」处理会把粘性、磁盘提示、连续次数全清掉,之后每个请求又回到先白等 3 秒直连,
+		// 还要拿已经失效的 ctx 再去试一次直连、报一次「直连不通」。
+		if req.Context().Err() != nil {
+			return nil, err
+		}
 		// 代理自己坏了(用户关掉了 / 换了端口 / 节点挂了):清掉粘性,当场回直连再试一次。
 		// 不清的话会一直往一个死代理上撞,而直连说不定早就恢复了。
 		t.clearSticky(host)
@@ -101,11 +109,18 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 	resp, directErr := t.attempt(t.direct, req, proxyFallbackDirectBudget)
 	directElapsed := time.Since(directStart)
 	if directErr == nil {
-		// 窗口到期、重新探直连通了:连续失败次数清零,下次再被打掉从 10 分钟重新算。
-		if t.hadSticky() {
+		// 窗口到期、重新探直连通了:连续失败次数清零,下次再被打掉从 10 分钟重新算。粘性要是上一个进程
+		// 设的(只在磁盘提示里),这个进程的 hadSticky 看不到它 —— 每台主机头一回直连成功时去提示里看一眼,
+		// 不然留在那里的连续次数不清,下一次被打掉窗口直接从一个很大的倍数起跳。
+		if t.hadSticky() || t.hintStreakPending(host) {
 			t.clearSticky(host)
 		}
 		return resp, nil
+	}
+	// 直连失败但失败的原因是调用方自己取消 / 到期:不是「直连不通」,不试代理、也不报 blocked
+	// (那个原因常驻进程里从不清除,一次就会让 Musixmatch 这一路一直不进别名重查)。
+	if req.Context().Err() != nil {
+		return nil, directErr
 	}
 	proxy := systemProxyURL()
 	if proxy == nil {
@@ -198,6 +213,23 @@ func (t *proxyFallbackTransport) markSticky(host string) time.Duration {
 	t.stickyUntil = time.Now().Add(window)
 	t.mu.Unlock()
 	return window
+}
+
+// hintStreakPending:这台主机在磁盘提示里还记着连续失败次数,而且这个进程还没看过它。每台主机只读一次文件。
+func (t *proxyFallbackTransport) hintStreakPending(host string) bool {
+	t.mu.Lock()
+	if t.hintChecked[host] {
+		t.mu.Unlock()
+		return false
+	}
+	if t.hintChecked == nil {
+		t.hintChecked = map[string]bool{}
+	}
+	t.hintChecked[host] = true
+	t.mu.Unlock()
+	f := readProxyFallbackHint()
+	_, hasHost := f.Hosts[host]
+	return f.Streak[host] > 0 || hasHost
 }
 
 // hadSticky:这个进程里走代理的窗口设过、而且已经到期(这一次是到期后重新探直连)。

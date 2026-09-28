@@ -15,6 +15,35 @@ func resetSecretsForTest(t *testing.T) {
 	secretReplace.Store(nil)
 }
 
+// 家目录在写日志时就换成 `~`(用户会直接打开日志文件复制几行贴出来,那条路不经过导出);
+// 只换路径,前缀相同的别的用户名不切;Last.fm 的 user= 照留。
+func TestScrubSecretsReplacesHomeDir(t *testing.T) {
+	resetSecretsForTest(t)
+	logHomeDir() // 先让 Once 跑过,下面设的值才不会被它覆盖
+	saved := logHomeDirValue.Load()
+	home := "/Users/alice"
+	logHomeDirValue.Store(&home)
+	t.Cleanup(func() { logHomeDirValue.Store(saved) })
+
+	in := `lyrics: wrote /Users/alice/Music/lyrics/a.lrc; other /Users/alice2/x /Users/alice.bak/y; home=/Users/alice ` +
+		`"https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user=someone"`
+	got := scrubSecrets(in)
+	for _, want := range []string{"~/Music/lyrics/a.lrc", "home=~ ", "/Users/alice2/x", "/Users/alice.bak/y", "user=someone"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("缺 %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "/Users/alice/") {
+		t.Errorf("家目录应当换成 ~: %s", got)
+	}
+	if got := scrubHomeDir("/", "/"); got != "/" {
+		t.Errorf("家目录只是根目录时不换: %q", got)
+	}
+	if got := scrubHomeDir("x", ""); got != "x" {
+		t.Errorf("拿不到家目录时原样: %q", got)
+	}
+}
+
 // 这一行是真实泄露形态(在 ~/Library/Logs/lyrimuse.log 里逮到的),
 // key 换成了假的。它同时覆盖两件事:api_key 必须消失,而失败原因和其余 query
 // 参数必须留下 —— 脱敏不能把日志脱成看不出问题在哪。

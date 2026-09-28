@@ -448,11 +448,15 @@ enum DiagnosticsExporter {
 
         let report = (head + logLines(secrets: secrets, currentTrackLines: currentTrackLines))
             .joined(separator: "\n")
-        let files: [(String, String)] = [
+        var files: [(String, String)] = [
             ("report.txt", report),
             (LogFiles.collector.lastPathComponent, fullCollectorLogText(secrets: secrets)),
             ("app-log.txt", fullAppLogText(secrets: secrets)),
         ]
+        // 最近一份轮转归档也带上:collector 两三天轮转一次,刚轮转完就导出的话当前那份只有几分钟,历史全在归档里。
+        if let archived = archivedCollectorLogText(secrets: secrets) {
+            files.append((LogFiles.collector.lastPathComponent + ".old", archived))
+        }
         let home = fm.homeDirectoryForCurrentUser.path
         for (name, text) in files {
             try? LogRedactor.redactHomePath(text, home: home)
@@ -469,6 +473,15 @@ enum DiagnosticsExporter {
         guard let content = try? String(contentsOf: LogFiles.collector, encoding: .utf8) else {
             return "(could not read \(LogFiles.collector.path))"
         }
+        return LogRedactor.redactAll(content, secrets: secrets)
+    }
+
+    /// collector 最近一份轮转归档(`<日志>.old`,名字由 collector 的 logrotate.go 定),同样整份脱敏。
+    /// 还没轮转过(没有这个文件)返回 nil,诊断包里就不出现这一份。
+    private static func archivedCollectorLogText(secrets: [String: String]) -> String? {
+        let url = LogFiles.collector.deletingLastPathComponent()
+            .appendingPathComponent(LogFiles.collector.lastPathComponent + ".old")
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return LogRedactor.redactAll(content, secrets: secrets)
     }
 

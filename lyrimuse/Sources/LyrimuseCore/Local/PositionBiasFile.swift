@@ -21,7 +21,9 @@ public struct PositionBiasRecord: Codable, Equatable, Sendable {
     public var biasSecs: Double
     public var writtenAtMs: Int64
     /// 写这份记录那一刻 App 算出的位置(秒)。App 重启后接回偏置时拿它核"从那以后一直连续在放"
-    /// (见 `LocalPlaybackSource.restorablePlayerClockBias`);collector 不读。旧文件没有这个键 = nil。
+    /// (见 `LocalPlaybackSource.restorablePlayerClockBias`);collector 扣 Spotify 自身时钟的偏置前也拿它
+    /// 做同样的连续性核对(positionbias.go `playerClockBiasApplies`),改名或删掉这个键会让那边的偏置
+    /// 悄悄失效。旧文件没有这个键 = nil。
     public var positionSecs: Double?
 
     enum CodingKeys: String, CodingKey {

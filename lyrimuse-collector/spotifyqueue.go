@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"math/big"
 	"os"
@@ -216,7 +217,11 @@ func spotifyReadCurrentState(userDir, artist, title string, shuffled bool) (upco
 	st, err := spotifyParseState(raw)
 	if err != nil {
 		log.Printf("spotify upcoming: state file not recognized (%v), falling back to album prefetch", err)
-		noteParserUnrecognized("spotify-state-file", err.Error())
+		// 当前在播的不是曲目(广告 / 播客)、单曲上下文只有一首凑不成曲目表:文件格式照旧,只是这一刻
+		// 没有可用的队列 —— 不算「上游格式变了」,不然连着几首就误报一次解析漂移。
+		if !errors.Is(err, errSpotifyStateNoQueue) {
+			noteParserUnrecognized("spotify-state-file", err.Error())
+		}
 		return nil, false, false
 	}
 	noteParserRecognized("spotify-state-file")
@@ -310,20 +315,34 @@ func firstCreditArtist(s string) string {
 	return s
 }
 
+// errSpotifyStateNoQueue:状态文件认得出来,只是这一刻没有「当前曲目 + 曲目表」可用(见 spotifyParseState)。
+var errSpotifyStateNoQueue = errors.New("spotify state")
+
 // spotifyTrackIDHintFor 取换曲那一拍记下的 Spotify 曲目 id(见 spotifytrack.go)。
 //
-// 提示表按 enrichKey(artist, title, album) 存,这里拿不到 album,所以按前两段匹配 —— 同一首歌换曲那几秒
-// 里提示表只会有它自己这一条。
+// 提示表按 enrichKey(artist, title, album) 存,这里拿不到 album,所以按前两段匹配。提示用完不删,同一首歌
+// 从单曲和专辑各放过一次,表里就有两条同前缀的 —— 先认最近一次换曲记下的那条;不是它、又不止一条时
+// 不猜(map 遍历序是随机的,猜错就是拿别的录音的 id 去核对)。
 func spotifyTrackIDHintFor(artist, title string) string {
 	prefix := enrichKey(artist, title, "") // 专辑段为空,正好是「artist|title|」这个前缀
 	enrichMu.Lock()
 	defer enrichMu.Unlock()
-	for k, id := range spotifyTrackIDHints {
-		if strings.HasPrefix(k, prefix) {
+	if strings.HasPrefix(spotifyTrackIDLastKey, prefix) {
+		if id := spotifyTrackIDHints[spotifyTrackIDLastKey]; id != "" {
 			return id
 		}
 	}
-	return ""
+	found := ""
+	for k, id := range spotifyTrackIDHints {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		if found != "" && found != id {
+			return ""
+		}
+		found = id
+	}
+	return found
 }
 
 // spotifyActiveUserDir 选状态文件最新的那个账号目录(多账号登录过就有多个)。
@@ -442,7 +461,7 @@ func spotifyParseState(raw []byte) (spotifyState, error) {
 	}
 	walk(root, 0)
 	if st.cur.id == "" && st.cur.uid == "" {
-		return st, errors.New("spotify state: no current track")
+		return st, fmt.Errorf("%w: no current track", errSpotifyStateNoQueue)
 	}
 	queued := spotifyIsQueueUID(st.cur.uid)
 	// 选上下文:含当前这首的那一组,几组都含就取最长的(上下文本身比任何别的列表都长)。正在放队列里的歌时
@@ -453,7 +472,7 @@ func spotifyParseState(raw []byte) (spotifyState, error) {
 		}
 	}
 	if st.tracks == nil {
-		return st, errors.New("spotify state: current track not in any list")
+		return st, fmt.Errorf("%w: current track not in any list", errSpotifyStateNoQueue)
 	}
 	inCtx := make(map[string]bool, len(st.tracks))
 	for _, t := range st.tracks {
@@ -955,7 +974,8 @@ func pbParse(b []byte) ([]pbField, error) {
 			i += 4
 		case 2:
 			l, m := binary.Uvarint(b[i:])
-			if m <= 0 || uint64(i+m)+l > uint64(len(b)) {
+			// 不做加法:长度能到 2^64,uint64(i+m)+l 会回绕、把检查绕过去,int(l) 变负就是越界 panic。
+			if m <= 0 || l > uint64(len(b)-i-m) {
 				return nil, errors.New("pb: bad length")
 			}
 			f.b = b[i+m : i+m+int(l)]

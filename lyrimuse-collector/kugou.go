@@ -73,7 +73,7 @@ func kugouLyric(ctx context.Context, artist, title, album string, durationSecs f
 	// 先问酷狗客户端自己的本地缓存 —— 命中就省掉整条网络链路,而且拿到的是它为用户
 	// 正在听的那一版下的那一份歌词(见 kugoulocal.go)。没命中照常走网络。
 	ctx, sub := withLyricSubFetch(ctx)
-	r, ok := kugouLocalLyric(artist, title, album)
+	r, ok := kugouLocalLyric(artist, title, album, durationSecs)
 	if !ok {
 		r = resolveKugouLyric(ctx, artist, title, album, durationSecs)
 	}

@@ -418,6 +418,26 @@ func (s *lastfmScrobbler) scrobble(ctx context.Context, artist, track, album str
 // p.lfmMirrored 是裸 map,主循环会经 persistedTTLSet.save 整个 range 它,并发写就是
 // `fatal error: concurrent map iteration and map write`,recover 都救不回来;
 // poller.go 顶部"所有状态变更只发生在 poll 主循环里"那条不变量必须守住。
+// mirrorsInflight:mirrorAsync 起的、还没结束的写入数,退出兜底据此等它们发完(waitMirrorsInflight)。
+var mirrorsInflight atomic.Int64
+
+// waitMirrorsInflight 等 mirrorAsync 起的写入全部结束,最多等到 ctx 结束;返回还没结束的条数。
+// 用计数轮询而不是 WaitGroup:别的 goroutine(重发循环)可能恰好在等的时候又起一条,WaitGroup 的
+// 「计数为零时 Add 必须先于 Wait」约束在这里保证不了。
+func waitMirrorsInflight(ctx context.Context) int64 {
+	for {
+		n := mirrorsInflight.Load()
+		if n <= 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return n
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func mirrorAsync(s *lastfmScrobbler, what string, call func(ctx context.Context) error, onFail func(error)) {
 	if s == nil {
 		return // 压根没配镜像凭证:这台机器不往 Last.fm 写,谈不上"失败",不留痕
@@ -432,7 +452,9 @@ func mirrorAsync(s *lastfmScrobbler, what string, call func(ctx context.Context)
 		}
 		return
 	}
+	mirrorsInflight.Add(1)
 	go func() {
+		defer mirrorsInflight.Add(-1)
 		ctx, cancel := context.WithTimeout(context.Background(), mirrorTimeout())
 		defer cancel()
 		err := call(ctx)

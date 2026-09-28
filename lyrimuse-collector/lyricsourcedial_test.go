@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,6 +17,8 @@ import (
 // 可复现的"系统 DNS 不答",三个注入点全换成假的,连接用 net.Pipe 造。
 
 type dialProbe struct {
+	// mu 只护 dialCalls / dialedAddrs:DoH 那条会对几个地址并发拨号,拨号桩跑在各自的 goroutine 上。
+	mu                            sync.Mutex
 	sysCalls, dohCalls, dialCalls int
 	dialedAddrs                   []string
 	sysErr                        error
@@ -41,13 +44,15 @@ func installDialProbe(t *testing.T, p *dialProbe) {
 		p.sysCalls++
 		return p.sysAddrs, p.sysErr
 	}
-	lyricSourceDoHLookup = func(string) []string {
+	lyricSourceDoHLookup = func(context.Context, string) []string {
 		p.dohCalls++
 		return p.dohIPs
 	}
 	lyricSourceDial = func(_ context.Context, _, addr string) (net.Conn, error) {
+		p.mu.Lock()
 		p.dialCalls++
 		p.dialedAddrs = append(p.dialedAddrs, addr)
+		p.mu.Unlock()
 		if p.dialErr != nil {
 			return nil, p.dialErr
 		}
@@ -107,9 +112,13 @@ func TestLyricSourceDial_FallsBackToDoHWhenSystemDNSFails(t *testing.T) {
 	if p.dohCalls != 1 {
 		t.Fatalf("应问一次 DoH,实际 %d", p.dohCalls)
 	}
-	for _, a := range p.dialedAddrs {
+	// 输掉的那路拨号可能还在收尾,读之前拿锁。
+	p.mu.Lock()
+	dialed := append([]string(nil), p.dialedAddrs...)
+	p.mu.Unlock()
+	for _, a := range dialed {
 		if !strings.HasSuffix(a, ":443") || strings.Contains(a, "c.y.qq.com") {
-			t.Fatalf("应拨 DoH 解析出的 IP:443,实际 %v", p.dialedAddrs)
+			t.Fatalf("应拨 DoH 解析出的 IP:443,实际 %v", dialed)
 		}
 	}
 	if tp.dones == 0 || tp.lastDoneErr != nil || tp.lastAddrs != 2 {

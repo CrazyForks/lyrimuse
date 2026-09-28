@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -12,6 +13,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // featureFlagsFile is the on-disk shape written by desktop-lyrics's "设置" →
@@ -657,6 +660,15 @@ func resolveTrustedPlayers(m map[string]string) map[string]string {
 }
 
 func resolveLyricsSources(list []string, amllSeen *bool, lyricFindSeen *bool, kuwoSeen *bool, miguSeen *bool, deezerSeen *bool, appleMusicSeen *bool, sodaSeen *bool) map[string]bool {
+	// 先去掉这个版本不认识的源名,跟 App 侧(FeatureSettingsStore 的 compactMap)同一口径:降级安装、
+	// 手改过文件时清单里可能全是不认识的名字,不去掉的话这边等于所有已知源都关了,App 那边却显示全开。
+	known := list[:0:0]
+	for _, s := range list {
+		if slices.Contains(lyricSourceNames, s) {
+			known = append(known, s)
+		}
+	}
+	list = known
 	if len(list) == 0 {
 		return map[string]bool{
 			lyricSourceNetease: true, lyricSourceQQ: true, lyricSourceKugou: true,
@@ -757,10 +769,16 @@ func resolveLyricsSourceOrder(order []string) []string {
 // 的 Aqua 会话同一身份运行),用 `defaults read -g AppleLocale` 能可靠读到这台 Mac 当前
 // 的系统语言,不依赖 launchd 环境变量(环境变量对用户级 agent 不一定完整继承登录 shell
 // 的 locale 设置)。读不到/查不到对应语言代码时兜底 "en"——总比整段不请求译文更有用。
-// 只在启动时解析一次(跟这个文件里其它字段同一个"读一次,重启才生效"的既定约定),运行
-// 中途切系统语言不会实时生效。
+// 启动时解析一次,features.json 热重读时再解析一次(featuresreload.go)—— 系统语言本身不跟着
+// 实时生效,改了 features.json 才会重读。读到过的结果记在进程里(systemLanguageCode):热重读时
+// 那一次查询偶尔失败,不能让结果掉回兜底的 "en",那会被当成「译文语言换了」,整库机翻清一遍,
+// 下一次查成功又清一遍。
+//
+// 设置里的值只认 App 那份枚举(lyricsTranslationLanguageCodes):不认识的值(手改过文件、降级安装后
+// 留下新版才有的语言)当作 auto。App 读到不认识的值显示「跟随系统语言」,这边原样拿去用的话,界面
+// 写着跟随系统、后台却按一门没人选过的语言请求译文、清理机翻。
 func resolveLyricsTranslationLanguage(lang string) string {
-	if lang != "" && lang != "auto" {
+	if lang != "" && lang != "auto" && slices.Contains(lyricsTranslationLanguageCodes, lang) {
 		return lang
 	}
 	if code := systemLanguageCode(); code != "" {
@@ -772,8 +790,39 @@ func resolveLyricsTranslationLanguage(lang string) string {
 // systemLanguageCode 读 macOS 当前系统语言,取 AppleLocale("zh_Hans_CN"/"en_US"/
 // "ja_JP"这类形式)下划线前的两位语言代码并转小写。查询失败(命令不存在/超时/返回值
 // 解析不出下划线分隔的语言段)一律返回空串,交给调用方兜底,不 panic、不重试。
+//
+// 查成功的结果记在 systemLanguageLast 里,之后查询失败时沿用它(理由见 resolveLyricsTranslationLanguage)。
+// 查询带超时:热重读跑在任意一个调用 features() 的 goroutine 上(可能正持着 enrichMu),不能被一个卡住的
+// 子进程拖住。
 func systemLanguageCode() string {
-	out, err := exec.Command("defaults", "read", "-g", "AppleLocale").Output()
+	if code := querySystemLanguageCode(); code != "" {
+		systemLanguageLast.Store(&code)
+		return code
+	}
+	if last := systemLanguageLast.Load(); last != nil {
+		return *last
+	}
+	return ""
+}
+
+// lyricsTranslationLanguageCodes:设置里可选的译文语言,跟 App 侧 MusixmatchTranslationLanguage 的
+// rawValue 逐项一致(auto 除外),TestLyricsTranslationLanguageCodesMatchSwift 对账。
+var lyricsTranslationLanguageCodes = []string{
+	"en", "zh", "ja", "ko", "es", "fr", "de", "pt", "it", "ru", "ar", "vi", "th", "id", "nl", "pl", "tr",
+}
+
+// systemLanguageLast:这个进程里最近一次查成功的系统语言代码。
+var systemLanguageLast atomic.Pointer[string]
+
+// querySystemLanguageQuery 可换,只为单测。
+var querySystemLanguageQuery = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "defaults", "read", "-g", "AppleLocale").Output()
+}
+
+func querySystemLanguageCode() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := querySystemLanguageQuery(ctx)
 	if err != nil {
 		return ""
 	}

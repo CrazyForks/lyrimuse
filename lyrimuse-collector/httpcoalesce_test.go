@@ -31,6 +31,18 @@ func withCoalesceTestServer(t *testing.T, delay time.Duration) (*httptest.Server
 	return srv, &hits
 }
 
+// waitCoalesceHits 等服务端收到至少 n 次请求,最多等 2 秒。
+func waitCoalesceHits(t *testing.T, hits *int32, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(hits) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("服务端 2 秒内没收到第 %d 次请求", n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func coalesceGet(t *testing.T, ctx context.Context, url string, hdr map[string]string) (string, error) {
 	t.Helper()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -115,7 +127,9 @@ func TestHTTPCoalesceFollowerRetriesWhenLeaderCancelled(t *testing.T) {
 		_, err := coalesceGet(t, leaderCtx, srv.URL+"/lyric?id=9", nil)
 		leaderErr <- err
 	}()
-	time.Sleep(30 * time.Millisecond)
+	// 等发出去的那个真到了服务端再往下:只睡固定时长的话,机器忙时取消落在请求到达之前,服务端只见到
+	// 重发的那一次(hits=1),断言失败 —— 那是测试自己的时序假设,不是代码的竞态。
+	waitCoalesceHits(t, hits, 1)
 	followerBody := make(chan string, 1)
 	go func() {
 		b, err := coalesceGet(t, context.Background(), srv.URL+"/lyric?id=9", nil)

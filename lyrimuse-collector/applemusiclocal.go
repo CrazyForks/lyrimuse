@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -85,8 +86,8 @@ const applemusicLocalRescanMin = time.Second
 // 整份 JSON 也就百 KB 量级;4MB 是防同目录下的封面图/视频片段被整个读进来。
 const applemusicLocalMaxFileBytes = 4 << 20
 
-// applemusicLocalMaxTotalBytes:一轮扫描读入的总量上限。
-const applemusicLocalMaxTotalBytes = 128 << 20
+// applemusicLocalMaxTotalBytes:一轮扫描读入的总量上限。是变量只为单测能调小。
+var applemusicLocalMaxTotalBytes int64 = 128 << 20
 
 type applemusicLocalEntry struct {
 	song applemusicSong
@@ -205,7 +206,7 @@ func refreshApplemusicLocalIndexLocked() {
 	if applemusicLocalReady && now.Sub(applemusicLocalScanned) < applemusicLocalRescanMin {
 		return
 	}
-	applemusicLocalDirMod, applemusicLocalScanned, applemusicLocalReady = st.ModTime(), now, true
+	applemusicLocalScanned, applemusicLocalReady = now, true
 
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -213,21 +214,38 @@ func refreshApplemusicLocalIndexLocked() {
 		noteLocalCacheDenied("applemusic", dir, err)
 		return // 保留上一次的索引
 	}
+	// 目录版本列成功才记:先记的话,一次偶发失败之后直到目录再变都不会重试。
+	applemusicLocalDirMod = st.ModTime()
 	// 读到了就撤掉「被拒」—— 授权之后设置页那个提示要能自己消失。
 	noteLocalCacheReadable("applemusic")
 	idx := map[string]applemusicLocalEntry{}
 	byName := map[string][]applemusicLocalEntry{}
-	budget := int64(applemusicLocalMaxTotalBytes)
+	// 读入预算从最新的文件开始花:ReadDir 按文件名(UUID)排,跟新旧无关,而要找的恰恰是
+	// 刚写进来的那一份 —— 目录大到预算不够时,按名字顺序花会把它挤到预算之外。
+	type cacheFile struct {
+		name string
+		size int64
+		mod  time.Time
+	}
+	files := make([]cacheFile, 0, len(ents))
 	for _, e := range ents {
 		if e.IsDir() {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil || info.Size() > applemusicLocalMaxFileBytes || budget <= 0 {
+		if err != nil || info.Size() > applemusicLocalMaxFileBytes {
 			continue
 		}
-		budget -= info.Size()
-		scanApplemusicLocalFile(filepath.Join(dir, e.Name()), idx, byName)
+		files = append(files, cacheFile{name: e.Name(), size: info.Size(), mod: info.ModTime()})
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	budget := int64(applemusicLocalMaxTotalBytes)
+	for _, f := range files {
+		if budget <= 0 {
+			break
+		}
+		budget -= f.size
+		scanApplemusicLocalFile(filepath.Join(dir, f.name), idx, byName)
 	}
 	applemusicLocalIndex, applemusicLocalByName = idx, byName
 	if len(idx) > 0 {
@@ -241,22 +259,34 @@ func refreshApplemusicLocalIndexLocked() {
 //
 // 时长闸在这条路上尤其要紧:按名字匹配本来就比按 id 松,而缓存里同时躺着同一首歌的
 // 现场版 / 原版是常态(本机缓存里就有整张周杰伦演唱会)。
-func pickApplemusicLocalEntry(entries []applemusicLocalEntry, durationSecs float64) (applemusicLocalEntry, bool) {
+//
+// 过了闸之后专辑对得上的优先(+1000 压过任何时长差),同 pickQQLocalEntry。播放器还没报时长
+// (开播第一拍)时闸全放行、时长差全是 0,挑哪条只剩文件顺序 —— 这时多于一条就只认专辑对得上的
+// 唯一那条,认不出就不命中,宁可走网络。
+func pickApplemusicLocalEntry(entries []applemusicLocalEntry, album string, durationSecs float64) (applemusicLocalEntry, bool) {
 	var best applemusicLocalEntry
-	var bestDiff float64
-	found := false
+	var bestScore float64
+	found, fits, albumHits := false, 0, 0
 	for _, e := range entries {
 		d := float64(e.song.Attributes.DurationInMillis) / 1000
 		if !sourceDurationFits(durationSecs, d) {
 			continue
 		}
-		diff := 0.0
+		fits++
+		score := 0.0
+		if album != "" && e.song.Attributes.AlbumName != "" && normLoose(e.song.Attributes.AlbumName) == normLoose(album) {
+			score += 1000
+			albumHits++
+		}
 		if durationSecs > 0 && d > 0 {
-			diff = math.Abs(d - durationSecs)
+			score -= math.Abs(d - durationSecs)
 		}
-		if !found || diff < bestDiff {
-			best, bestDiff, found = e, diff, true
+		if !found || score > bestScore {
+			best, bestScore, found = e, score, true
 		}
+	}
+	if durationSecs <= 0 && fits > 1 && albumHits != 1 {
+		return applemusicLocalEntry{}, false
 	}
 	return best, found
 }
@@ -280,7 +310,7 @@ func applemusicLocalLyric(catalogID, artist, title, album string, durationSecs f
 		if k := applemusicLocalNameKey(artist, title); k != "" {
 			cands := append([]applemusicLocalEntry(nil), applemusicLocalByName[k]...)
 			applemusicLocalMu.Unlock()
-			e, ok = pickApplemusicLocalEntry(cands, durationSecs)
+			e, ok = pickApplemusicLocalEntry(cands, album, durationSecs)
 			via = "name"
 			goto done
 		}

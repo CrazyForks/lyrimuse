@@ -47,6 +47,18 @@ func liveConfig() *config {
 // setLiveConfig 登记 config.json 的位置和启动时读到的那份配置,并把文件当下的 mtime/size 作为基线。
 // 只有常驻进程调用。path 为空时撤销登记(测试收尾用)。
 func setLiveConfig(path string, cfg *config) {
+	var st os.FileInfo
+	if path != "" {
+		st, _ = os.Stat(path)
+	}
+	setLiveConfigAt(path, cfg, st)
+}
+
+// setLiveConfigAt 同 setLiveConfig,基线用调用方给的 baseline —— 那应当是**读 cfg 之前**那一刻文件的 stat
+// (文件不在时为 nil)。常驻进程从读配置到登记热重读之间要跑完整串启动迁移(几秒到几十秒),这段时间里
+// App 保存的 config.json(填 token、Last.fm 授权刚写进 session key)要是拿登记那一刻的 stat 当基线,
+// 热重读会认为「没变」,内存里一直是启动时读到的旧值,要等下一次改设置或重启才生效。
+func setLiveConfigAt(path string, cfg *config, baseline os.FileInfo) {
 	if path == "" {
 		configPath.Store(nil)
 		configSnapshot.Store(nil)
@@ -58,9 +70,9 @@ func setLiveConfig(path string, cfg *config) {
 	configCheckedAt.Store(time.Now().UnixNano())
 	configMTime.Store(0)
 	configSize.Store(0)
-	if st, err := os.Stat(path); err == nil {
-		configMTime.Store(st.ModTime().UnixNano())
-		configSize.Store(st.Size())
+	if baseline != nil {
+		configMTime.Store(baseline.ModTime().UnixNano())
+		configSize.Store(baseline.Size())
 	}
 }
 

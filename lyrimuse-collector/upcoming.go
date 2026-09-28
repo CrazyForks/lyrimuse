@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -139,6 +140,9 @@ var (
 	// 判据是**当前这首歌**,不是像同专辑那条路那样记专辑名:队列是动态的(用户随时
 	// 会换歌单、汽水的推荐流每次还会续新的),同一条队列里换了首歌就该重新往前看 5 首。
 	lastUpcomingKey string
+	// upcomingGen 每真换一首歌加一。一批预取起下一首之前比一次:用户连跳几首时,上一首那批
+	// 还没排完的不再往下起 —— 那些歌多半不会播了,却跟新的这批抢同一批歌词源。
+	upcomingGen atomic.Uint64
 )
 
 // prefetchUpcoming 在真正换到一首新歌时调用,整个函数体在独立 goroutine 里跑。
@@ -152,17 +156,25 @@ func prefetchUpcoming(currentArtist, currentTitle, album, bundleID string, durat
 		return // 同一首歌重复触发(暂停恢复、位置校正),上一轮该起的都起过了
 	}
 	lastUpcomingKey = key
+	gen := upcomingGen.Add(1)
 	upcomingMu.Unlock()
 
 	// 只有上面那把锁留在同步段。读队列要碰盘(网易云那份 1.3MB JSON、QQ 还要 exec 一次
 	// plutil),放在 poller 的 handle() 线程上会把"正在播放"的推送一起拖住。
 	go func() {
+		// 读的是各家播放器私有的二进制 / JSON / plist,格式随对方升级而变。解析里万一有没挡住的
+		// 越界,丢掉这一轮预取就够了,不能让它带走整个进程(这里没有别的 recover)。
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("upcoming prefetch: reading the %s queue panicked (%v), skipping this track", bundleID, r)
+			}
+		}()
 		tracks, ok := upcomingFromQueue(currentArtist, currentTitle, album, bundleID, durationSecs, prefetchUpcomingCount)
 		if !ok {
 			prefetchAlbumSiblings(currentArtist, currentTitle, album, bundleID)
 			return
 		}
-		queueUpcomingEnrich(tracks)
+		queueUpcomingEnrich(tracks, gen)
 	}()
 }
 
@@ -188,7 +200,8 @@ func upcomingNeedsResolve(t upcomingTrack) bool {
 	return !inflight
 }
 
-func queueUpcomingEnrich(tracks []upcomingTrack) {
+// gen 是起这一批时的 upcomingGen;为 0 表示不跟换歌挂钩(一直排到底)。
+func queueUpcomingEnrich(tracks []upcomingTrack, gen uint64) {
 	queued := 0
 	var prevKey string // 上一首起了解析的预取曲目,起下一首前等它跑完
 	for _, t := range tracks {
@@ -226,6 +239,10 @@ func queueUpcomingEnrich(tracks []upcomingTrack) {
 		if prevKey != "" {
 			// 只在真要起下一个之前才等 —— 跳过的(已解析/在途)不用等。
 			waitPrefetchResolved(prevKey)
+		}
+		if gen != 0 && upcomingGen.Load() != gen {
+			log.Printf("upcoming prefetch: switched to another track, stopping this batch after %d queued", queued)
+			return
 		}
 		if !eligible(true) {
 			continue

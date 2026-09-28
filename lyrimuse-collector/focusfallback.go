@@ -125,6 +125,12 @@ func stateAfterFocusLost(ctx context.Context, selected map[string]bool) (map[str
 		via = "per-client MediaRemote probe"
 		state = focusFallbackProbe(ctx, bundle)
 	}
+	// 回退问到的这一份跟主路径过同一道闸:非歌曲内容(KKBOX / Amazon Music 的播客单集)、开播那一帧
+	// 还没有歌手的,主路径直接给的 raw 会被 getAutoDetectedState 挡下,从这里绕进来的却会被当成一首歌
+	// 打卡、推给网页。挡下时不动回退状态:播放器还是那一个,只是这一拍没有可报的歌。
+	if state != nil && (builtinArtistlessContent(bundle, state) || builtinArtistNotReady(bundle, state)) {
+		return nil, false
+	}
 	focusFallbackMu.Lock()
 	firstTick := !focusFallbackActive
 	if state == nil {

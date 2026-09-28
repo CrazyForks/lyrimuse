@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"strconv"
 	"syscall"
@@ -79,6 +81,13 @@ func rotateLogIfNeeded(path string, maxBytes int64) (io.Writer, bool) {
 func archiveAndReopen(path string) (*os.File, bool) {
 	staging := path + ".rotating"
 	if err := os.Rename(path, staging); err != nil {
+		// 路径上已经没有文件了(被外部删掉):没有可归档的,直接在原路径开一份新的。不然每写一行都再试一次
+		// 改名、每次都失败,进程一直写着那个已经删掉的文件。
+		if errors.Is(err, fs.ErrNotExist) {
+			if f, oerr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); oerr == nil {
+				return f, true
+			}
+		}
 		return nil, false
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

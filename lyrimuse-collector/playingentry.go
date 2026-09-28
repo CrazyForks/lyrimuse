@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"sync"
 )
 
 // 正在播的那首的单条快照:`lyrimuse-playing-entry.json` = {"key": 缓存 key, "entry": 那一条完整的 enrichEntry}。
@@ -25,12 +26,19 @@ type playingEntryFile struct {
 	Entry enrichEntry `json:"entry"`
 }
 
+// playingEntryWriteMu 把「读条目 → 写文件」整段串起来。解析、补译文、动态封面几个 goroutine 常常同时提交
+// 正在播的这首:读是在 enrichMu 里、写在锁外,不串起来的话先读到旧版本的那个可能后写完,文件里留下旧的一份,
+// 而它的 mtime 更新,App 会优先读它(缺译文 / 缺字段),直到整份缓存写完。锁序:先它后 enrichMu。
+var playingEntryWriteMu sync.Mutex
+
 // writePlayingEntry 把 key 那一条当前的内存状态写成小文件。条目不在(被撤回 / 删了)就不写。
 func writePlayingEntry(key string) {
 	path := playingEntryPath()
 	if path == "" {
 		return
 	}
+	playingEntryWriteMu.Lock()
+	defer playingEntryWriteMu.Unlock()
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	enrichMu.Unlock()

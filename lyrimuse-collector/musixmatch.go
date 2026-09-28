@@ -657,6 +657,9 @@ func musixmatchDo(ctx context.Context, action string, params neturl.Values) ([]b
 	}
 	if err == nil && action != "token.get" && musixmatchHeaderStatus(body) == 200 {
 		musixmatchAnySuccess.Store(true)
+		// 答上来了就撤掉早先记下的失败原因:它在常驻进程里别无清除之处,留着会让别名重查
+		// (lyricSourcesWorthAliasRetry)在进程余下的生命周期里一直跳过这个源 —— 一次限流、一次断网就够了。
+		musixmatchSetLastFailureReason("")
 	}
 	return body, err
 }

@@ -64,7 +64,13 @@ var (
 	playerArtistFixMu   sync.Mutex
 	playerArtistFixPath string
 	playerArtistFixLast playerArtistFixState
+	// 上一次写盘失败的那一份与时刻:同一份每拍都会再来一次(配置目录不可写时就是每 5 秒),
+	// 失败后隔 playerArtistFixRetryAfter 才再试,不然每拍一条警告。
+	playerArtistFixFailed   playerArtistFixState
+	playerArtistFixFailedAt time.Time
 )
+
+const playerArtistFixRetryAfter = time.Minute
 
 // setPlayerArtistFixPath 由 setLyricsFillPaths 调用。空路径 = 不发布(单测默认如此)。
 //
@@ -90,6 +96,7 @@ func setPlayerArtistFixPathLocked(path string) playerArtistFixState {
 	defer playerArtistFixMu.Unlock()
 	playerArtistFixPath = path
 	playerArtistFixLast = playerArtistFixState{}
+	playerArtistFixFailed, playerArtistFixFailedAt = playerArtistFixState{}, time.Time{}
 	if path == "" {
 		return playerArtistFixState{}
 	}
@@ -119,19 +126,22 @@ func readPlayerArtistFixLocked(path string) playerArtistFixState {
 	return prev
 }
 
-// writePlayerArtistFixLocked 落盘并记下这一份,供去重比对。调用方必须持有锁。
-func writePlayerArtistFixLocked(next playerArtistFixState) {
+// writePlayerArtistFixLocked 落盘并记下这一份,供去重比对。调用方必须持有锁。返回是否写成。
+func writePlayerArtistFixLocked(next playerArtistFixState) bool {
 	stamped := next
 	stamped.UpdatedAt = time.Now().Unix()
 	data, err := json.Marshal(stamped)
 	if err != nil {
-		return
+		return false
 	}
 	if err := writeFileAtomic(playerArtistFixPath, data); err != nil {
 		slog.Warn("player artist fix: state write failed", "err", err)
-		return
+		playerArtistFixFailed, playerArtistFixFailedAt = next, time.Now()
+		return false
 	}
 	playerArtistFixLast = next
+	playerArtistFixFailedAt = time.Time{}
+	return true
 }
 
 // publishPlayerArtistFix 发布一条纠正。同一条重复发布不写盘 —— 这个函数每首歌每一拍
@@ -159,7 +169,12 @@ func publishPlayerTrackFix(next playerArtistFixState) {
 	if next == playerArtistFixLast {
 		return
 	}
-	writePlayerArtistFixLocked(next)
+	if next == playerArtistFixFailed && time.Since(playerArtistFixFailedAt) < playerArtistFixRetryAfter {
+		return
+	}
+	if !writePlayerArtistFixLocked(next) {
+		return
+	}
 	slog.Info("player artist fix: published", "bundle", next.Bundle, "title", next.Title, "artist", next.Artist,
 		"fixed_title", next.FixedTitle, "stable_field", next.StableField, "raw_artist", next.RawArtist)
 }

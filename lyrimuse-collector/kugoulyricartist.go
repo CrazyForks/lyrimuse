@@ -133,8 +133,10 @@ func kugouReadNowPlaying(path string) (kugouLocalTrack, bool) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-convert", "xml1", "-o", "-", path).Output()
 	if err != nil {
+		noteLocalCacheReadFailure("kugou", path)
 		return kugouLocalTrack{}, false
 	}
+	noteLocalCacheReadable("kugou")
 	if len(out) > kugouNowPlayingMaxBytes {
 		return kugouLocalTrack{}, false
 	}
@@ -318,7 +320,6 @@ func resolveKugouLocalTrack(st *kugouLyricArtistState, title string) (kugouLocal
 	if st.probed && fi.ModTime().Equal(st.probedAt) {
 		return kugouLocalTrack{}, false // 这一版解析过了,没匹配上;等它下次重写
 	}
-	noteLocalCacheReadable("kugou")
 	st.probedAt, st.probed = fi.ModTime(), true
 	local, ok := kugouReadNowPlaying(path)
 	if !ok || local.artist == "" {

@@ -3,6 +3,7 @@ package main
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // 视频标题解析:播放器放的是视频(YouTube / 网页播放器的 MV、翻唱、节目特辑)时,曲名位是视频标题、
@@ -98,17 +99,35 @@ func stripVideoTitleMarkers(t string) (string, bool, bool) {
 			video = true
 		}
 	}
-	// 竖线分段:带标记的那一段整段去掉(「Utopia | Official Audio」)。
+	// 竖线分段:只留歌名所在的那一段。只有标记的那一段整段去掉(「Utopia | Official Audio」);
+	// 标记跟歌名同在一段时(「Anti-Hero (Official Music Video) | Taylor Swift」「IU 'Blueming' MV | 1theK」)
+	// 歌名就在这一段,标记由下面的括号 / 结尾两道剥掉 —— 整段去掉的话歌名跟着没了,剩下的频道名、「4K」
+	// 被当成歌名。竖线另一侧是频道名、画质、节目名这类附注,不留:拼回去会整串当成歌名。
+	// 哪一段都没有标记跟文字同在时,留第一段不带标记的(「Song Title | Official Music Video | Artist」)。
 	if strings.Contains(t, "|") {
-		var keep []string
-		for _, part := range strings.Split(t, "|") {
-			if m := videoTitleMarker.FindString(part); m != "" {
+		parts := strings.Split(t, "|")
+		primary, firstPlain := -1, -1
+		for i, part := range parts {
+			ms := videoTitleMarker.FindAllString(part, -1)
+			for _, m := range ms {
 				note(m)
+			}
+			if len(ms) == 0 {
+				if firstPlain < 0 {
+					firstPlain = i
+				}
 				continue
 			}
-			keep = append(keep, part)
+			if primary < 0 && videoTitleHasText(videoTitleMarker.ReplaceAllString(part, " ")) {
+				primary = i
+			}
 		}
-		t = strings.Join(keep, "|")
+		switch {
+		case primary >= 0:
+			t = parts[primary]
+		case firstPlain >= 0:
+			t = parts[firstPlain]
+		}
 	}
 	// 括号段:内容带标记的整段去掉,不限位置(「(Official Video)」「[MV]」「【Official MV】」)。
 	var b strings.Builder
@@ -138,6 +157,11 @@ func stripVideoTitleMarkers(t string) (string, bool, bool) {
 	t = strings.Join(strings.Fields(t), " ")
 	t = strings.Trim(t, " -–—|:：")
 	return normEnrichTitle(t), true, video
+}
+
+// videoTitleHasText:剥掉标记之后这一段还剩不剩字(括号、标点、空白不算)。
+func videoTitleHasText(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
 }
 
 // splitVideoTitle 从剥掉标记的标题里拆出演唱者和歌名,拆不出就是「播放器报的歌手 / 整个标题」。

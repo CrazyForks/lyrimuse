@@ -17,13 +17,16 @@ import (
 // playSession tracks accrued playtime of the current track for the
 // half-or-4-minutes listen rule.
 type playSession struct {
-	key         string
-	meta        snapshot
-	startedAt   time.Time
-	playedSecs  float64
-	lastSeen    time.Time // zero while paused
-	listenSent  bool
-	lastPN      time.Time
+	key        string
+	meta       snapshot
+	startedAt  time.Time
+	playedSecs float64
+	lastSeen   time.Time // zero while paused
+	listenSent bool
+	lastPN     time.Time
+	// lastfmNPAt:上一次发 Last.fm now-playing 的时刻。跟 lastPN 分开记:lastPN 只在 LB 那条成功后才推进,
+	// LB 挂着(断网 / 5xx / 429 冷却)时每一拍都会再 announce 一次,Last.fm 那一路不能跟着每 5 秒发一次。
+	lastfmNPAt  time.Time
 	lastPlaying bool // last observed play/pause state, to detect transitions
 	pnPending   bool // 首条 playing_now 因歌词还在异步解析而挂起(LB 只认换曲那条,故首条必须带歌词)
 	// submitting/announcing:见 submitSingleAsync/announce 顶部的设计说明——LB 提交
@@ -374,6 +377,10 @@ type poller struct {
 	digestBusy atomic.Bool
 
 	nullStreak int
+	// nullSince:这一串连续读空的第一拍是什么时候。清空要求「三拍」**而且**持续够 nullClearMinWait:
+	// poll() 不只由 5 秒的 ticker 触发,预取的每一首解析完都会经 enrichNotify 再触发一轮,换歌那几秒里
+	// 三次读空能挤在一两秒内凑齐,「三拍 = 15 秒」的前提(见 trackEndMaxExtrapolateSecs)就不成立了。
+	nullSince time.Time
 
 	// LB 提交(single/playing_now)改到后台 goroutine 跑，结果经这两个 channel 送回单一
 	// 的 poll 主循环处理——goroutine 本身只做网络 I/O,不直接碰 session/poller 字段，
@@ -381,6 +388,10 @@ type poller struct {
 	// announce 顶部注释、run() 里的 drain 分支。
 	submitDoneCh   chan submitOutcome
 	announceDoneCh chan announceOutcome
+	// submitsInflight:发出去了、结果还没回到 applySubmitOutcome 的那几条 single 提交(按会话记)。
+	// 只给退出兜底用:上一首刚 finalize、它的提交还在飞时进程要退出,run() 不再等 submitDoneCh,
+	// 这一条的 Last.fm 镜像、本地收听日志、LB 待重发全都没人管(见 drainSubmitsOnExit)。只在主循环上读写。
+	submitsInflight map[*playSession]submitOutcome
 	// bridge() 里读 Last.fm(lastfmRecent,8s 超时)改到后台 goroutine 跑,结果经这个
 	// channel 送回单一 poll 主循环处理——理由同 submitDoneCh/announceDoneCh:Last.fm
 	// 一慢,同步调用会连带堵住 poll() 后面紧接着的 pushRelayState,让网页刷新(包括
@@ -544,6 +555,9 @@ func (p *poller) mirrorScrobbleTracked(artist, title, album string, timestamp in
 		return
 	}
 	p.lfmMirrored[timestamp] = true
+	// 写之前顺手修剪:bridge() 里那处修剪要求配了桥接用户名,只开镜像写入、没配桥接的机器上
+	// 这个集合只涨不落,而且每次 scrobble 都整份重写。
+	p.lfmMirroredSet.trim(p.lfmMirrored, time.Now())
 	p.lfmMirroredSet.save(p.lfmMirrored)
 	// 取一份局部变量再交给 goroutine:p.lfm 会被主循环换掉(syncLiveConfig)。
 	lfm := p.lfm
@@ -1129,6 +1143,10 @@ func (p *poller) submitSingleAsync(sess *playSession, meta snapshot, startedAt i
 		p.applySubmitOutcome(submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt, lastfmOnly: true})
 		return
 	}
+	if p.submitsInflight == nil {
+		p.submitsInflight = map[*playSession]submitOutcome{}
+	}
+	p.submitsInflight[sess] = submitOutcome{sess: sess, meta: meta, artistName: lm.ArtistName, startedAt: startedAt}
 	go func() {
 		err := p.lb.submit(p.ctx, "single", startedAt, lm)
 		select {
@@ -1138,10 +1156,34 @@ func (p *poller) submitSingleAsync(sess *playSession, meta snapshot, startedAt i
 	}()
 }
 
+// drainSubmitsOnExit 是退出兜底的第一步:已经回来的提交结果照常处理;还在飞的(请求随 p.ctx 一起被取消,
+// 结果多半到不了 submitDoneCh)按「没发成」处理 —— applySubmitOutcome 会照常走 Last.fm 那一路,会话已经结束
+// 的再交给 LB 待重发队列(下次启动由 lbretry.go 重发;万一其实已经送到,LB 按 listened_at 去重)。
+// 当前会话不在这里管,由 run() 里紧接着的同步提交兜底。
+func (p *poller) drainSubmitsOnExit() {
+	for drained := false; !drained; {
+		select {
+		case r := <-p.submitDoneCh:
+			p.applySubmitOutcome(r)
+		default:
+			drained = true
+		}
+	}
+	for sess, r := range p.submitsInflight {
+		if sess == p.sess {
+			delete(p.submitsInflight, sess)
+			continue
+		}
+		r.err = context.Canceled
+		p.applySubmitOutcome(r)
+	}
+}
+
 // applySubmitOutcome 在 poll 主循环里处理 submitSingleAsync 的结果——不管此时 p.sess
 // 是否还指向同一个 session(很可能早已因为换曲被 finalize 分离走了)，这里的字段变更和
 // 收听记录都只作用于结果自带的 sess/meta，不依赖 p.sess 当前值，所以时序上没有问题。
 func (p *poller) applySubmitOutcome(r submitOutcome) {
+	delete(p.submitsInflight, r.sess)
 	r.sess.submitting = false
 	// Last.fm 镜像与 ListenBrainz 的提交结果解耦(批4):这次收听够不够格
 	// 在发起提交前就已经判定过了,LB 服务抽风不该殃及 Last.fm 那份记录 —— 原来镜像躲
@@ -1276,6 +1318,15 @@ func (p *poller) announce(now time.Time, why string) {
 	// Last.fm 那一路的按播放器排除(lastfmexclude.go):只挡 track.updateNowPlaying,LB 的 playing_now 照发。
 	// 同样在闭包外取值,理由同上。
 	lastfmSkip := p.sess.lastfmExcluded
+	// Last.fm writer 同样在闭包外取:主循环的配置热重读会换掉 p.lfm(syncLiveConfig),
+	// 在 goroutine 里读就是跟它的数据竞争(见 configreload.go 头注那条约定)。
+	lfm := p.lfm
+	// Last.fm now-playing 自己节流(见 lastfmNPAt):播放 / 暂停切换当场发,其余最多每 playingNowRefresh 一次。
+	lastfmDue := playing && !lastfmSkip &&
+		(sess.lastfmNPAt.IsZero() || why == "state change" || now.Sub(sess.lastfmNPAt) >= playingNowRefresh)
+	if lastfmDue {
+		sess.lastfmNPAt = now
+	}
 	go func() {
 		// now-playing 镜像与 LB 解耦(批4):"正在播放"反映的是本机播放器
 		// 的真实状态,不是 LB 提交的成败。放在 LB 请求之前发起 —— 两者本就各自异步。
@@ -1286,8 +1337,7 @@ func (p *poller) announce(now time.Time, why string) {
 		// 切换、挂起首条到点补发。collector 一重启就会把一首
 		// 暂停的歌 announce 上去,直接顶掉用户手机上正在放的那首的 nowplaying。
 		// LB 不受影响 —— 它要靠 rate=0 表达暂停、自己会丢弃,所以下面的 submit 照旧发。
-		if playing && !lastfmSkip {
-			lfm := p.lfm
+		if lastfmDue {
 			mirrorAsync(lfm, "now-playing", func(ctx context.Context) error {
 				return lfm.updateNowPlaying(withCatalogDurationUnknown(ctx, notAudio), artist, title, album, durationSecs)
 			}, nil) // now-playing 失败无需留痕:它是瞬时状态,下一拍自然覆盖(跟 scrobble 相反)
@@ -1372,7 +1422,9 @@ func (p *poller) handle(now time.Time, reanchored, loopRestart bool) {
 		// 顺手把接下来会播的那几首也丢到后台解析,提前解析好等真播到时大概率不用现等。
 		// 优先读播放器自己的队列,读不到才退回"同一张专辑里的其它曲目"——两层的理由见
 		// upcoming.go 头注。
-		if features().AlbumPrefetch {
+		// 广告不预取:它的「专辑」不是专辑、队列里也找不到它,读一遍队列只会白等重试再退回同专辑预取。
+		if features().AlbumPrefetch && (p.sess == nil || !p.sess.isAd) &&
+			!isAdBreak(p.cur.Bundle, p.cur.Artist, p.cur.Title, p.cur.Album) {
 			prefetchUpcoming(p.cur.Artist, p.cur.Title, p.cur.Album, p.cur.Bundle, p.cur.Duration)
 		}
 		// LB 的 playing_now 只在"换曲"时更新、同曲存活期内拒绝覆盖,迟到的歌词再也进不去。
@@ -1813,6 +1865,11 @@ func (p *poller) holdTornTrackChange(next snapshot, now time.Time) bool {
 	return false
 }
 
+// nullStreakMeansStopped:连续读空到了当停播处理的地步 —— 三拍,而且持续够 nullClearMinWait(见 poller.nullSince)。
+func nullStreakMeansStopped(streak int, since, now time.Time) bool {
+	return streak >= 3 && now.Sub(since) >= nullClearMinWait
+}
+
 func (p *poller) poll() {
 	p.syncLiveConfig()
 	// snapshotStale:这一轮 p.cur 是否还是上一轮的陈旧残留——getState 直接失败,或
@@ -1822,8 +1879,11 @@ func (p *poller) poll() {
 	p.snapshotStale = true
 	if state, ok := getState(p.ctx); ok {
 		if len(state) == 0 { // "null" — nothing playing, or a transient read glitch
+			if p.nullStreak == 0 {
+				p.nullSince = time.Now()
+			}
 			p.nullStreak++
-			if p.nullStreak >= 3 {
+			if nullStreakMeansStopped(p.nullStreak, p.nullSince, time.Now()) {
 				p.cur = snapshot{}
 				p.snapshotStale = false
 			}
@@ -1969,6 +2029,7 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 			// Best-effort final flush with a fresh context.
 			flushCtx, cancel := context.WithTimeout(context.Background(), submitTimeout)
 			defer cancel()
+			p.drainSubmitsOnExit()
 			// 这条退出兜底路径直接调 mirrorScrobbleSync/lb.submit,不经过 submitSingleAsync,
 			// 所以广告判据要在这里再挡一次(见 isAdBreak)。
 			if p.sess != nil {
@@ -1999,11 +2060,20 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 					p.recordRecentMacListen(p.sess.meta.Artist, p.sess.meta.Title, p.sess.startedAt.Unix())
 				} else if err := lb.submit(flushCtx, "single", p.sess.startedAt.Unix(), lm); err != nil {
 					log.Printf("final listen flush failed: %v", err)
+					// 进程正在退出,没有下一拍重试它了:交给 LB 待重发队列(同 applySubmitOutcome 里会话已结束那一支)。
+					if !errors.Is(err, errListenRejected) {
+						enqueueLBRetry(p.sess.startedAt.Unix(), lm)
+					}
 				} else {
 					p.recordRecentMacListen(p.sess.meta.Artist, p.sess.meta.Title, p.sess.startedAt.Unix())
 				}
 				// relay 现在是网页历史主源:退出前放的最后一首也要补进 relay。
 				p.pushScrobble(p.sess.meta, p.sess.startedAt.Unix(), "mac")
+			}
+			// 活路径上已经发出去的 Last.fm 写入(mirrorAsync)活不过紧接着的进程退出,而它们的「已镜像」标记在
+			// 发请求之前就落了盘 —— 被截断的那一条从此谁都不会再发。在 flush 的时限内等它们发完。
+			if n := waitMirrorsInflight(flushCtx); n > 0 {
+				log.Printf("lastfm: exiting with %d mirror write(s) still in flight", n)
 			}
 			return nil
 		case <-enrichNotify:

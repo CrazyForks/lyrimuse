@@ -249,9 +249,13 @@ func (b *lyricSourceBreaker) observeWith(host, endpoint string, err error, statu
 			b.state[source] = st
 		}
 		d := parseLyricSourceRetryAfter(retryAfter)
-		st.until = now.Add(d)
-		st.reason = lyricSourceCooldownReasonRateLimited
-		log.Printf("lyrics: source %s cooling down %s (reason=%s host=%s)", source, d, st.reason, host)
+		// 只往后延、不往前缩:正在一段更长的冷却里(5xx / 断网升上去的档)时,一次 429 的 Retry-After
+		// 不该把它缩短成 60 秒。
+		if until := now.Add(d); until.After(st.until) {
+			st.until = until
+			st.reason = lyricSourceCooldownReasonRateLimited
+			log.Printf("lyrics: source %s cooling down %s (reason=%s host=%s)", source, d, st.reason, host)
+		}
 	default:
 		if endpoint != "" {
 			m := b.endpointOK[source]
@@ -265,7 +269,9 @@ func (b *lyricSourceBreaker) observeWith(host, endpoint string, err error, statu
 			return
 		}
 		st.consecutive = 0
-		if st.until.After(now) {
+		// 限流窗口不因为一次正常应答就撤:服务端用 Retry-After 说了要等多久,同一轮并发的另一个请求
+		// 刚好答了 200 不代表限流过去了(网易云一轮四个变体并发,一个吃 429、一个 200 是常态)。
+		if st.until.After(now) && st.reason != lyricSourceCooldownReasonRateLimited {
 			log.Printf("lyrics: source %s recovered, cooldown cleared (reason=%s)", source, st.reason)
 			st.until = time.Time{}
 			st.reason = ""
@@ -282,7 +288,8 @@ func (b *lyricSourceBreaker) observeWith(host, endpoint string, err error, statu
 		// 一次正常响应只证明"这会儿能通",不证明"限流已经过去";证明后者的是**一段时间
 		// 内都没再跳闸**。封顶仍是 5 分钟,所以文件头「误熔断的代价有界」没变:一次 DNS
 		// 抖动的代价还是 15 秒,只有在衰减窗口内反复跳闸才会往上爬。
-		if st.lastTrip.IsZero() || now.Sub(st.lastTrip) >= lyricSourceBreakerTripsDecay {
+		// 还在上面留着的限流窗口里就不抹:整条 state 删掉等于把那个窗口一起撤了。
+		if (st.lastTrip.IsZero() || now.Sub(st.lastTrip) >= lyricSourceBreakerTripsDecay) && !st.until.After(now) {
 			delete(b.state, source)
 		}
 	}

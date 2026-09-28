@@ -24,6 +24,18 @@ func configDir() string {
 	return filepath.Join(home, ".config", clientName)
 }
 
+// alignConfigDirWithFlag:常驻进程带了 -config、而它的目录不是 configDir() 时,让 configDir() 也指过去
+// (经 LYRIMUSE_CONFIG_DIR)。常驻路径的落盘有两套写法 —— 单实例锁、features、缓存按 -config 的目录,
+// 本地缓存可读性、补空请求 / 状态、署名纠正这几份走 configDir() —— 不一致时,手动带 -config 起的排查
+// 实例拿的不是正式实例那把锁,两个都能起来,还会删改、认领正式目录下的状态文件和 App 投来的请求。
+func alignConfigDirWithFlag(cfgPath, defaultDir string) {
+	dir, err := filepath.Abs(filepath.Dir(cfgPath))
+	if err != nil || dir == defaultDir {
+		return
+	}
+	_ = os.Setenv("LYRIMUSE_CONFIG_DIR", dir)
+}
+
 // configFilePath 是配置目录下的一个文件(或子目录)。
 func configFilePath(name string) string {
 	return filepath.Join(configDir(), name)

@@ -90,11 +90,13 @@ type deezerResult struct {
 
 func (r deezerResult) empty() bool { return r.lyrics == "" }
 
+// deezerAuthAPI:换匿名票的地址。是变量只为单测能指到本地服务器。
+var deezerAuthAPI = "https://auth.deezer.com/login/anonymous?jo=p&rto=c&i=c"
+
 const (
 	deezerSearchAPI = "https://api.deezer.com/search"
 	// deezerTrackAPI:曲目端点。这里只用它的 /isrc:<ISRC> 形式(按录音直取,见 deezerTrackByISRC)。
 	deezerTrackAPI = "https://api.deezer.com/track"
-	deezerAuthAPI  = "https://auth.deezer.com/login/anonymous?jo=p&rto=c&i=c"
 	deezerPipeAPI  = "https://pipe.deezer.com/api"
 	// deezerScoreDurationTolerance 跟别的源的时长闸门(match.go 的 0.25)取同一个值。
 	deezerScoreDurationTolerance = 0.25
@@ -407,7 +409,10 @@ func deezerFetchJWT(ctx context.Context) string {
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := doHTTPTracked(lyricHTTPClient(deezerHTTPTimeout), req)
 	if err != nil {
-		deezerSetLastFailureReason(lyricFailureReasonDeezerAuthFailed)
+		// 调用方自己取消 / 到期的不算「换不到票」:这个原因会让别名重查跳过这一路,见 musixmatch.go 同一处。
+		if ctx.Err() == nil {
+			deezerSetLastFailureReason(lyricFailureReasonDeezerAuthFailed)
+		}
 		return ""
 	}
 	defer resp.Body.Close()
@@ -426,6 +431,8 @@ func deezerFetchJWT(ctx context.Context) string {
 		deezerSetLastFailureReason(lyricFailureReasonDeezerAuthFailed)
 		return ""
 	}
+	// 换到了就撤掉早先的失败原因,理由同 musixmatch.go 那处。
+	deezerSetLastFailureReason("")
 	return strings.TrimSpace(out.JWT)
 }
 

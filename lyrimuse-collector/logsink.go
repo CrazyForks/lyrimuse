@@ -37,8 +37,10 @@ package main
 // "repeated N times" 和审计汇总窗口里没到点的计数都在那一刻放出来。
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"log/slog"
 	"os"
@@ -211,12 +213,35 @@ type rotatingLogFile struct {
 	rotatedAtOpen bool
 	// 轮转后把 fd 2 也指到新文件(常驻模式才开,见 redirectStderrTo)。
 	stderrFollows bool
+	// checkedAt:上一次核对「路径上的文件还是不是手里这个」的时刻(见 reopenIfReplacedLocked)。
+	checkedAt time.Time
+	// rotationHeld:还没拿到单实例锁,先不轮转(见 releaseLogRotation)。
+	rotationHeld bool
 }
+
+// logFileRecheckEvery:多久核对一次日志路径上的文件还是不是手里这个。一次 Stat,对日志写入的频率来说可以忽略。
+const logFileRecheckEvery = 30 * time.Second
 
 // openRotatingLogFile:路径为空 / 打不开返回 nil,调用方退回 stderr。
 func openRotatingLogFile(path string, maxBytes int64) *rotatingLogFile {
+	return openRotatingLogFileHeld(path, maxBytes, false)
+}
+
+// openRotatingLogFileHeld:held 为 true 时打开时不轮转、之后也先不轮转,直到 releaseLogRotation。
+func openRotatingLogFileHeld(path string, maxBytes int64, held bool) *rotatingLogFile {
 	if path == "" {
 		return nil
+	}
+	if held {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil
+		}
+		r := &rotatingLogFile{path: path, maxBytes: maxBytes, f: f, rotationHeld: true}
+		if info, err := f.Stat(); err == nil {
+			r.size = info.Size()
+		}
+		return r
 	}
 	w, rotated := rotateLogIfNeeded(path, maxBytes)
 	f, ok := w.(*os.File)
@@ -238,7 +263,11 @@ func openRotatingLogFile(path string, maxBytes int64) *rotatingLogFile {
 func (r *rotatingLogFile) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.size > 0 && r.size+int64(len(p)) > r.maxBytes {
+	if now := time.Now(); now.Sub(r.checkedAt) >= logFileRecheckEvery {
+		r.checkedAt = now
+		r.reopenIfReplacedLocked()
+	}
+	if !r.rotationHeld && r.size > 0 && r.size+int64(len(p)) > r.maxBytes {
 		r.rotateLocked()
 	}
 	n, err := r.f.Write(p)
@@ -265,6 +294,37 @@ func (r *rotatingLogFile) rotateLocked() {
 	r.size += int64(n)
 }
 
+// reopenIfReplacedLocked:路径上的文件被删了、或者换成了另一个文件(用户手动删日志、清理软件清掉用户日志)时,
+// 在原路径重新开一份接着写。不这么做的话进程会一直写那个已经删掉的文件:路径上没有日志,诊断导出拿不到,
+// 而那个看不见的文件照样一天十来 MB 地涨、占着磁盘,直到进程重启 —— 轮转救不了它,轮转第一步就是改名这个路径。
+func (r *rotatingLogFile) reopenIfReplacedLocked() {
+	onDisk, err := os.Stat(r.path)
+	if err == nil {
+		if mine, merr := r.f.Stat(); merr == nil && os.SameFile(onDisk, mine) {
+			return
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return // 读不到路径的状态(权限等):不猜,继续写手里这个
+	}
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	_ = r.f.Close()
+	r.f = f
+	r.size = 0
+	if info, err := f.Stat(); err == nil {
+		r.size = info.Size()
+	}
+	if r.stderrFollows {
+		redirectStderrTo(f)
+	}
+	line := fmt.Sprintf("time=%s level=INFO msg=\"log: the log file was removed or replaced, reopened it at the same path\"\n",
+		time.Now().UTC().Format(logTimeLayout))
+	n, _ := r.f.WriteString(line)
+	r.size += int64(n)
+}
+
 // ---- 装配 ----
 
 var logSink struct {
@@ -277,7 +337,9 @@ var logSink struct {
 func installLogSink(daemon bool) {
 	var base io.Writer = os.Stderr
 	if daemon {
-		if f := openRotatingLogFile(logFilePath(), logRotateMaxBytes); f != nil {
+		// 先不轮转:这时还没抢单实例锁(main 里晚得多)。部署期间新旧实例短暂共存,第二个实例一打开就轮转的话,
+		// 正在跑的那个被切去写 .old,当前日志里只剩第二个实例那几行退出记录。拿到锁之后由 releaseLogRotation 放开。
+		if f := openRotatingLogFileHeld(logFilePath(), logRotateMaxBytes, true); f != nil {
 			base = f
 			logSink.file = f
 			// launchd 给的 fd 2 可能是启动期刚轮转掉的那份旧文件,一开始就指到当前文件。
@@ -295,6 +357,20 @@ func installLogSink(daemon bool) {
 	if daemon {
 		go logSinkMaintenanceLoop()
 	}
+}
+
+// releaseLogRotation 由 main 在拿到单实例锁之后调用:放开轮转,文件已经超过上限就当场轮转一次(原来的启动期轮转)。
+func releaseLogRotation() {
+	r := logSink.file
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.rotationHeld = false
+	if r.size >= r.maxBytes {
+		r.rotateLocked()
+	}
+	r.mu.Unlock()
 }
 
 // logSinkMaintenanceLoop:每 30 秒结算一次超过窗口的重复计数和到点的审计汇总。只在常驻模式跑;

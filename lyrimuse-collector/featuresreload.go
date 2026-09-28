@@ -89,6 +89,15 @@ func setFeatures(f featureFlags) {
 // 直接早退、行为与热重读上线之前逐字节一致:它们不长跑,没有"中途被改"这回事,反倒是多一次 Stat
 // 都是白费。
 func setFeaturesPath(path string) {
+	var st os.FileInfo
+	if path != "" {
+		st, _ = os.Stat(path)
+	}
+	setFeaturesPathAt(path, st)
+}
+
+// setFeaturesPathAt 同 setFeaturesPath,基线用**读开关之前**那一刻的 stat(理由同 setLiveConfigAt)。
+func setFeaturesPathAt(path string, baseline os.FileInfo) {
 	if path == "" {
 		featuresPath.Store(nil)
 		return
@@ -96,9 +105,11 @@ func setFeaturesPath(path string) {
 	p := path
 	featuresPath.Store(&p)
 	featuresCheckedAt.Store(time.Now().UnixNano())
-	if st, err := os.Stat(path); err == nil {
-		featuresMTime.Store(st.ModTime().UnixNano())
-		featuresSize.Store(st.Size())
+	featuresMTime.Store(0)
+	featuresSize.Store(0)
+	if baseline != nil {
+		featuresMTime.Store(baseline.ModTime().UnixNano())
+		featuresSize.Store(baseline.Size())
 	}
 }
 

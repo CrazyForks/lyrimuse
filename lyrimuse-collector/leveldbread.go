@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +32,10 @@ import (
 // 每条都带一个 sequence number,取最大的那条;最大的那条是删除标记就当作不存在。这里不读
 // MANIFEST 判断哪些 .ldb 还"活着"——已经被合并掉、但还没来得及删的旧文件,它们里面的条目
 // sequence 一定更小,按 sequence 取最新天然就把它们盖掉了。
+//
+// 有一个窗口是这条推理盖不住的:合并到最底层时删除标记会跟旧值一起被丢掉,要是列目录之后、打开文件之前
+// 放删除标记的那个文件先被删了,旧文件里那条旧值就会被当成现值读出来。只是一瞬间的脏读(下一次读就对了),
+// 读出来的也只是预取 / 队列这类提示性数据,认了这个窗口,不为它去解析 MANIFEST。
 //
 // 格式依据:LevelDB 的 table_format.md / log_format.md;Snappy 的 format_description.txt。
 
@@ -74,9 +80,10 @@ func ldbGet(dir string, keys [][]byte) map[string][]byte {
 		path := filepath.Join(dir, name)
 		switch {
 		case strings.HasSuffix(name, ".ldb") || strings.HasSuffix(name, ".sst"):
-			_ = ldbTableLookup(path, sorted, keep) // 读失败(被合并掉 / 格式不认识)就跳过这个文件
+			// 读失败(被合并掉 / 格式不认识)就跳过这个文件
+			_ = ldbSafely(path, func() error { return ldbTableLookup(path, sorted, keep) })
 		case strings.HasSuffix(name, ".log"):
-			_ = ldbLogScan(path, func(k []byte) bool { return want[string(k)] }, keep)
+			_ = ldbSafely(path, func() error { return ldbLogScan(path, func(k []byte) bool { return want[string(k)] }, keep) })
 		}
 	}
 	out := make(map[string][]byte, len(best))
@@ -106,9 +113,9 @@ func ldbScan(dir string, match func([]byte) bool) map[string]ldbValue {
 		path := filepath.Join(dir, name)
 		switch {
 		case strings.HasSuffix(name, ".ldb") || strings.HasSuffix(name, ".sst"):
-			_ = ldbTableScan(path, match, keep)
+			_ = ldbSafely(path, func() error { return ldbTableScan(path, match, keep) })
 		case strings.HasSuffix(name, ".log"):
-			_ = ldbLogScan(path, match, keep)
+			_ = ldbSafely(path, func() error { return ldbLogScan(path, match, keep) })
 		}
 	}
 	for k, v := range best {
@@ -117,6 +124,21 @@ func ldbScan(dir string, match func([]byte) bool) map[string]ldbValue {
 		}
 	}
 	return best
+}
+
+// ldbSafely 读一个文件,解析里万一还有没挡住的越界就当这个文件读失败,不让它带走整个进程。
+//
+// 读的是别的 App 的库(Spotify / KKBOX / Amazon),不校验 CRC,坏文件和写到一半的 .log 是常态;
+// 边界检查本身已经逐项挡了(见 ldbBlockEntries),这里是最后一道兜底 —— 一个越界 panic 会让
+// collector 崩溃,而坏的 .ldb 不会自己消失,每次换歌再崩一次。
+func ldbSafely(path string, read func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("leveldb: %s is malformed (%v), skipping it", filepath.Base(path), r)
+			err = fmt.Errorf("leveldb: malformed %s: %v", filepath.Base(path), r)
+		}
+	}()
+	return read()
 }
 
 func ldbReadFile(path string) ([]byte, error) {
@@ -195,7 +217,9 @@ func ldbBlockEntries(b []byte, fn func(key, value []byte) bool) error {
 			return errors.New("leveldb: bad entry")
 		}
 		i += n3
-		if shared > uint64(len(key)) || uint64(i)+nonShared+vlen > uint64(end) {
+		// 逐项跟剩余字节比,不做加法:varint 能到 2^64,uint64(i)+nonShared+vlen 会回绕成小数、
+		// 把这道检查绕过去,下面 int(nonShared) 变成负数就是切片越界 panic(坏文件 / 写到一半的 .log)。
+		if i > end || shared > uint64(len(key)) || nonShared > uint64(end-i) || vlen > uint64(end-i)-nonShared {
 			return errors.New("leveldb: entry out of range")
 		}
 		key = append(key[:shared:shared], b[i:i+int(nonShared)]...)
@@ -397,7 +421,8 @@ func ldbApplyBatch(b []byte, match func([]byte) bool, keep func([]byte, ldbValue
 	i := 12
 	readSlice := func() ([]byte, bool) {
 		n, m := binary.Uvarint(b[i:])
-		if m <= 0 || uint64(i+m)+n > uint64(len(b)) {
+		// 不做加法,理由同 ldbBlockEntries。
+		if m <= 0 || n > uint64(len(b)-i-m) {
 			return nil, false
 		}
 		s := b[i+m : i+m+int(n)]
@@ -431,7 +456,13 @@ func snappyDecode(src []byte) ([]byte, error) {
 	if hdr <= 0 || n > ldbMaxFileBytes {
 		return nil, errors.New("snappy: bad header")
 	}
-	dst := make([]byte, 0, n)
+	// 头部声明的长度只当上限用、不照着预分配:几个字节的坏块也能声称自己解开有 64MB。
+	// 真实数据的压缩比不会离谱,按输入的几倍起步,不够 append 自己会长。
+	capHint := uint64(len(src)) * 4
+	if capHint > n {
+		capHint = n
+	}
+	dst := make([]byte, 0, capHint)
 	for i := hdr; i < len(src); {
 		tag := src[i]
 		i++
@@ -453,6 +484,9 @@ func snappyDecode(src []byte) ([]byte, error) {
 			length++
 			if i+length > len(src) {
 				return nil, errors.New("snappy: literal out of range")
+			}
+			if uint64(len(dst)+length) > n {
+				return nil, errors.New("snappy: output exceeds declared length")
 			}
 			dst = append(dst, src[i:i+length]...)
 			i += length
@@ -481,6 +515,10 @@ func snappyDecode(src []byte) ([]byte, error) {
 		}
 		if offset <= 0 || offset > len(dst) {
 			return nil, errors.New("snappy: bad offset")
+		}
+		// copy 元素能把几个字节放大几十倍:不在途中按声明长度截住,坏块能先撑出远超 n 的缓冲才报错。
+		if uint64(len(dst)+length) > n {
+			return nil, errors.New("snappy: output exceeds declared length")
 		}
 		// 源和目标可能重叠(offset < length 表示重复一段),只能逐字节拷。
 		for k := 0; k < length; k++ {

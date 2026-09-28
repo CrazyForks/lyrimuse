@@ -21,12 +21,18 @@ import (
 // 四字码 sfridojs 就是 safari,都没有就判不了。认四字码不认命令名:显示名会随本地化变。
 //
 // 只对信任列表里的 bundle 做:这条路要起子进程读别人的 bundle,不能对任意报上来的 bundle id 都跑一遍。
-// 结果(含判不了)按 bundle id 缓存到进程结束,换装同 bundle id 的另一个版本要重启 collector 才认。
+// 判出来的引擎族按 bundle id 缓存到进程结束,换装同 bundle id 的另一个版本要重启 collector 才认。「判不了」
+// 只记 browserFamilyRetryAfter:它可能只是这一次没找到 —— Spotlight 没建好索引、系统正忙时 mdfind 加逐个
+// plutil 会超时,装在别处的 App 也可能过一阵才被索引到。缓存到进程结束的话,网页探针会一直跳过这个浏览器。
 
 const (
 	chromiumScriptCommandCode = "CrSuExJa"
 	safariScriptCommandCode   = "sfridojs"
 	browserFamilyProbeTimeout = 3 * time.Second
+	// browserFamilyPlistTimeout:核对单个候选 App 的那一次 plutil。每个候选各给一份:共用一个总超时的话,
+	// 候选多(实测 /Applications 下七十几个)时排在后面的还没轮到就超时了。
+	browserFamilyPlistTimeout = time.Second
+	browserFamilyRetryAfter   = 10 * time.Minute
 )
 
 var bundleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.\-_]*$`)
@@ -34,6 +40,8 @@ var bundleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.\-_]*$`)
 var (
 	browserFamilyMu    sync.Mutex
 	browserFamilyCache = map[string]string{}
+	// browserFamilyMissAt:判不了的那次是什么时候判的,到 browserFamilyRetryAfter 再判一次。
+	browserFamilyMissAt = map[string]time.Time{}
 )
 
 // detectBrowserScriptFamily 现场判一个已安装 App 的引擎族,判不了返回 ""。单测换成假的(TestMain 默认
@@ -56,10 +64,19 @@ func trustedBrowserScriptFamily(bundleID string) string {
 		browserFamilyMu.Unlock()
 		return fam
 	}
+	if at, missed := browserFamilyMissAt[bundleID]; missed && time.Since(at) < browserFamilyRetryAfter {
+		browserFamilyMu.Unlock()
+		return ""
+	}
 	browserFamilyMu.Unlock()
 	fam := detectBrowserScriptFamily(bundleID)
 	browserFamilyMu.Lock()
-	browserFamilyCache[bundleID] = fam
+	if fam != "" {
+		browserFamilyCache[bundleID] = fam
+		delete(browserFamilyMissAt, bundleID)
+	} else {
+		browserFamilyMissAt[bundleID] = time.Now()
+	}
 	browserFamilyMu.Unlock()
 	if fam != "" {
 		log.Printf("browser family: trusted %s drives as %s (from its scripting definition)", bundleID, fam)
@@ -112,7 +129,8 @@ func appPathForBundleID(bundleID string) string {
 			}
 		}
 	}
-	dirs := []string{"/Applications"}
+	// Setapp 把 App 装在 /Applications/Setapp 这一层子目录里。
+	dirs := []string{"/Applications", "/Applications/Setapp"}
 	if home, err := os.UserHomeDir(); err == nil {
 		dirs = append(dirs, filepath.Join(home, "Applications"))
 	}
@@ -121,11 +139,18 @@ func appPathForBundleID(bundleID string) string {
 		candidates = append(candidates, matches...)
 	}
 	for _, app := range candidates {
-		out, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-",
-			filepath.Join(app, "Contents", "Info.plist")).Output()
-		if err == nil && strings.TrimSpace(string(out)) == bundleID {
+		if appBundleIDIs(app, bundleID) {
 			return app
 		}
 	}
 	return ""
+}
+
+// appBundleIDIs 核对一个候选 App 的 CFBundleIdentifier 是不是正好这个。
+func appBundleIDIs(app, bundleID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), browserFamilyPlistTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-",
+		filepath.Join(app, "Contents", "Info.plist")).Output()
+	return err == nil && strings.TrimSpace(string(out)) == bundleID
 }

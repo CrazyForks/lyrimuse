@@ -4479,7 +4479,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 			resultsCh <- lyricSourceResult{source: "kugou"}
 			return
 		case lyricSourceSkipCooling:
-			if r, ok := kugouLocalLyric(artist, title, album); ok {
+			if r, ok := kugouLocalLyric(artist, title, album, durationSecs); ok {
 				resultsCh <- kugouSourceResult(r)
 				return
 			}

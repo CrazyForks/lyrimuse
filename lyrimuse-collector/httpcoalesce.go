@@ -28,6 +28,10 @@ type coalescedCall struct {
 	body   []byte
 	shared bool // false:没有可共享的结果(出错 / 太大),等的人自己发
 	err    error
+	// leaderCanceled:发出去的那个是被**它自己的** ctx 取消 / 到期的(它所在的支线被叫停了)。只有这种失败
+	// 等的人才各自重发;源自己的超时(http.Client.Timeout,错误同样是 DeadlineExceeded)、连接失败这些
+	// 是这个源此刻的真实状态,共享给等的人 —— 各自重发只会同时再打出 N 个一模一样的请求、各等一整个超时。
+	leaderCanceled bool
 }
 
 var (
@@ -72,13 +76,15 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 			return nil, req.Context().Err()
 		}
 		if c.shared {
+			noteCoalescedReached(req, c.resp.StatusCode)
 			return coalescedResponse(c, req), nil
 		}
-		// 发出去的那个被它自己的 ctx 取消了、或者响应不能共享:自己的 ctx 还活着就自己发。
-		if c.err != nil && !errors.Is(c.err, context.Canceled) && !errors.Is(c.err, context.DeadlineExceeded) {
+		// 发出去的那个被它自己的 ctx 取消了、或者响应不能共享(太大):自己的 ctx 还活着就重来一遍 ——
+		// 仍走合并,几个一起重发的只发一次。
+		if c.err != nil && !c.leaderCanceled {
 			return nil, c.err
 		}
-		return doHTTPTrackedOnce(cli, req)
+		return doHTTPTracked(cli, req)
 	}
 	c := &coalescedCall{done: make(chan struct{})}
 	httpCoalesceInflight[key] = c
@@ -92,7 +98,7 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 		close(c.done)
 	}
 	if err != nil {
-		c.err = err
+		c.err, c.leaderCanceled = err, leaderCtxEnded(req, err)
 		finish()
 		return nil, err
 	}
@@ -105,6 +111,7 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 			io.Closer
 		}{io.MultiReader(bytes.NewReader(body), rest), rest}
 		c.err = readErr
+		c.leaderCanceled = readErr != nil && leaderCtxEnded(req, readErr)
 		finish()
 		return resp, nil
 	}
@@ -112,6 +119,26 @@ func doHTTPTracked(cli *http.Client, req *http.Request) (*http.Response, error) 
 	c.resp, c.body, c.shared = resp, body, true
 	finish()
 	return coalescedResponse(c, req), nil
+}
+
+// leaderCtxEnded:这次失败是不是发出去的那个自己的 ctx 结束造成的。只看错误类型不够 ——
+// http.Client.Timeout 到点报的也是 DeadlineExceeded,那是源慢,不是调用方不要了。
+func leaderCtxEnded(req *http.Request, err error) bool {
+	if req.Context().Err() == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// noteCoalescedReached:等到共享结果的那个也算这一轮「连上过这个源」。它没真发请求,doHTTPTrackedOnce 里那处
+// markReached 管不到它 —— 一轮里连上的恰好都是等别人结果的那几个时,这一轮会被误判成一个源都没连上。
+func noteCoalescedReached(req *http.Request, status int) {
+	if status >= 500 || status == http.StatusTooManyRequests {
+		return
+	}
+	if src := lyricSourceForHost(req.URL.Host); src != "" {
+		lyricSourceRoundFrom(req.Context()).markReached(src)
+	}
 }
 
 // coalescedResponse:共享结果的一份独立副本(头复制一份、正文各读各的)。

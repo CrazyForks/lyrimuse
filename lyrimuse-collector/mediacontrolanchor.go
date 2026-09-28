@@ -27,6 +27,31 @@ const (
 	frozenAnchorPauseDropSecs = 3.0
 )
 
+// pausedPositionSecsAt 是 collector 实际用的那一版:先看锚点是不是在「最后一次看到在播」之后才发布的
+// (anchorAt 晚于 lastAt),是就原样信报告值,不管它此刻已经多旧;不是再走 pausedPositionSecs。
+//
+// 为什么 collector 要多这一道:pausedPositionSecs 的「陈旧」门槛是一个 **App** 轮询周期(2s),而 collector
+// 5s 一拍、也没有 App 那条暂停事件流兜底 —— 暂停时带新时间戳重发的锚点,collector 下一拍看到时往往已经
+// 三四秒老,被判陈旧;碰上暂停前刚往回拖过(报告值比记住的播放位置低一大截),就退回了拖动**之前**的
+// 位置,而且整个暂停期间一直错(锚点只会越来越老)。「锚点晚于最后一次在播采样」只可能是暂停(或暂停前那次
+// seek)重发的冻结值;锚点冻结的源(Arc)时间戳恒等于开播那一刻,不会满足这一条,照旧由下面那条规则兜住。
+//
+// 整秒时间戳的锚点时刻是估出来的中点(误差 ±0.5s,见 mediaControlAnchorInstant),比较时放宽半秒。
+func pausedPositionSecsAt(reported float64, anchorAt time.Time, hasAnchor bool,
+	lastPlaying float64, lastAt time.Time, hasLastPlaying bool, now time.Time) float64 {
+	if !hasLastPlaying {
+		return reported
+	}
+	if hasAnchor && anchorAt.Add(500*time.Millisecond).After(lastAt) {
+		return reported
+	}
+	var age float64
+	if hasAnchor {
+		age = now.Sub(anchorAt).Seconds()
+	}
+	return pausedPositionSecs(reported, age, hasAnchor, lastPlaying, true)
+}
+
 // pausedPositionSecs 纯函数,单测直接覆盖。两个条件**同时**成立才认为"报告值不是暂停
 // 位置",各挡一种误判:
 //   - 锚点陈旧 —— 把会刷新锚点的源整个排除在外,也就保住了"向后 seek 之后暂停"这种
@@ -105,6 +130,7 @@ var (
 	playingPositionMu    sync.Mutex
 	playingPositionTrack string
 	playingPositionValue float64
+	playingPositionAt    time.Time
 	playingPositionKnown bool
 )
 
@@ -117,10 +143,25 @@ func rememberedPlayingPosition(track string) (float64, bool) {
 	return playingPositionValue, true
 }
 
+// rememberedPlayingSample 同 rememberedPlayingPosition,另带这个位置是什么时候算出来的(见 pausedPositionSecsAt)。
+func rememberedPlayingSample(track string) (float64, time.Time, bool) {
+	playingPositionMu.Lock()
+	defer playingPositionMu.Unlock()
+	if !playingPositionKnown || playingPositionTrack != track {
+		return 0, time.Time{}, false
+	}
+	return playingPositionValue, playingPositionAt, true
+}
+
 func rememberPlayingPosition(track string, pos float64) {
+	rememberPlayingPositionAt(track, pos, time.Now())
+}
+
+func rememberPlayingPositionAt(track string, pos float64, at time.Time) {
 	playingPositionMu.Lock()
 	playingPositionTrack = track
 	playingPositionValue = pos
+	playingPositionAt = at
 	playingPositionKnown = true
 	playingPositionMu.Unlock()
 }
