@@ -186,8 +186,8 @@ public final class LyricsSyncEngine {
     /// 跟 wordLines 逐下标对应:这一行跟下一行真重叠时唱到哪一刻,不重叠是 nil(见 overlapHoldEnds)。
     private var overlapHoldEndMs: [Int?] = []
     /// 单行展示面按宽度重新断句(见 surfaceTick):每个展示面的宽度预算与断句进度。
-    /// 没开重新断句、或那个面还没报宽度时,它的断句就是一行一段。歌词窗口不受影响。
-    private var resegmentsByWidth = false
+    /// 拆长句、并短句都没开,或那个面还没报宽度时,它的断句就是一行一段。歌词窗口不受影响。
+    private var lineBreaks = LineBreakOptions.off
     private var layoutBudgets: [LyricsSurface: LineLayoutBudget] = [:]
     private var surfaceBreaks: [LyricsSurface: SurfaceBreaks] = [:]
 
@@ -1494,7 +1494,7 @@ public final class LyricsSyncEngine {
         let romanizationScripts: RomanizationScripts
         let songIsCantonese: Bool
         let songIsHokkien: Bool
-        let resegmentsByWidth: Bool
+        let lineBreaks: LineBreakOptions
     }
     private var loadedFingerprint: LoadFingerprint?
 
@@ -1512,18 +1512,18 @@ public final class LyricsSyncEngine {
         lyrics: String, lyricsTr: String, lyricsRoma: String, lyricsYRC: String, lyricsBG: String = "",
         trackTitle: String = "", trackArtist: String = "",
         romanizationScripts: RomanizationScripts = .default, songIsCantonese: Bool = false,
-        songIsHokkien: Bool = false, resegmentsByWidth: Bool = false
+        songIsHokkien: Bool = false, lineBreaks: LineBreakOptions = .off
     ) -> Bool {
         let fingerprint = LoadFingerprint(
             lyrics: lyrics, lyricsTr: lyricsTr, lyricsRoma: lyricsRoma, lyricsYRC: lyricsYRC, lyricsBG: lyricsBG,
             trackTitle: trackTitle, trackArtist: trackArtist,
             romanizationScripts: romanizationScripts, songIsCantonese: songIsCantonese,
-            songIsHokkien: songIsHokkien, resegmentsByWidth: resegmentsByWidth)
+            songIsHokkien: songIsHokkien, lineBreaks: lineBreaks)
         if fingerprint == loadedFingerprint { return false }
         loadedFingerprint = fingerprint
         self.romanizationScripts = romanizationScripts
         self.songIsHokkien = songIsHokkien
-        self.resegmentsByWidth = resegmentsByWidth
+        self.lineBreaks = lineBreaks
         // 逐字时间轴先过一遍合法性归一化(LyricTimelineNormalizer):字起点早于行首 /
         // 落在下一行开始之后的小偏差夹回来,乱序或偏差太大的行退化成均匀扫过。放在署名过滤之前——
         // 归一化要看相邻行的时间戳,得在完整的行列表上做。每次加载只记一行汇总日志。
@@ -2733,7 +2733,7 @@ public final class LyricsSyncEngine {
     private func rebuildSegments(for surface: LyricsSurface) {
         let n = displayLineCount
         var breaks = SurfaceBreaks()
-        if resegmentsByWidth, let budget = layoutBudgets[surface], budget.main.maxWidth > 0, n > 0 {
+        if lineBreaks.isActive, let budget = layoutBudgets[surface], budget.main.maxWidth > 0, n > 0 {
             breaks.budget = budget.memoized()
         } else {
             breaks.segments = LyricsSegmenter.identity(lineCount: n)
@@ -2775,11 +2775,14 @@ public final class LyricsSyncEngine {
     private func extendSegments(_ surface: LyricsSurface, coveringMs posMs: Int?) {
         guard let budget = surfaceBreaks[surface]?.budget else { return }
         let n = displayLineCount
-        while let b = surfaceBreaks[surface], b.nextLine < n {
-            if let posMs, b.starts.count >= 2, b.starts[b.starts.count - 2] > posMs { return }
-            let segs = LyricsSegmenter.step(from: b.nextLine, line: { [unowned self] k in
+        // 每一步只读出要的几个数,不拿整份 SurfaceBreaks 的拷贝:拷贝活着时往里写(追加段、缓存行)会把整个
+        // 数组 / 字典复制一遍。
+        while let next = surfaceBreaks[surface]?.nextLine, next < n {
+            if let posMs, let count = surfaceBreaks[surface]?.starts.count, count >= 2,
+               let secondLast = surfaceBreaks[surface]?.starts[count - 2], secondLast > posMs { return }
+            let segs = LyricsSegmenter.step(from: next, line: { [unowned self] k in
                 segmenterLine(surface, k, budget: budget)
-            }, budget: budget)
+            }, budget: budget, options: lineBreaks)
             guard let last = segs.last else { return }
             surfaceBreaks[surface]?.segments += segs
             surfaceBreaks[surface]?.starts += segs.map(segmentStartMs)
@@ -2833,15 +2836,28 @@ public final class LyricsSyncEngine {
 
     /// 一个展示面整首里最宽的一行:每一段的主行,和这个面显示的下一句 / 译文 / 罗马音那一行,按它的预算量,
     /// 取最宽的。没开重新断句、那个面没报宽度、没有歌词时为 nil。菜单栏自适应宽度拿它给整首定一个槽宽。
+    /// 只用断句时的那份文字、译文、罗马音量,不建显示行(建显示行要算读音和逐词分组)。
     public func widestRow(_ surface: LyricsSurface) -> CGFloat? {
         guard let budget = surfaceBreaks[surface]?.budget else { return nil }
+        extendSegments(surface, coveringMs: nil)
+        guard let segments = surfaceBreaks[surface]?.segments else { return nil }
         var widest: CGFloat?
-        for line in surfaceLines(surface) {
-            let text = line.plainText ?? ""
+        for seg in segments {
+            let lines = (seg.firstLine...seg.lastLine).compactMap { segmenterLine(surface, $0, budget: budget) }
+            let text: String, translation: String?, romanization: String?
+            if let part = seg.part {
+                text = part.text
+                translation = part.translation ?? lines.first?.translation
+                romanization = part.romanization ?? lines.first?.romanization
+            } else {
+                text = LyricsSegmenter.mergedText(lines, words: LyricsSegmenter.joinedWords(lines))
+                translation = LyricsSegmenter.joinedText(lines.map(\.translation))
+                romanization = LyricsSegmenter.joinedText(lines.map(\.romanization))
+            }
             var w = budget.main.measure(text)
             if let row = budget.preview { w = max(w, row.measure(text)) }
-            if let row = budget.translation, let tr = line.translation { w = max(w, row.measure(tr)) }
-            if let row = budget.romanization, let ro = line.romanization { w = max(w, row.measure(ro)) }
+            if let row = budget.translation, let tr = translation { w = max(w, row.measure(tr)) }
+            if let row = budget.romanization, let ro = romanization { w = max(w, row.measure(ro)) }
             widest = max(widest ?? 0, w)
         }
         return widest

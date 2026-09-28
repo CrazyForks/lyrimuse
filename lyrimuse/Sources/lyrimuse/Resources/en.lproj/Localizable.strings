@@ -727,7 +727,8 @@
 "悬停显示播放控制" = "Show Controls on Hover";
 "悬浮歌词" = "Floating Lyrics";
 "悬浮歌词、灵动岛、菜单栏可同时开启，歌词窗口随用随开" = "Floating Lyrics, Notch and Menu Bar can run together; open the Lyrics Window when needed";
-"悬浮歌词、灵动岛和菜单栏各按自己的宽度断句：放不下的长句拆开，连续几句很短的合成一句，每一行都不换行、不滚动；歌词窗口仍然一句一行" = "Desktop Floating Lyrics, the Notch and the Menu Bar each re-break lyrics to their own width: lines that don't fit are split up and several very short lines in a row are joined into one, so every line fits without wrapping or scrolling; the Lyrics Window still shows one line at a time";
+"悬浮歌词、灵动岛和菜单栏上放不下一行的句子，按各自的宽度拆成几段先后显示，每一行都不换行、不滚动；歌词窗口仍然一句一行" = "On Desktop Floating Lyrics, the Notch and the Menu Bar, lines too wide for one row are split into parts shown one after another, so no line wraps or scrolls; the Lyrics Window still shows one line at a time";
+"悬浮歌词、灵动岛和菜单栏上连续几句很短的歌词合成一句显示，合完放得下一行才合；歌词窗口仍然一句一行" = "On Desktop Floating Lyrics, the Notch and the Menu Bar, runs of very short lines are shown as one line, only when the result fits on one row; the Lyrics Window still shows one line at a time";
 "悬浮歌词宽度" = "Overlay lyrics width";
 "悬浮淡化" = "Fade on hover";
 "想法与建议" = "Ideas & Suggestions";
@@ -783,7 +784,6 @@
 "按住歌词即可拖动位置" = "Hold the lyrics to reposition";
 "按听得最多的前 %1$@ 位歌手统计，占这段时间 %2$@ 的收听" = "Based on your top %1$@ artists, %2$@ of your plays in this period";
 "按听得最多的前 %@ 位歌手统计" = "Based on your top %@ artists";
-"按宽度重新断句" = "Re-break Lines to Fit";
 "按翻唱者署名" = "Covering artist from the title";
 "挑一个你想让 Lyrimuse 当作播放器的应用" = "Pick an app you want Lyrimuse to treat as a player";
 "挑一个用来播放这个网站的浏览器" = "Pick the browser you use for this site";
@@ -1248,6 +1248,7 @@
 "白字描边" = "White Text with Outline";
 "知道了" = "OK";
 "短于 30 秒的曲目" = "Tracks Under 30 Seconds";
+"短句合并" = "Join Short Lines";
 "确定要从这份备份恢复歌词库吗？" = "Restore the lyrics library from this backup?";
 "确定要删除「%@ - %@」的本地记录吗？" = "Delete the saved lyrics for “%@ — %@”?";
 "确定要删除选中的 %@ 条本地记录吗？" = "Delete %@ selected entries?";
@@ -1674,6 +1675,7 @@
 "锁定位置只对桌面悬浮歌词有效" = "Locking the position only applies to the desktop overlay";
 "锁定手选歌词" = "Lock Hand-Picked Lyrics";
 "长句处理" = "Long Lines";
+"长句拆开" = "Split Long Lines";
 "长按即可拖动位置" = "Click and hold to drag";
 "长按或右键打开设置" = "Click and hold or right-click for settings";
 "长按拖动" = "Long-press to drag";

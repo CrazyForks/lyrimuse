@@ -77,6 +77,23 @@ public struct LineLayoutBudget {
     }
 }
 
+/// 单行展示面按宽度断句的两件事,各自一个开关。都关着时每一行原样一段。
+public struct LineBreakOptions: Equatable, Hashable, Sendable {
+    /// 放不下一行的句子拆开。开着时各面的每一行都放得下,不折行、不滚动。
+    public var splitsLongLines: Bool
+    /// 连续几句很短的并成一句,合完放得下一行才并。
+    public var mergesShortLines: Bool
+
+    public init(splitsLongLines: Bool = false, mergesShortLines: Bool = false) {
+        self.splitsLongLines = splitsLongLines
+        self.mergesShortLines = mergesShortLines
+    }
+
+    public static let off = LineBreakOptions()
+    public static let all = LineBreakOptions(splitsLongLines: true, mergesShortLines: true)
+    public var isActive: Bool { splitsLongLines || mergesShortLines }
+}
+
 /// 单行展示面按宽度重新断句:放不下一行的句子拆成几段,连续几句很短的并成一句,保证主行、译文、罗马音、
 /// 下一句预览每一行都放得下(只要一个字放得下)。纯函数,引擎(LyricsSyncEngine)按每个展示面的预算各算
 /// 一份。规则与取舍见 08 章决策 25。
@@ -195,14 +212,15 @@ public enum LyricsSegmenter {
     /// 按需取第 k 行;k 越界返回 nil。
     public typealias LineProvider = (Int) -> Line?
 
-    public static func segments(_ lines: [Line], budget original: LineLayoutBudget) -> [Segment] {
-        guard original.main.maxWidth > 0 else { return identity(lineCount: lines.count) }
+    public static func segments(_ lines: [Line], budget original: LineLayoutBudget,
+                                options: LineBreakOptions = .all) -> [Segment] {
+        guard original.main.maxWidth > 0, options.isActive else { return identity(lineCount: lines.count) }
         let budget = original.memoized()
         let provider: LineProvider = { lines.indices.contains($0) ? lines[$0] : nil }
         var out: [Segment] = []
         var i = 0
         while i < lines.count {
-            let segs = step(from: i, line: provider, budget: budget)
+            let segs = step(from: i, line: provider, budget: budget, options: options)
             out += segs
             i = (segs.last?.lastLine ?? i) + 1
         }
@@ -211,14 +229,17 @@ public enum LyricsSegmenter {
 
     /// 从第 i 行断出下一组段:放不下的一句拆成的几段,或者从第 i 行起并成的一句(可能就是它自己)。只往后看
     /// 合并要看的那几行,所以从头一组一组往后断,断好的段不会因为后面的行变。`budget` 应先 `memoized()`。
-    public static func step(from i: Int, line: LineProvider, budget: LineLayoutBudget) -> [Segment] {
+    /// 不拆时放不下的句子原样一段(由各面自己折行或滚动);不并时每句一段。
+    public static func step(from i: Int, line: LineProvider, budget: LineLayoutBudget,
+                            options: LineBreakOptions = .all) -> [Segment] {
         guard let first = line(i) else { return [] }
         if !fits(line, i...i, budget: budget) {
-            if let parts = split(first, budget: budget) {
+            if options.splitsLongLines, let parts = split(first, budget: budget) {
                 return parts.map { Segment(firstLine: i, lastLine: i, part: $0) }
             }
             return [Segment(firstLine: i, lastLine: i)]
         }
+        guard options.mergesShortLines else { return [Segment(firstLine: i, lastLine: i)] }
         var j = i
         while canMerge(line, from: i, through: j, budget: budget) { j += 1 }
         return [Segment(firstLine: i, lastLine: j)]
@@ -247,7 +268,7 @@ public enum LyricsSegmenter {
         return max(words.reduce(CGFloat(0)) { $0 + budget.main.measure($1.text) }, whole)
     }
 
-    private static func joinedWords(_ lines: [Line]) -> [SyncedLyricWord]? {
+    static func joinedWords(_ lines: [Line]) -> [SyncedLyricWord]? {
         var out: [SyncedLyricWord] = []
         for k in lines.indices {
             guard var ws = lines[k].words else { return nil }
@@ -259,9 +280,14 @@ public enum LyricsSegmenter {
         return out
     }
 
-    private static func joinedText(_ values: [String?]) -> String? {
+    static func joinedText(_ values: [String?]) -> String? {
         let parts = values.compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// 几行并成一句时的文字,跟引擎拼的一致:逐字句按词接(句间补的空格已在词里),行级句用空格连。
+    static func mergedText(_ lines: [Line], words: [SyncedLyricWord]?) -> String {
+        words.map { $0.map(\.text).joined() } ?? lines.map(\.text).joined(separator: " ")
     }
 
     /// 第 range 这几行并成一句(或就是一句)时,这个面上的每一行是不是都放得下。
@@ -270,8 +296,7 @@ public enum LyricsSegmenter {
         guard ls.count == range.count, let first = ls.first else { return false }
         let side = first.side
         let words = joinedWords(ls)
-        // 合成句的文字跟引擎拼的一致:逐字句按词接(句间补的空格已在词里),行级句用空格连。
-        let text = words.map { $0.map(\.text).joined() } ?? ls.map(\.text).joined(separator: " ")
+        let text = mergedText(ls, words: words)
         var groups: [SyncedLyricWordGroup]?
         if budget.wordRomanization != nil {
             if range.count == 1 {
@@ -296,17 +321,19 @@ public enum LyricsSegmenter {
         return true
     }
 
-    /// 组 [f, j] 能不能再并进第 j+1 句。
+    /// 组 [f, j] 能不能再并进第 j+1 句。第 j+1 句的停留按下一句的起点算;它是最后一句时按它唱完的时刻算,
+    /// 行级歌词的最后一句没有句末标记就不知道停多久,不并。
     static func canMerge(_ line: LineProvider, from f: Int, through j: Int, budget: LineLayoutBudget) -> Bool {
-        guard let a = line(j), let b = line(j + 1), let c = line(j + 2), let head = line(f) else { return false }
-        let dwellA = b.startMs - a.startMs, dwellB = c.startMs - b.startMs
+        guard let a = line(j), let b = line(j + 1), let head = line(f),
+              let bEnd = line(j + 2)?.startMs ?? b.sungEndMs else { return false }
+        let dwellA = b.startMs - a.startMs, dwellB = bEnd - b.startMs
         guard dwellA < mergeShortDwellMs, dwellB < mergeNextMaxDwellMs else { return false }
         let tinyA = displayWidth(a.text) <= mergeTinyMaxWidth
         let tinyB = dwellB < mergeShortDwellMs && displayWidth(b.text) <= mergeTinyMaxWidth
         guard tinyA || tinyB else { return false }
         guard a.side == b.side, !a.gapAfter, a.mergeable, b.mergeable else { return false }
         guard (a.words == nil) == (b.words == nil) else { return false }
-        guard (b.sungEndMs ?? c.startMs) - head.startMs <= mergeMaxSpanMs else { return false }
+        guard (b.sungEndMs ?? bEnd) - head.startMs <= mergeMaxSpanMs else { return false }
         return fits(line, f...(j + 1), budget: budget)
     }
 

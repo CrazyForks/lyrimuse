@@ -74,7 +74,7 @@ func resegmentLibraryFailures(bodiesDir: String) -> Int {
         for c in configs {
             let engine = LyricsSyncEngine()
             engine.load(lyrics: lyrics, lyricsTr: body.lyricsTr ?? "", lyricsRoma: body.lyricsRoma ?? "",
-                        lyricsYRC: yrc, lyricsBG: body.lyricsBG ?? "", resegmentsByWidth: true)
+                        lyricsYRC: yrc, lyricsBG: body.lyricsBG ?? "", lineBreaks: .all)
             engine.setLayoutBudget(LineLayoutBudget(
                 key: c.name, main: row(c.mainWidth, c.main), sidedInset: c.sidedInset,
                 preview: c.preview.map { row($0.width, $0.font) },

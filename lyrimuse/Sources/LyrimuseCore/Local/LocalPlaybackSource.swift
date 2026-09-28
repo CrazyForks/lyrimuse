@@ -220,10 +220,16 @@ public final class LocalPlaybackSource: ObservableObject {
     @Published public var chineseVariant: ChineseVariant = .off {
         didSet { reloadCurrentLyrics() }
     }
-    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度重新断句:放不下的长句拆开、很短的几句并成一句(见
-    /// LyricsSyncEngine.surfaceTick)。改了立刻重新加载当前这首;歌词窗口不受影响。
-    @Published public var resegmentsLyricsByWidth = false {
+    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度断句的两件事(见 LyricsSyncEngine.surfaceTick、`LineBreakOptions`):
+    /// 放不下的长句拆开、很短的几句并成一句。改了立刻重新加载当前这首;歌词窗口不受影响。
+    @Published public var splitsLongLyricLines = false {
         didSet { reloadCurrentLyrics() }
+    }
+    @Published public var mergesShortLyricLines = false {
+        didSet { reloadCurrentLyrics() }
+    }
+    private var lineBreaks: LineBreakOptions {
+        LineBreakOptions(splitsLongLines: splitsLongLyricLines, mergesShortLines: mergesShortLyricLines)
     }
 
     /// 一个单行展示面报它的宽度预算(一行多宽 + 按它的字体量宽)。断句变了就立刻按当前位置重新发布。
@@ -3496,7 +3502,7 @@ public final class LocalPlaybackSource: ObservableObject {
         let trackKey: String
         let lyrics, lyricsTr, lyricsRoma, lyricsYRC, lyricsBG: String
         let instrumental, resolved: Bool
-        let resegmentsByWidth: Bool
+        let lineBreaks: LineBreakOptions
         let variant: ChineseVariant
         let romanizationScripts: RomanizationScripts
         let isCantonese: Bool
@@ -3546,7 +3552,7 @@ public final class LocalPlaybackSource: ObservableObject {
             lyricsBG: found?.lyricsBG ?? "",
             instrumental: found?.instrumental ?? false,
             resolved: found?.resolved ?? false,
-            resegmentsByWidth: resegmentsLyricsByWidth,
+            lineBreaks: lineBreaks,
             variant: chineseVariant,
             romanizationScripts: romanizationScripts,
             isCantonese: found?.isCantonese ?? false,
@@ -3580,7 +3586,7 @@ public final class LocalPlaybackSource: ObservableObject {
             romanizationScripts: romanizationScripts,
             songIsCantonese: found?.isCantonese ?? false,
             songIsHokkien: found?.isHokkien ?? false,
-            resegmentsByWidth: resegmentsLyricsByWidth
+            lineBreaks: lineBreaks
         )
         updateMenuBarWidestRow()
         // 以前按带 BOM 的正文算过指纹、存下的校正值,先挪到新 key 上(见 LyricsOffsetStore.adoptLegacyKey)。

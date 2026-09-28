@@ -193,7 +193,8 @@ final class AppSettings: ObservableObject {
         static let hasSeenChineseLyrics = "np:hasSeenChineseLyrics"
         static let hasShownMenuBarPositionHint = "np:hasShownMenuBarPositionHint"
         static let showRomanization = "np:showRomanization"
-        static let resegmentLyricsByWidth = "np:resegmentLyricsByWidth"
+        static let splitLongLyricLines = "np:splitLongLyricLines"
+        static let mergeShortLyricLines = "np:mergeShortLyricLines"
         static let romanizationScripts = "np:romanizationScripts"
         static let showTranslation = "np:showTranslation"
         static let launchAtLoginEnabled = "np:launchAtLoginEnabled"
@@ -594,10 +595,14 @@ final class AppSettings: ObservableObject {
     @Published var showRomanization: Bool {
         didSet { defaults.set(showRomanization, forKey: Keys.showRomanization) }
     }
-    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度重新断句(LocalPlaybackSource.resegmentsLyricsByWidth)。
+    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度拆开放不下的长句(LocalPlaybackSource.splitsLongLyricLines)。
     /// 歌词窗口不受影响。
-    @Published var resegmentLyricsByWidth: Bool {
-        didSet { defaults.set(resegmentLyricsByWidth, forKey: Keys.resegmentLyricsByWidth) }
+    @Published var splitLongLyricLines: Bool {
+        didSet { defaults.set(splitLongLyricLines, forKey: Keys.splitLongLyricLines) }
+    }
+    /// 同上三面,连续几句很短的并成一句(LocalPlaybackSource.mergesShortLyricLines)。
+    @Published var mergeShortLyricLines: Bool {
+        didSet { defaults.set(mergeShortLyricLines, forKey: Keys.mergeShortLyricLines) }
     }
 
     /// 要给哪几种文字标罗马音(日文/韩文/中文各自可开关)。存 OptionSet 的 rawValue。
@@ -1681,7 +1686,8 @@ final class AppSettings: ObservableObject {
         hasSeenChineseLyrics = defaults.bool(forKey: Keys.hasSeenChineseLyrics)
         hasShownMenuBarPositionHint = defaults.bool(forKey: Keys.hasShownMenuBarPositionHint)
         showRomanization = (defaults.object(forKey: Keys.showRomanization) as? Bool) ?? true
-        resegmentLyricsByWidth = (defaults.object(forKey: Keys.resegmentLyricsByWidth) as? Bool) ?? false
+        splitLongLyricLines = (defaults.object(forKey: Keys.splitLongLyricLines) as? Bool) ?? false
+        mergeShortLyricLines = (defaults.object(forKey: Keys.mergeShortLyricLines) as? Bool) ?? false
         // 没存过时按界面语言取默认值,以 `RomanizationScripts.defaultScripts(chineseUI:)` 为准,
         // 别在注释或文案里另抄一份具体开了哪几项。L10n.current 直接读 np:appLanguage 那个键,
         // 不依赖 self.appLanguage(它在下面才赋值)。

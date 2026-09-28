@@ -281,7 +281,7 @@ func runSyncEngineTests() {
             + "[75780,3000](75780,1000,0)You're stuck, (76780,1000,0)in the middle (77780,1000,0)of it all\n"
             + "[80000,2000](80000,2000,0)end\n"
         let engine = LyricsSyncEngine()
-        engine.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc, resegmentsByWidth: true)
+        engine.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc, lineBreaks: .all)
         engine.setLayoutBudget(budget(400), for: .overlay)
         engine.setLayoutBudget(budget(300), for: .menuBar)
 
@@ -312,10 +312,30 @@ func runSyncEngineTests() {
         expectEqual(off.surfaceTick(.menuBar, atMs: 76000).line?.plainText, "You're stuck, in the middle of it all",
                     "按宽度断句: 开关关着时不拆也不合并")
 
+        // 两个开关各管一件事:只拆时短句照旧一句一句换,只并时放不下的长句原样一段。
+        let splitOnly = LyricsSyncEngine()
+        splitOnly.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc,
+                       lineBreaks: .init(splitsLongLines: true))
+        splitOnly.setLayoutBudget(budget(300), for: .menuBar)
+        splitOnly.setLayoutBudget(budget(400), for: .overlay)
+        expectEqual(splitOnly.surfaceTick(.menuBar, atMs: 76000).line?.plainText, "You're stuck,",
+                    "按宽度断句: 只开拆长句时照样拆")
+        expectEqual(splitOnly.surfaceTick(.overlay, atMs: 72000).line?.plainText, "It's too high to get over",
+                    "按宽度断句: 只开拆长句时不合并短句")
+        let mergeOnly = LyricsSyncEngine()
+        mergeOnly.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc,
+                       lineBreaks: .init(mergesShortLines: true))
+        mergeOnly.setLayoutBudget(budget(300), for: .menuBar)
+        mergeOnly.setLayoutBudget(budget(400), for: .overlay)
+        expectEqual(mergeOnly.surfaceTick(.overlay, atMs: 72000).line?.plainText, "It's too high to get over Yeah yeah",
+                    "按宽度断句: 只开并短句时照样合并")
+        expectEqual(mergeOnly.surfaceTick(.menuBar, atMs: 76000).line?.plainText, "You're stuck, in the middle of it all",
+                    "按宽度断句: 只开并短句时放不下的长句原样一段")
+
         // 只有逐行时间的歌:放不下也拆,每段几点开唱按它前面文字的宽度估。
         let lrcEngine = LyricsSyncEngine()
         lrcEngine.load(lyrics: "[00:10.00]It's a very long line that does not fit\n[00:14.00]ok\n[00:20.00]end\n",
-                       lyricsTr: "", lyricsRoma: "", lyricsYRC: "", resegmentsByWidth: true)
+                       lyricsTr: "", lyricsRoma: "", lyricsYRC: "", lineBreaks: .all)
         lrcEngine.setLayoutBudget(budget(150), for: .overlay)
         let lrcFirst = lrcEngine.surfaceTick(.overlay, atMs: 10100)
         expectEqual(lrcFirst.line?.plainText, "It's a very", "按宽度断句: 逐行歌词的长句也拆")
@@ -331,7 +351,7 @@ func runSyncEngineTests() {
         trEngine.load(lyrics: "", lyricsTr: "[00:01.00]这一句的译文特别特别长长长长\n",
                       lyricsRoma: "",
                       lyricsYRC: "[1000,2000](1000,1000,0)short (2000,1000,0)line\n[5000,1000](5000,1000,0)x\n",
-                      resegmentsByWidth: true)
+                      lineBreaks: .all)
         trEngine.setLayoutBudget(LineLayoutBudget(
             key: "tr", main: .init(maxWidth: 100, measure: measure),
             translation: .init(maxWidth: 100, measure: measure)), for: .overlay)
@@ -345,7 +365,7 @@ func runSyncEngineTests() {
         let wideEngine = LyricsSyncEngine()
         wideEngine.load(lyrics: "", lyricsTr: "", lyricsRoma: "",
                         lyricsYRC: "[1000,2000](1000,2000,0)Supercalifragilistic\n[4000,500](4000,500,0)x\n",
-                        resegmentsByWidth: true)
+                        lineBreaks: .all)
         wideEngine.setLayoutBudget(budget(100), for: .menuBar)
         let wideFirst = wideEngine.surfaceTick(.menuBar, atMs: 1000).line?.plainText ?? ""
         expectEqual(wideFirst.count <= 10 && !wideFirst.isEmpty, true, "按宽度断句: 比整行还宽的词按字切开")
@@ -370,7 +390,7 @@ func runSyncEngineTests() {
         // 主行一个字切不开、译文放不下:主行整句一段,译文截断到放得下。
         let oneChar = LyricsSyncEngine()
         oneChar.load(lyrics: "[00:01.00]5\n[00:05.00]end\n", lyricsTr: "[00:01.00]这是一句特别特别长的译文\n",
-                     lyricsRoma: "", lyricsYRC: "", resegmentsByWidth: true)
+                     lyricsRoma: "", lyricsYRC: "", lineBreaks: .all)
         oneChar.setLayoutBudget(LineLayoutBudget(
             key: "one", main: .init(maxWidth: 60, measure: measure),
             translation: .init(maxWidth: 60, measure: measure)), for: .overlay)
@@ -379,6 +399,24 @@ func runSyncEngineTests() {
         expectEqual(oneLine?.translation, "这是一句特…", "按宽度断句: 放不下的译文截断")
         expectEqual(oneChar.widestRow(.overlay), 60, "按宽度断句: 整首最宽一行按主行与各行量")
         expectEqual(LyricsSyncEngine().widestRow(.menuBar), nil, "按宽度断句: 没报宽度时不给整首最宽")
+
+        // 最后两句也能并:最后一句的停留按它唱完的时刻算。
+        func tail(_ start: Int, _ text: String, _ end: Int) -> LyricsSegmenter.Line {
+            LyricsSegmenter.Line(startMs: start, text: text,
+                                 words: [SyncedLyricWord(text: text, startMs: start, durationMs: end - start)],
+                                 side: nil, sungEndMs: end, mergeable: true, gapAfter: false)
+        }
+        let ending = LyricsSegmenter.segments(
+            [tail(0, "first long line text", 4000), tail(5000, "Oh", 5800), tail(6000, "last line", 7500)],
+            budget: LineLayoutBudget(key: "tail", maxWidth: 400, measure: measure))
+        expectEqual(ending.map { [$0.firstLine, $0.lastLine] }, [[0, 0], [1, 2]], "按宽度断句: 最后两句也能合并")
+        let lrcEnding = LyricsSegmenter.segments(
+            [LyricsSegmenter.Line(startMs: 5000, text: "Oh", words: nil, side: nil, sungEndMs: nil,
+                                  mergeable: true, gapAfter: false),
+             LyricsSegmenter.Line(startMs: 6000, text: "last line", words: nil, side: nil, sungEndMs: nil,
+                                  mergeable: true, gapAfter: false)],
+            budget: LineLayoutBudget(key: "tail-lrc", maxWidth: 400, measure: measure))
+        expectEqual(lrcEnding.count, 2, "按宽度断句: 行级歌词最后一句不知道停多久,不并")
 
         // 保证:随机宽度下,每一段的主行、译文、下一句都放得下。
         let fuzzYRC = (0..<30).map { k -> String in
@@ -394,7 +432,7 @@ func runSyncEngineTests() {
         var fuzzFailures = 0
         for width in stride(from: CGFloat(40), through: 200, by: 7) {
             let e = LyricsSyncEngine()
-            e.load(lyrics: "", lyricsTr: fuzzTr, lyricsRoma: "", lyricsYRC: fuzzYRC, resegmentsByWidth: true)
+            e.load(lyrics: "", lyricsTr: fuzzTr, lyricsRoma: "", lyricsYRC: fuzzYRC, lineBreaks: .all)
             e.setLayoutBudget(LineLayoutBudget(
                 key: width, main: .init(maxWidth: width, measure: measure),
                 preview: .init(maxWidth: width, measure: measure),

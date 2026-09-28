@@ -1881,15 +1881,26 @@ private struct LyricsSettingsTab: View {
                 .help(L10n.t("日语、韩语标成罗马字，普通话标成拼音，粤语标成粤拼"))
             }
             CardDivider()
-            // 跟繁简 / 罗马音同样双写:AppSettings 持久化,LocalPlaybackSource 让当前这首立刻重新加载。
+            // 下面两项跟繁简 / 罗马音同样双写:AppSettings 持久化,LocalPlaybackSource 让当前这首立刻重新加载。
             SettingsRow(
-                icon: "rectangle.compress.vertical",
-                title: L10n.t("按宽度重新断句"),
-                help: L10n.t("悬浮歌词、灵动岛和菜单栏各按自己的宽度断句：放不下的长句拆开，连续几句很短的合成一句，每一行都不换行、不滚动；歌词窗口仍然一句一行")
+                icon: "rectangle.split.2x1",
+                title: L10n.t("长句拆开"),
+                help: L10n.t("悬浮歌词、灵动岛和菜单栏上放不下一行的句子，按各自的宽度拆成几段先后显示，每一行都不换行、不滚动；歌词窗口仍然一句一行")
             ) {
                 Toggle("", isOn: Binding(
-                    get: { settings.resegmentLyricsByWidth },
-                    set: { settings.resegmentLyricsByWidth = $0; local.resegmentsLyricsByWidth = $0 }
+                    get: { settings.splitLongLyricLines },
+                    set: { settings.splitLongLyricLines = $0; local.splitsLongLyricLines = $0 }
+                ))
+            }
+            CardDivider()
+            SettingsRow(
+                icon: "rectangle.compress.vertical",
+                title: L10n.t("短句合并"),
+                help: L10n.t("悬浮歌词、灵动岛和菜单栏上连续几句很短的歌词合成一句显示，合完放得下一行才合；歌词窗口仍然一句一行")
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.mergeShortLyricLines },
+                    set: { settings.mergeShortLyricLines = $0; local.mergesShortLyricLines = $0 }
                 ))
             }
             CardDivider()

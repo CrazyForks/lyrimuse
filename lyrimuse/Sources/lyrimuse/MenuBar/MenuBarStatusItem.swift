@@ -1289,8 +1289,8 @@ final class MenuBarStatusItem: NSObject {
             let naturalW = MenuBarSlotPolicy.naturalWidth(
                 mainWidth: mainW, secondaryWidth: secondaryW, twoRows: rowState.twoRows,
                 secondaryKind: secondaryKind, maxWidth: settings.menuBarLyricsWidth)
-            // 按宽度重新断句开着时,槽宽按整首最宽的一行(含副行)定、一首之内不变:槽宽每变一次都要等静默窗才
-            // 重建,等的时候新的一句画在旧槽里就会滚(见 present 头注)。断句已保证每一行不超过「最大宽度」。
+            // 按宽度断句(拆长句或并短句)开着时,槽宽按整首最宽的一行(含副行)定、不超过「最大宽度」,一首之内不变:
+            // 槽宽每变一次都要等静默窗才重建,等的时候新的一句画在旧槽里就会滚(见 present 头注)。
             let songW = coordinator.menuBarWidestRow.map { max(naturalW, min(settings.menuBarLyricsWidth, $0)) } ?? naturalW
             // 占位态给槽宽兜个底:让它现在就有即将到来那一句要的宽度,那一句出现时几何
             // 已经到位、不必再改一次。判据是 Core 的纯函数(有 selftest),这里只喂数 ——

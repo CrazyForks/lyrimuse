@@ -44,7 +44,7 @@ func resegmentBenchmark(bodiesDir: String, stride step: Int) {
             let engine = LyricsSyncEngine()
             let t0 = CFAbsoluteTimeGetCurrent()
             engine.load(lyrics: lyrics, lyricsTr: body.lyricsTr ?? "", lyricsRoma: body.lyricsRoma ?? "",
-                        lyricsYRC: yrc, lyricsBG: body.lyricsBG ?? "", resegmentsByWidth: enabled)
+                        lyricsYRC: yrc, lyricsBG: body.lyricsBG ?? "", lineBreaks: enabled ? .all : .off)
             for (surface, budget) in budgets { engine.setLayoutBudget(budget, for: surface) }
             // 菜单栏整首最宽:开着时 App 加载完就算一次。
             if enabled { _ = engine.widestRow(.menuBar) }
