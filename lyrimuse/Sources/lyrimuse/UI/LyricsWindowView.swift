@@ -5193,6 +5193,10 @@ private struct KaraokeLineText: View {
             }
         }
         .font(.system(size: fontSize, weight: .bold))
+        // 每个词自己的 Text 必须左对齐,整行靠哪边只由 rowAlignment 决定。继承外层的居中 / 靠右时,
+        // 排字不把词尾空格算进对齐,带空格的词都往右挪半格 / 一整格,只有行末那个词不挪,
+        // 于是最后一个词前面的空格被吃掉一截。
+        .multilineTextAlignment(.leading)
     }
 }
 
@@ -6783,6 +6787,8 @@ private struct EditorialLinkText: View {
             }
             .accessibilityAddTraits(available ? .isButton : [])
             .accessibilityHint(available ? hint : "")
+            // onTapGesture 不接辅助功能的「按下」:报了按钮特征就得同时给这个动作,否则 VoiceOver 按下去没反应。
+            .accessibilityAction { if available { action() } }
     }
 
     private func syncCursor() {

@@ -1578,6 +1578,16 @@ func runSourceContractTests() {
                         "迷你歌词: 换句不做动画,新的一句直接替上来")
             expectEqual(lwv.contains("字一抬一抬只显得在晃。\n                rises: false,"), true,
                         "迷你歌词: 逐字填色不上浮(完整布局照旧上浮)")
+            // 逐词排版里每个词的 Text 左对齐:继承外层居中 / 靠右时词尾空格不参与对齐,行末那个词前的空格会被吃掉。
+            expectEqual(lwv.contains(".font(.system(size: fontSize, weight: .bold))\n        // 每个词自己的 Text 必须左对齐"), true,
+                        "逐词歌词: KaraokeLineText 在 WrapLayout 外钉 .multilineTextAlignment(.leading)")
+            expectEqual(lwv.contains("        .multilineTextAlignment(.leading)\n    }\n}\n\n/// 一个逐字填色的字"), true,
+                        "逐词歌词: 左对齐钉在 KaraokeLineText.lineContent 的末尾(对唱靠右 / 居中行也受保护)")
+            // 简介入口只接鼠标点按:报了按钮特征就得给辅助功能的「按下」,否则 VoiceOver 按不开。
+            expectEqual(lwv.contains(".accessibilityHint(available ? hint : \"\")\n            // onTapGesture 不接辅助功能的「按下」"), true,
+                        "简介入口: EditorialLinkText 给辅助功能的按下动作")
+            expectEqual(lwv.contains(".accessibilityAction { if available { action() } }"), true,
+                        "简介入口: 按下动作只在有简介时执行")
             // 迷你长句处理:滚动档的当前行走悬浮歌词那条图层版跟唱滚动,不走 MarqueeText 包 SwiftUI 填色。
             expectEqual(lwv.contains("OverlayScrollingLyricRow("), true,
                         "迷你长句处理: 滚动档带逐字的当前行走 OverlayScrollingLyricRow(图层版跟唱滚动)")
