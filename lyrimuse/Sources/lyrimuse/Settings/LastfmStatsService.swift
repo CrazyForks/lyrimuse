@@ -1946,6 +1946,7 @@ final class LastfmStatsService: ObservableObject {
         if !discoveryLoaded { loadTitleAliasDiscovery() }
         // 本机 enrich 缓存推出来的第三层别名也搭这班车:必须在下面 rebuildPrimaryCreditFamilies
         // 之前灌进 PlayCountFold,否则首次建出来的族没有它,要等缓存下一次变化才补上。
+        lastLocalAliasRefreshAt = Date()
         refreshLocalAliases(rebuildFamilies: false)
         guard let cred = credentials,
               let data = try? Data(contentsOf: Self.titleFormsURL),
@@ -2946,8 +2947,38 @@ final class LastfmStatsService: ObservableObject {
         // 同一份缓存还派生第三层歌名别名:collector 刚给某首英文名的歌解析出跟
         // 中文名同一个网易云 id,这一拍就该并族、次数标过期,不等下次启动。写法索引没加载时
         // 不动 —— loadTitleForms 自己会在建族前灌一次。
-        if titleFormsLoaded { refreshLocalAliases(rebuildFamilies: true) }
+        if titleFormsLoaded { scheduleLocalAliasRefreshAfterCacheChange() }
     }
+
+    /// 缓存变化触发的别名重算,节流到 `localAliasRefreshInterval` 一次。
+    ///
+    /// 两张表每次都要把本机缓存九千多条的歌词正文整份过一遍(`EnrichTitleAliases.derive`),一次就是几秒 CPU;
+    /// 而缓存的已解码版本在补搜 / 全量扫库期间每处理一首就推进一次(约 13 秒),原来每推进一次整份重算,
+    /// 一个核心断断续续地满载一整天。别名只影响「第 N 次听」按族合并,晚几分钟跟上没有代价:期间再有变化只排
+    /// 一次到点的补算,不丢最后那一版。
+    private func scheduleLocalAliasRefreshAfterCacheChange() {
+        let now = Date()
+        guard let last = lastLocalAliasRefreshAt,
+              now.timeIntervalSince(last) < Self.localAliasRefreshInterval else {
+            lastLocalAliasRefreshAt = now
+            refreshLocalAliases(rebuildFamilies: true)
+            return
+        }
+        guard pendingLocalAliasRefresh == nil else { return }
+        let wait = Self.localAliasRefreshInterval - now.timeIntervalSince(last)
+        pendingLocalAliasRefresh = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, !Task.isCancelled else { return }
+            self.pendingLocalAliasRefresh = nil
+            guard self.titleFormsLoaded else { return }
+            self.lastLocalAliasRefreshAt = Date()
+            self.refreshLocalAliases(rebuildFamilies: true)
+        }
+    }
+
+    private static let localAliasRefreshInterval: TimeInterval = 300
+    private var lastLocalAliasRefreshAt: Date?
+    private var pendingLocalAliasRefresh: Task<Void, Never>?
 
     /// 「歌手来自哪里」卡的数据(collector artistregions.go 写,`ArtistRegions`),键是 Last.fm 时段名。只读。
     @Published private(set) var artistRegions: [String: ArtistRegions.Period] = [:]

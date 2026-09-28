@@ -1764,4 +1764,17 @@ func runLastfmTests() {
         expectEqual(H.looksTruncated(dailyTotal: 3_124, reportedTotal: 24_327, rescanAttempted: true), false,
                     "热力图截断: 这次启动已经重扫过一轮就不再判(免得每 15 分钟重扫一遍)")
     }
+
+    // ---- 本机别名表的重算节流(契约) ----
+    // 每次缓存版本推进都整份重算的话,补搜 / 全量扫库期间一个核心断断续续满载(每首约 13 秒推进一次,
+    // 一次重算几秒 CPU)。缓存变化那条路必须经节流入口,不能直接调 refreshLocalAliases。
+    do {
+        let src = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("lyrimuse/Settings/LastfmStatsService.swift"),
+            encoding: .utf8)) ?? ""
+        expectEqual(src.contains("if titleFormsLoaded { scheduleLocalAliasRefreshAfterCacheChange() }"), true,
+                    "别名节流: 缓存变化走节流入口")
+        expectEqual(src.contains("if titleFormsLoaded { refreshLocalAliases(rebuildFamilies: true) }"), false,
+                    "别名节流: 没有绕过节流直接重算的缓存变化路径")
+    }
 }
