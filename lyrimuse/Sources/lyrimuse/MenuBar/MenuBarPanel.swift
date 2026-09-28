@@ -1210,6 +1210,8 @@ private struct PanelProgressSection: View {
                             PlaybackCoordinator.shared.seek(toMs: Int(f * Double(durationMs)))
                         }
                 )
+                // 播放器不吃外部跳转指令(Amazon Music)时只显示、不能拖,见 `PlaybackCoordinator.acceptsSeek`。
+                .allowsHitTesting(PlaybackCoordinator.shared.acceptsSeek)
             }
             .frame(height: 14)
             HStack {

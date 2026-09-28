@@ -30,6 +30,7 @@ func localCacheClientPaths() map[string][]string {
 		"applemusic": {applemusicLocalCacheDir()},
 		"spotify":    {spotifyISRCUsersDir()},
 		"kkbox":      {kkboxLocalStorageDir(), kkboxCacheDir()},
+		"amazon":     {amazonMusicLogPath(), amazonLocalStorageDir(), amazonHammerCacheDir()},
 	}
 }
 

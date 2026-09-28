@@ -66,6 +66,7 @@
 "%d 个源的歌词正文相同" = "%d sources returned identical lyrics";
 "%d 次" = "×%d";
 "/ %@ 页" = "of %@";
+"Amazon Music 歌曲页" = "Amazon Music song page";
 "Apple Music" = "Apple Music";
 "Apple Music 登录已失效（过期或被吊销），需要重新连接" = "Your Apple Music sign-in is no longer valid (expired or revoked). Reconnect to continue.";
 "Apple Music 的登录已过期或被吊销（登录有效期 6 个月，Apple 不提供自动续期）——在「歌词来源」卡片底部重新连接一次" = "The Apple Music sign-in has expired or been revoked (it lasts 6 months and Apple issues no renewable token) — reconnect at the bottom of the Lyrics Sources card";

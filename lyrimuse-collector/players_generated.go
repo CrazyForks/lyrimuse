@@ -8,14 +8,15 @@ package main
 // 播放器标识 —— 跟 Swift 侧 PlaybackPlayer 的 rawValue 逐字对应,
 // 共享文件 lyrimuse-features.json 里 "players" 字段的取值。
 const (
-	playerAppleMusic = "apple_music"
-	playerQQMusic    = "qq_music"
-	playerNetease    = "netease_music"
-	playerKugou      = "kugou_music"
-	playerSoda       = "soda_music"
-	playerKKBOX      = "kkbox"
-	playerSpotify    = "spotify"
-	playerAuto       = "auto"
+	playerAppleMusic  = "apple_music"
+	playerQQMusic     = "qq_music"
+	playerNetease     = "netease_music"
+	playerKugou       = "kugou_music"
+	playerSoda        = "soda_music"
+	playerKKBOX       = "kkbox"
+	playerSpotify     = "spotify"
+	playerAmazonMusic = "amazon_music"
+	playerAuto        = "auto"
 )
 
 // 各播放器的 App bundle id。
@@ -27,6 +28,7 @@ const (
 	sodaMusicBundleID    = "com.soda.music"
 	kkboxBundleID        = "com.kkbox.electron-app"
 	spotifyBundleID      = "com.spotify.client"
+	amazonMusicBundleID  = "com.amazon.music"
 )
 
 // allPlayerIDs 是 "players" 字段的全部合法取值(含 auto),isValidPlayerValue 用。
@@ -38,19 +40,21 @@ var allPlayerIDs = []string{
 	playerSoda,
 	playerKKBOX,
 	playerSpotify,
+	playerAmazonMusic,
 	playerAuto,
 }
 
 // playerBundleIDs 是「播放器标识 → bundle id」。auto 不在表里 —— 它没有固定目标,
 // 调用方(playerBundleID)自己决定查不到时退回哪个。
 var playerBundleIDs = map[string]string{
-	playerAppleMusic: appleMusicBundleID,
-	playerQQMusic:    qqMusicBundleID,
-	playerNetease:    neteaseMusicBundleID,
-	playerKugou:      kugouMusicBundleID,
-	playerSoda:       sodaMusicBundleID,
-	playerKKBOX:      kkboxBundleID,
-	playerSpotify:    spotifyBundleID,
+	playerAppleMusic:  appleMusicBundleID,
+	playerQQMusic:     qqMusicBundleID,
+	playerNetease:     neteaseMusicBundleID,
+	playerKugou:       kugouMusicBundleID,
+	playerSoda:        sodaMusicBundleID,
+	playerKKBOX:       kkboxBundleID,
+	playerSpotify:     spotifyBundleID,
+	playerAmazonMusic: amazonMusicBundleID,
 }
 
 // builtinPlayerBundleIDs 是内置播放器的 bundle id 集合 —— isKnownPlayerBundleID
@@ -63,22 +67,24 @@ var builtinPlayerBundleIDs = map[string]bool{
 	sodaMusicBundleID:    true,
 	kkboxBundleID:        true,
 	spotifyBundleID:      true,
+	amazonMusicBundleID:  true,
 }
 
 // playerProcessNames 是「播放器标识 → 可执行文件名」,companion-launch 的 pgrep -x 用。
 // pgrep 比的是内核 p_comm(16 字节上限,UTF-8 下中文名要数字节),加新播放器时要核。
 var playerProcessNames = map[string]string{
-	playerAppleMusic: "Music",
-	playerQQMusic:    "QQMusic",
-	playerNetease:    "NeteaseMusic",
-	playerKugou:      "酷狗音乐",
-	playerSoda:       "汽水音乐",
-	playerKKBOX:      "KKBOX",
-	playerSpotify:    "Spotify",
+	playerAppleMusic:  "Music",
+	playerQQMusic:     "QQMusic",
+	playerNetease:     "NeteaseMusic",
+	playerKugou:       "酷狗音乐",
+	playerSoda:        "汽水音乐",
+	playerKKBOX:       "KKBOX",
+	playerSpotify:     "Spotify",
+	playerAmazonMusic: "Amazon Music",
 }
 
 // knownPlayerProcessNames 是上表的全部取值 —— 选了「自动识别」时盯全部。
-var knownPlayerProcessNames = []string{"Music", "QQMusic", "NeteaseMusic", "酷狗音乐", "汽水音乐", "KKBOX", "Spotify"}
+var knownPlayerProcessNames = []string{"Music", "QQMusic", "NeteaseMusic", "酷狗音乐", "汽水音乐", "KKBOX", "Spotify", "Amazon Music"}
 
 // playerScrobbleLabels 是「bundle id → ListenBrainz 的 media_player 标签」。
 var playerScrobbleLabels = map[string]string{
@@ -89,6 +95,7 @@ var playerScrobbleLabels = map[string]string{
 	sodaMusicBundleID:    "Soda Music (macOS)",
 	kkboxBundleID:        "KKBOX (macOS)",
 	spotifyBundleID:      "Spotify (macOS)",
+	amazonMusicBundleID:  "Amazon Music (macOS)",
 }
 
 // defaultScrobbleLabel:既不是内置播放器、也不在信任列表里时的兜底标签。
@@ -97,12 +104,13 @@ const defaultScrobbleLabel = "Apple Music (macOS)"
 // playerNativeLyricSources 是「播放器标识 → 它自家的歌词源」——用它听歌时
 // 优先选它自己的歌词(时间轴跟它的音频母版对得上)。没有自家源的播放器不在表里。
 var playerNativeLyricSources = map[string]string{
-	playerAppleMusic: "applemusic",
-	playerQQMusic:    "qq",
-	playerNetease:    "netease",
-	playerKugou:      "kugou",
-	playerSoda:       "soda",
-	playerKKBOX:      "kkbox",
+	playerAppleMusic:  "applemusic",
+	playerQQMusic:     "qq",
+	playerNetease:     "netease",
+	playerKugou:       "kugou",
+	playerSoda:        "soda",
+	playerKKBOX:       "kkbox",
+	playerAmazonMusic: "amazon",
 }
 
 // playerNeedsFullDiskAccess 是「播放器标识 → collector 读它的客户端文件要不要
@@ -136,6 +144,13 @@ var playerPlayingFromRate = map[string]bool{
 // Swift 侧 artistArrivesLate 同源。
 var playerArtistArrivesLate = map[string]bool{
 	kkboxBundleID: true,
+}
+
+// playerArtistlessNotMusic 是「bundle id → 歌手空、时长 > 0、在放的是非歌曲内容(播客单集)」。
+// 只列**实测见过**的播放器。判定在 builtinArtistlessContent,Swift 侧 artistlessNotMusic 同源。
+var playerArtistlessNotMusic = map[string]bool{
+	kkboxBundleID:       true,
+	amazonMusicBundleID: true,
 }
 
 // playerDropsSessionBetweenTracks 是「bundle id → 切歌时先撤掉 Now Playing、隔几秒才发下一首」。

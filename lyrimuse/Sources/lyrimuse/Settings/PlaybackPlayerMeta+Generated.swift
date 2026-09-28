@@ -19,6 +19,7 @@ extension PlaybackPlayer {
         case .soda: return L10n.t("汽水音乐")
         case .kkbox: return "KKBOX"
         case .spotify: return "Spotify"
+        case .amazonMusic: return "Amazon Music"
         case .auto: return L10n.t("自动识别")
         }
     }
@@ -34,6 +35,7 @@ extension PlaybackPlayer {
         case .soda: return Color(red: 0.3, green: 0.85, blue: 0.35)
         case .kkbox: return Color(red: 0.0, green: 0.85, blue: 0.97)
         case .spotify: return Color(red: 0.11, green: 0.73, blue: 0.33)
+        case .amazonMusic: return Color(red: 0.12, green: 0.85, blue: 0.88)
         case .auto: return .secondary
         }
     }
@@ -47,6 +49,7 @@ extension PlaybackPlayer {
         case .soda: return "music.note"
         case .kkbox: return "music.note"
         case .spotify: return "music.note"
+        case .amazonMusic: return "music.note"
         case .auto: return "wand.and.stars"
         }
     }
@@ -62,11 +65,12 @@ extension PlaybackPlayer {
         case .soda: return "SodaMusicIcon"
         case .kkbox: return "KKBOXIcon"
         case .spotify: return "SpotifyIcon"
+        case .amazonMusic: return "AmazonMusicIcon"
         case .auto: return nil
         }
     }
 
-    public static let displayOrderForSimplifiedChinese: [PlaybackPlayer] = [.appleMusic, .qqMusic, .netease, .kugou, .soda, .kkbox, .spotify, .auto]
+    public static let displayOrderForSimplifiedChinese: [PlaybackPlayer] = [.appleMusic, .qqMusic, .netease, .kugou, .soda, .kkbox, .spotify, .amazonMusic, .auto]
 
-    public static let displayOrderDefault: [PlaybackPlayer] = [.appleMusic, .spotify, .kkbox, .qqMusic, .netease, .kugou, .soda, .auto]
+    public static let displayOrderDefault: [PlaybackPlayer] = [.appleMusic, .spotify, .amazonMusic, .kkbox, .qqMusic, .netease, .kugou, .soda, .auto]
 }

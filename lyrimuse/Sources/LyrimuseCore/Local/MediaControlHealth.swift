@@ -18,7 +18,7 @@ import OSLog
 //
 // 结论除了给 UI / 诊断导出显示,还交给 `MediaControlClient.setChannelTestFailed`:通道坏了时播放读取改为
 // 直问还开着的 Apple Music / Spotify(见 `MediaControlClient.snapshotWhileChannelBroken`)。降级本身在那边做,
-// 这里只下结论。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐 / KKBOX 没有替代路径可退,查出来也只能如实告诉用户。
+// 这里只下结论。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐 / KKBOX / Amazon Music 没有替代路径可退,查出来也只能如实告诉用户。
 @MainActor
 public final class MediaControlHealth: ObservableObject {
     public static let shared = MediaControlHealth()

@@ -31,13 +31,14 @@ func TestPlayersNeedFullDiskAccessMatchesClientPaths(t *testing.T) {
 
 	// 播放器 → localCacheClientPaths 里的来源名。
 	sourceOf := map[string]string{
-		playerAppleMusic: "applemusic",
-		playerQQMusic:    "qq",
-		playerNetease:    "netease",
-		playerKugou:      "kugou",
-		playerSoda:       "soda",
-		playerSpotify:    "spotify",
-		playerKKBOX:      "kkbox",
+		playerAppleMusic:  "applemusic",
+		playerQQMusic:     "qq",
+		playerNetease:     "netease",
+		playerKugou:       "kugou",
+		playerSoda:        "soda",
+		playerSpotify:     "spotify",
+		playerKKBOX:       "kkbox",
+		playerAmazonMusic: "amazon",
 	}
 	paths := localCacheClientPaths()
 	for _, player := range allPlayerIDs {

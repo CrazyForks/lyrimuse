@@ -3162,6 +3162,29 @@
         }
       }
     },
+    "Amazon Music 歌曲页" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amazon Music song page"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amazon Music 歌曲页"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amazon Music 歌曲頁"
+          }
+        }
+      }
+    },
     "QQ 音乐歌曲页" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -59,6 +59,9 @@ public struct EnrichCacheEntry: Decodable, Sendable {
     let spotifyTrackID: String?
     // KKBOX 歌曲页(collector 的 enrichEntry.KKBOXURL,用 KKBOX 放这首时从它缓存的单曲详情取的)。只喂 PlatformLinks.kkboxSong。
     let kkboxURL: String?
+    // Amazon Music 曲目页(collector 的 enrichEntry.AmazonURL,用 Amazon Music 放这首时从它日志里的 ASIN 拼的)。
+    // 只喂 PlatformLinks.amazonSong。
+    let amazonURL: String?
     // 这首歌的语种真值(collector/enrich.go 的 enrichEntry.SongLanguage,取值
     // "yue"=粤语/"cmn"=普通话/空=没判出来),给粤拼罗马音开关用——光看歌词文字认不出
     // 粤语和普通话(汉字一样),得靠 collector 那边已经判出来的这个字段。
@@ -111,6 +114,7 @@ public struct EnrichCacheEntry: Decodable, Sendable {
         case qqSingerMid = "qq_singer_mid"
         case spotifyTrackID = "spotify_track_id"
         case kkboxURL = "kkbox_url"
+        case amazonURL = "amazon_url"
         case songLanguage = "song_language"
         case plainLyrics = "plain_lyrics"
         case durationSecs = "duration_secs"
@@ -321,7 +325,8 @@ public enum EnrichCacheReader {
             neteaseSong: (entry.neteaseURL?.isEmpty == false) ? URL(string: entry.neteaseURL!) : nil,
             // 只认真曲目 ID;spotify_url 那个搜索页兜底不进来(理由见 PlatformLinks.spotifySong)。
             spotifySong: PlatformLinks.spotifyTrackURL(id: entry.spotifyTrackID ?? ""),
-            kkboxSong: PlatformLinks.kkboxAppURL(songPage: entry.kkboxURL ?? ""))
+            kkboxSong: PlatformLinks.kkboxAppURL(songPage: entry.kkboxURL ?? ""),
+            amazonSong: PlatformLinks.amazonTrackURL(entry.amazonURL ?? ""))
         return links.isEmpty ? nil : links
     }
 

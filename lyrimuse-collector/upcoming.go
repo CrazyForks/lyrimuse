@@ -78,6 +78,8 @@ func upcomingFromQueue(artist, title, album, bundleID string, durationSecs float
 		return spotifyUpcoming(artist, title, n)
 	case kkboxBundleID:
 		return kkboxUpcoming(artist, title, n)
+	case amazonMusicBundleID:
+		return amazonUpcoming(artist, title, n)
 	}
 	return browserUpcoming(artist, title, bundleID, durationSecs, n)
 }

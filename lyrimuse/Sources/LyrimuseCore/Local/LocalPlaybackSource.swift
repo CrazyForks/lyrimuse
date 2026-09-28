@@ -334,6 +334,14 @@ public final class LocalPlaybackSource: ObservableObject {
         return id.isEmpty ? nil : id
     }
 
+    /// 这一刻在播的播放器吃不吃外部的跳转指令(`PlaybackPlayer.ignoresSeekCommand`)。不吃的,各处进度条只显示不能拖、
+    /// 点歌词不跳,`seek(toMs:)` 什么都不做 —— 发出去它没反应,我们这边先挪过去、下一拍又被它的真实位置拉回来。纯函数。
+    public nonisolated static func acceptsSeek(bundleID: String?) -> Bool {
+        PlaybackPlayer.builtin(forBundleID: bundleID)?.ignoresSeekCommand != true
+    }
+
+    public var acceptsSeek: Bool { Self.acceptsSeek(bundleID: lastSnapshot?.bundleIdentifier) }
+
     // ---- 播放位置平滑(加,修 QQ 音乐"歌词时间不准") --------------------
     //
     // QQ 音乐没有 AppleScript,elapsedTime 来自 media-control --now 的 elapsedTimeNow
@@ -1083,6 +1091,14 @@ public final class LocalPlaybackSource: ObservableObject {
         bundleID == PlaybackPlayer.kkbox.bundleIdentifier
     }
 
+    /// 稳定播放时偏差过了 `republishedAnchorSnapSecs` 就直接对齐读数、不走 EMA 慢慢收的播放器:跟随重发锚点的(KKBOX),
+    /// 加上位置是按它自己的日志算出来的 Amazon Music(读数就是干净的时钟,界面校准改提前量时一步到位,别被 EMA 拆成
+    /// 每拍半秒的几次小跳)。只管伺服这一处;暂停锚点判旧等 KKBOX 专属的规则仍只看 `followsRepublishedAnchors`。
+    /// 与 collector 的 snapsToReading 同一份名单,两边一起改。纯函数,selftest 直接覆盖。
+    public nonisolated static func snapsToReportedPosition(bundleID: String?) -> Bool {
+        followsRepublishedAnchors(bundleID: bundleID) || bundleID == PlaybackPlayer.amazonMusic.bundleIdentifier
+    }
+
     /// 跟随重发锚点的播放器,偏差 EMA 过了这个值就对齐读数(collector 同名常量 followsAnchorSnapSecs)。
     public nonisolated static let republishedAnchorSnapSecs: Double = 0.1
 
@@ -1827,7 +1843,7 @@ public final class LocalPlaybackSource: ObservableObject {
         // 不然校正只改了内部累加器、UI 用的锚点还在按旧基准外推,校正根本到不了屏幕。
         let (newEMA, snap) = Self.servoDecision(errEMA: posErrEMA, error: reported - predicted, tier: tier)
         posErrEMA = newEMA
-        let followsAnchors = Self.followsRepublishedAnchors(bundleID: lastSnapshot?.bundleIdentifier)
+        let followsAnchors = Self.snapsToReportedPosition(bundleID: lastSnapshot?.bundleIdentifier)
         if snap || (followsAnchors && abs(newEMA) > Self.republishedAnchorSnapSecs) {
             trackPosSeconds = tier == .precise || followsAnchors ? reported : predicted + newEMA
             posErrEMA = 0
@@ -1927,6 +1943,7 @@ public final class LocalPlaybackSource: ObservableObject {
         spotifyInfoObserver = nil
         streamWatcher?.stop()
         streamWatcher = nil
+        AmazonMusicLogWatcher.onPlaybackEvent = nil
         pendingNotificationPoll?.cancel()
         pendingNotificationPoll = nil
         stopFastTimer()
@@ -2039,6 +2056,15 @@ public final class LocalPlaybackSource: ObservableObject {
         }
         streamWatcher = watcher
         watcher.start()
+        // Amazon Music 拖动进度时系统 Now Playing 什么都不报,只有它的日志里有(见 AmazonMusicLogWatcher):日志里出了
+        // 播放事件同样补查一次 poll()。
+        AmazonMusicLogWatcher.onPlaybackEvent = { [weak self] pause in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.handlePlayerInfoChanged(freezeExtrapolation: pause, stateSignal: true)
+                }
+            }
+        }
     }
 
     // 通知到达 → 去抖动之后补查一次 poll()。
@@ -3305,6 +3331,10 @@ public final class LocalPlaybackSource: ObservableObject {
     }
 
     public func seek(toMs targetMs: Int) {
+        guard acceptsSeek else {
+            logger.notice("seek ignored: the current player does not accept seek commands")
+            return
+        }
         let clampedMs = max(0, min(targetMs, currentDurationMs ?? targetMs))
         let seconds = Double(clampedMs) / 1000
         // .auto/多选模式下要按"这一刻实际在播的是谁"选后端,不能只看设置值——只要不是排他地

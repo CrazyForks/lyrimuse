@@ -1880,6 +1880,8 @@ struct LyricsWindowView: View {
                     PlaybackCoordinator.shared.seek(toMs: Int(f * Double(total)))
                 }
         )
+        // 播放器不吃外部跳转指令(Amazon Music)时只显示、不能拖,见 `PlaybackCoordinator.acceptsSeek`。
+        .allowsHitTesting(PlaybackCoordinator.shared.acceptsSeek)
     }
 
     // MARK: 迷你控制条
@@ -3211,6 +3213,8 @@ struct LyricsWindowView: View {
         } else if bundleID == PlaybackPlayer.kkbox.bundleIdentifier {
             // KKBOX 的是进 App 的深链(见 PlatformLinks.kkboxSong),文案跟上面几条浏览器页不同。
             if let u = links.kkboxSong { out.append(.init(id: "kkbox-song", title: L10n.t("在 KKBOX 中显示"), url: u)) }
+        } else if bundleID == PlaybackPlayer.amazonMusic.bundleIdentifier {
+            if let u = links.amazonSong { out.append(.init(id: "amazon-song", title: L10n.t("Amazon Music 歌曲页"), url: u)) }
         }
         return out
     }
@@ -3718,6 +3722,7 @@ struct LyricsWindowView: View {
         case .netease: return L10n.t("网易云音乐")
         case .spotify: return "Spotify"
         case .kkbox: return "KKBOX"
+        case .amazonMusic: return "Amazon Music"
         }
     }
 
@@ -5575,6 +5580,8 @@ private struct WindowProgressSection: View {
                         PlaybackCoordinator.shared.seek(toMs: Int(f * Double(durationMs)))
                     }
             )
+            // 播放器不吃外部跳转指令(Amazon Music)时只显示、不能拖,见 `PlaybackCoordinator.acceptsSeek`。
+            .allowsHitTesting(PlaybackCoordinator.shared.acceptsSeek)
             HStack {
                 Text(Self.formatTime(ms: shownMs))
                 Spacer()

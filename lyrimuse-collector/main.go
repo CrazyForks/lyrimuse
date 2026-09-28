@@ -451,6 +451,8 @@ func main() {
 	setEnrichEditDir(filepath.Join(filepath.Dir(*cfgPath), clientName+"-enrich-requests"))
 	// App 量出的 Spotify 锚点偏置(见 positionbias.go)——跟 Swift 那边 PositionBiasFile.fileName 逐字节一致。
 	setPositionBiasPath(filepath.Join(filepath.Dir(*cfgPath), clientName+"-position-bias.json"))
+	// Amazon Music 自动连播的提前量(App 读界面校准,见 amazonmusic.go amazonLeadFor)。
+	setAmazonLeadPath(filepath.Join(filepath.Dir(*cfgPath), clientName+"-amazon-lead.json"))
 	// 「歌词管理」的「重试无歌词条目」请求文件 + 进度状态文件(见 lyricsfillsweep.go)。
 	setLyricsFillPaths()
 	weeklyDigestPath = filepath.Join(filepath.Dir(*cfgPath), clientName+"-lastfm-weekly.json")

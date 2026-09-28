@@ -314,6 +314,9 @@ final class PlaybackCoordinator: ObservableObject {
         LocalPlaybackSource.shared.seek(toMs: targetMs)
     }
 
+    /// 这一刻在播的播放器能不能拖进度(见 `LocalPlaybackSource.acceptsSeek`)。各处进度条、点歌词跳转都看它。
+    var acceptsSeek: Bool { LocalPlaybackSource.shared.acceptsSeek }
+
     // 「导出诊断信息」用:这一刻实际被认下来的播放器,翻成人读得懂的名字。认不出来的
     // bundle id 原样附上(比只说"未知"有用得多——排查时那串 id 就是线索)。
     var resolvedPlayerDescription: String {

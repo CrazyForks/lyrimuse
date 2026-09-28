@@ -1422,6 +1422,11 @@ func runPlaybackPositionTests() {
         let kk = PlaybackPlayer.kkbox.bundleIdentifier
         expectEqual(L2.followsRepublishedAnchors(bundleID: kk), true, "重发锚点: KKBOX 跟随")
         expectEqual(L2.followsRepublishedAnchors(bundleID: PlaybackPlayer.kugou.bundleIdentifier), false, "重发锚点: 酷狗不跟随")
+        let amazon = PlaybackPlayer.amazonMusic.bundleIdentifier
+        expectEqual(L2.snapsToReportedPosition(bundleID: amazon) && !L2.followsRepublishedAnchors(bundleID: amazon), true,
+                    "伺服对齐: Amazon 直接对齐自己算的读数,但不套 KKBOX 的暂停锚点规则")
+        expectEqual(L2.snapsToReportedPosition(bundleID: kk), true, "伺服对齐: KKBOX 照旧")
+        expectEqual(L2.snapsToReportedPosition(bundleID: PlaybackPlayer.spotify.bundleIdentifier), false, "伺服对齐: Spotify 仍走 EMA")
         expectEqual(MediaControlClient.stampsCaptureTime(bundleID: kk), true, "重发锚点: KKBOX 读数盖读到的时刻")
         expectEqual(L2.pauseAnchorIsStale(bundleID: kk, frozenByEvent: true, latestAnchorPublishedWhilePaused: false), true,
                     "暂停旧锚点: 最近的锚点是播放中发的")

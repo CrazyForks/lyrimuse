@@ -1,0 +1,29 @@
+[SystemInfo]
+OsType: osx
+OsVersion: 27.0
+260928:025131 MorphoBrowser : I HarleyPlayerController : PlayerFlow : StartingPlayback : function = startPlayback , uriList = asin-//B0TESTAAA1, asin-//B0TESTAAA2, asin-//B0TESTAAA3 : line 691,
+260928:025131      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 1 track_id: 13
+260928:025131      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : asin://B0TESTAAA1:13:87015
+260928:025132      Browser INFO in Harley : DT:M [DASHRangeFragmentLoader.cpp:100] Fetching fragment: <Track: asin://B0TESTAAA1:13:87015, FragmentIndex: 0, AudioQuality: UHD48>
+260928:025134      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 0 track_id: 13
+260928:025218 MorphoBrowser : I HarleyPlayerController : PlayerFlow : PausingPlayer : function = setPaused , paused = true : line 391,
+260928:025218      Browser INFO in Harley : 0x3151c8000 [PlaybackEngine.cpp:1127] setPaused(1)
+260928:025218      Browser INFO in Harley : DT:M [AudioPipeline.cpp:654] Stopped playback, mem_used=81
+260928:025222 MorphoBrowser : I HarleyPlayerController : PlayerFlow : PausingPlayer : function = setPaused , paused = false : line 391,
+260928:025222      Browser INFO in Harley : 0x3151c8000 [PlaybackEngine.cpp:1127] setPaused(0)
+260928:025222      Browser INFO in Harley : DT:M [AudioPipeline.cpp:589] Starting playback, mem_used=76
+260928:025222      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 1 track_id: 13
+260928:025222      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 0 track_id: 13
+260928:025337      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : asin://B0TESTAAA2:14:87015
+260928:025337      Browser INFO in PlaybackListener line 167, function skippedToNextTrack : Received skippedToNextTrack callback for tracks: 13 -> 14
+260928:025456      Browser INFO in HarleyPlayerController : PlayerFlow line 878, function seek : Seeking to: 127990
+260928:025456      Browser INFO in Harley : 0x3151c8000 [PlaybackEngine.cpp:1193] seek ( id: 14 uri: asin://B0TESTAAA2, seek_time: 127990 )
+260928:025456 MorphoBrowser : I app : JsConsole : line = 1 : Comment In Log:     Seek: PlayerFlow: Seeking on track:  playable_id_42  to location:  127990
+260928:025456      Browser INFO in Harley : DT:M [PacketDecoder.cpp:331] Preroll the codec, npkt=0 track=asin://B0TESTAAA2:14:87015
+260928:025457      Browser INFO in Harley : DT:M [StartHighSelector.cpp:243] Entering kStarting state
+260928:025618      Browser INFO in Harley : DT:M [Filter.cpp:157] End of stream reached
+260928:025618      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : asin://B0TESTAAA3:15:87015
+260928:030034      Browser INFO in Harley : DT:M [AudioPipeline.cpp:654] Stopped playback, mem_used=86
+260928:030035      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 1 track_id: 28
+260928:030035      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : podcast://dts.podtrac.com:443/redirect.mp3/example.com/episode.mp3
+260928:030038      Browser INFO in PlaybackListener line 255, function playbackStalled : Received callback with stalled state: 0 track_id: 28

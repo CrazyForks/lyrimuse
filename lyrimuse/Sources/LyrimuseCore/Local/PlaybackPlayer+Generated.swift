@@ -22,6 +22,8 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
     case kkbox = "kkbox"
     /// 自己有 AppleScript 字典,曲目与播放位置都走它直问 Spotify.app(跟 Apple Music 同一条路);media-control 只负责回答「现在是谁在放」,以及 AppleScript 不可达时兜底。duration 那边是毫秒,Music.app 是秒。
     case spotify = "spotify"
+    /// CEF 桌面客户端(x86_64,在 Apple 芯片上走 Rosetta),走 media-control,没有 AppleScript 字典、没有沙盒。系统 Now Playing 里**没有 elapsedTime**:时间戳是这首真正出声(缓冲完)的时刻,暂停只翻 playing、playbackRate 恒为 1、时间戳不动,拖动进度什么都不报,media-control 的 seek 命令它也不响应。所以位置不取系统值,由 AmazonMusicPlayhead 按它自己的日志(开播 / 暂停 / 恢复 / 拖动 / 缓冲卡顿)重放,读不到日志时退回按开播时刻加暂停记时;换上去的是干净锚点,归 cleanExtrapolated。切歌不撤会话,开播的 0 锚点不重发,歌手不晚到。刚开播时偶尔先发一帧上一次会话的旧曲目(旧时间戳、playing 为真),约 3 秒后才换成真的。播客歌手、专辑为空、时长大于 0。多个歌手用 ` & ` 连,专辑名常带 ` [Explicit]`。nativeLyricSource 填 amazon:不是歌词源,是用它放歌时读它自己缓存里的那份歌词(逐行、毫秒,按 ASIN 认身份,见 amazonlibrary.go),享受同源加权。processName 12 字节。
+    case amazonMusic = "amazon_music"
     /// 不是一个具体 App——把「谁在报 Now Playing」交给系统仲裁。bundleID 空字符串是刻意的,调用方据此 no-op 掉需要具体 App 的联动。
     case auto = "auto"
 
@@ -38,6 +40,7 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
         case .soda: return "com.soda.music"
         case .kkbox: return "com.kkbox.electron-app"
         case .spotify: return "com.spotify.client"
+        case .amazonMusic: return "com.amazon.music"
         case .auto: return ""
         }
     }
@@ -51,6 +54,7 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
         case .kugou: return "kugou"
         case .soda: return "soda"
         case .kkbox: return "kkbox"
+        case .amazonMusic: return "amazon"
         default: return nil
         }
     }
@@ -67,6 +71,7 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
         case .soda: return "cleanExtrapolated"
         case .kkbox: return "cleanExtrapolated"
         case .spotify: return "precise"
+        case .amazonMusic: return "cleanExtrapolated"
         default: return nil
         }
     }
@@ -122,6 +127,25 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
     public var artistArrivesLate: Bool {
         switch self {
         case .kkbox: return true
+        default: return false
+        }
+    }
+
+    /// 歌手空、时长 > 0、在放的快照是非歌曲内容(播客单集)。只有**实测见过**的播放器为 true。
+    /// 判定在 `TrustedPlayers.artistlessContent`,Go 侧同源。
+    public var artistlessNotMusic: Bool {
+        switch self {
+        case .kkbox: return true
+        case .amazonMusic: return true
+        default: return false
+        }
+    }
+
+    /// 外部的跳转指令它不响应。只有**实测见过**的播放器为 true。进度条只显示不能拖,
+    /// 见 `LocalPlaybackSource.acceptsSeek`。
+    public var ignoresSeekCommand: Bool {
+        switch self {
+        case .amazonMusic: return true
         default: return false
         }
     }

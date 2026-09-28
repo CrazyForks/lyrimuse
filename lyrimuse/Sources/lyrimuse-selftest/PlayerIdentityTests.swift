@@ -270,6 +270,7 @@ func runPlayerIdentityTests() {
             .soda: ("soda_music", "com.soda.music"),
             .kkbox: ("kkbox", "com.kkbox.electron-app"),
             .spotify: ("spotify", "com.spotify.client"),
+            .amazonMusic: ("amazon_music", "com.amazon.music"),
         ]
         for (player, want) in expected {
             expectEqual(player.rawValue, want.raw, "播放器契约: \(player) 的 rawValue")
@@ -320,6 +321,19 @@ func runPlayerIdentityTests() {
         let untouched = TrustedPlayers.promotingBuiltins(trusted: ["com.apple.Safari": "Safari"], players: [.spotify])
         expectEqual(untouched.trusted, ["com.apple.Safari": "Safari"], "信任→内置: 没有内置播放器就原样")
         expectEqual(untouched.players, [.spotify], "信任→内置: 没有内置播放器就原样(选择)")
+
+        // Amazon Music:放播客时歌手、专辑空,时长 > 0,在放 —— 非歌曲内容;歌手不晚到,不当成开播那一帧。
+        let amz = PlaybackPlayer.amazonMusic.bundleIdentifier
+        expectEqual(TP.artistlessContent(bundleID: amz, artist: "", duration: 2246, playing: true), true,
+                    "Amazon Music: 播客不是歌")
+        expectEqual(TP.artistlessContent(bundleID: amz, artist: "Shakira & Burna Boy", duration: 223, playing: true),
+                    false, "Amazon Music: 有歌手的照常")
+        expectEqual(TrustedPlayers.notASong(bundleID: amz, artist: "", album: "", trusted: [:]), false,
+                    "Amazon Music: 歌手不晚到,开播那一帧不拦")
+        let trustedAmz = [amz: "Amazon Music"]
+        let promotedAmz = TrustedPlayers.promotingBuiltins(trusted: trustedAmz, players: [.appleMusic])
+        expectEqual(promotedAmz.trusted, [:], "信任→内置: Amazon Music 从信任列表里拿掉")
+        expectEqual(promotedAmz.players, [.appleMusic, .amazonMusic], "信任→内置: 没勾自动识别的补勾 Amazon Music")
 
         // 切歌间隙保持(PlayerGapHold):KKBOX 切歌时先撤掉 Now Playing,这段时间里 Apple Music 暂停着的旧会话不算换播放器。
         typealias H = PlayerGapHold

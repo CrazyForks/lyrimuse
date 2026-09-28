@@ -361,6 +361,10 @@ type enrichEntry struct {
 	// 见 kkboxlyrics.go kkboxPlayingInfoFor)。App 从里面取曲目 id 拼 `kkbox://song/<id>#view` 在 KKBOX 里打开,网页用原样链接。
 	KKBOXURL string `json:"kkbox_url,omitempty"`
 
+	// AmazonURL:用 Amazon Music 放这首歌时,它日志里这首的 ASIN 拼成的公开曲目页
+	// (`https://music.amazon.com/tracks/<ASIN>`,见 amazonmusic.go amazonTrackURLFor)。App 和网页都原样用。
+	AmazonURL string `json:"amazon_url,omitempty"`
+
 	// Unknown 装这条记录里**当前二进制不认识的键**(原样的 JSON 片段),MarshalJSON 时原样写回
 	// (enrichjson.go)。
 	//
@@ -388,6 +392,7 @@ func (e enrichEntry) fields() map[string]string {
 	put("spotify_url", e.spotifyLink())
 	put("spotify_track_id", e.SpotifyTrackID)
 	put("kkbox_url", e.KKBOXURL)
+	put("amazon_url", e.AmazonURL)
 	put("lyrics", e.Lyrics)
 	put("lyrics_tr", e.LyricsTr)
 	put("lyrics_roma", e.LyricsRoma)
@@ -562,9 +567,9 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 	if radioStationCard(radio, artist, title) {
 		return nil
 	}
-	// artistArrivesLate 的播放器(KKBOX)歌手空的只可能是非歌曲内容(播客单集,见 builtinArtistNotReady):
+	// artistlessNotMusic 的播放器(KKBOX、Amazon Music)歌手空的只可能是非歌曲内容(播客单集,见 builtinArtistlessContent):
 	// 同上一个理由,不拿去搜歌词、不写进缓存。
-	if artist == "" && playerArtistArrivesLate[bundleID] {
+	if artist == "" && playerArtistlessNotMusic[bundleID] {
 		return nil
 	}
 	// 广告不能拿去搜歌词:qqMusicURL()/e.SpotifyURL 这两路兜底链接只要 title!="" 就会给出
@@ -602,6 +607,9 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 	}
 	// Spotify 缓存里现在有没有这首的词:同理放在锁外(记忆 30 秒,见 spotifyLocalLyricsAvailable)。
 	spotifyLyricsAvail := bundleID == spotifyBundleID && spotifyLocalLyricsAvailable(artist, title)
+	// Amazon Music 曲目页:它的时钟那一拍记下的 ASIN,另一把锁,同样放在锁外取。
+	amazonURL := amazonTrackURLFor(bundleID, artist, title)
+	amazonLyricsAvail := amazonLocalLyricsAvailable(bundleID, artist, title)
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	if !ok {
@@ -638,6 +646,10 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		// KKBOX 歌曲页:用 KKBOX 放时从它缓存的单曲详情里取(锁外已经取好),同一套「变了才落盘」。
 		if kkboxInfo.url != "" && e.KKBOXURL != kkboxInfo.url {
 			e.KKBOXURL = kkboxInfo.url
+			spotifyHintDirty = true
+		}
+		if amazonURL != "" && e.AmazonURL != amazonURL {
+			e.AmazonURL = amazonURL
 			spotifyHintDirty = true
 		}
 		if spotifyHintDirty {
@@ -694,6 +706,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		} else if kkboxLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, kkboxInfo.lyrics) &&
 			!enrichInflight[key] && kkboxLyricsRecheckOnce(key) {
 			// KKBOX 自己的词在这首被预解析之后才有(见 kkboxLyricsWorthRecheck),让它进一次打分。
+			enrichInflight[key] = true
+			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
+		} else if amazonLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, amazonLyricsAvail) &&
+			!enrichInflight[key] && amazonLyricsRecheckOnce(key) {
+			// 这首当初不是用 Amazon Music 放着解析的,它本地现在有词(见 amazonLyricsWorthRecheck),让它进一次打分。
 			enrichInflight[key] = true
 			go retryLyricsUpgrade(context.Background(), key, artist, title, album, durationSecs, false)
 		} else if spotifyLyricsWorthRecheck(e, bundleID, pinned, features().LyricsAutoUpgrade, spotifyLyricsAvail) &&
@@ -1411,7 +1428,9 @@ func needsLyricsRetry(e enrichEntry, wrongDuration, pinned, autoUpgrade bool) bo
 	// 就是结论(它只有逐行,输给逐字源是常态),走这条会让每首用 KKBOX 放的歌都连着全源重搜到次数上限。它什么时候值得
 	// 重来一次由 kkboxLyricsWorthRecheck 管。
 	nativeMissedOut := hasNativeLyricSource() && !isNativeLyricSource(e.LyricsSource) &&
-		slices.ContainsFunc(e.LyricsSourcesSeen, func(s string) bool { return isNativeLyricSource(s) && s != kkboxLocalLyricsSource })
+		slices.ContainsFunc(e.LyricsSourcesSeen, func(s string) bool {
+			return isNativeLyricSource(s) && s != kkboxLocalLyricsSource && s != amazonLocalLyricsSource
+		})
 	// 版本时长对不上(预取用了另一个版本的时长做校验)跟"同源落选"一样,本身就是重来
 	// 一次的理由,同样要越过下面"已经有逐字就不重试"那道闸。wrongDuration 由调用方
 	// (trackEnrichment)算好传进来:durationMismatch 的原始观察值必须先过
@@ -2919,8 +2938,8 @@ func pickLyricCandidate(scored []scoredLyricCandidateResult) *scoredLyricCandida
 				}
 			}
 		}
-		// KKBOX / Spotify 本地歌词不在用户排的顺序里(它们不是歌词源):顺序里的源都没给出可用的,才轮到它们。
-		for _, local := range []string{kkboxLocalLyricsSource, spotifyLocalLyricsSource} {
+		// KKBOX / Spotify / Amazon Music 本地歌词不在用户排的顺序里(它们不是歌词源):顺序里的源都没给出可用的,才轮到它们。
+		for _, local := range []string{kkboxLocalLyricsSource, spotifyLocalLyricsSource, amazonLocalLyricsSource} {
 			for i := range scored {
 				if scored[i].Source == local && scored[i].Score >= 0 {
 					return &scored[i]
@@ -3866,6 +3885,7 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 	soda := raw["soda"]
 	kk := raw[kkboxLocalLyricsSource]
 	spl := raw[spotifyLocalLyricsSource]
+	amz := raw[amazonLocalLyricsSource]
 	sodaLyr, sodaYRC, sodaTr, sodaTitle, sodaArtist, sodaAlbum, sodaCover, sodaDur := soda.lyr, soda.yrc, soda.tr, soda.matchTitle, soda.matchArtist, soda.matchAlbum, soda.matchCover, soda.srcDur
 	amll := raw["amll"].amll
 	// 候选的封面只用它自己那个源给的,没有就空着(「搜索候选歌词」弹窗显示占位图,「解析决策」全空时整列不出现)。
@@ -3985,6 +4005,16 @@ func rankLyricSourceResults(artist, title, album string, durationSecs float64, r
 			title:                      kk.matchTitle, artist: kk.matchArtist, album: kk.matchAlbum,
 			cover:                   kk.matchCover,
 			identityFromLocalClient: kk.identityFromLocalClient,
+		})
+	}
+	if amz.lyr != "" {
+		// Amazon Music 本地歌词(用它放歌时读它自己缓存里的那份,逐行,按 ASIN 认身份,见 amazonlibrary.go)。只精确到整秒的
+		// 那类不置 identityFromLocalClient,同 KKBOX。
+		candidates = append(candidates, lyricCandidate{
+			source: amazonLocalLyricsSource, lyrics: amz.lyr,
+			sourceReportedDurationSecs: amz.srcDur,
+			title:                      amz.matchTitle, artist: amz.matchArtist, album: amz.matchAlbum,
+			identityFromLocalClient: amz.identityFromLocalClient,
 		})
 	}
 	if spl.lyr != "" {
@@ -4592,6 +4622,10 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 		// Spotify 本地歌词同理(Musixmatch 的备用管道,见 spotifylyrics.go),不看当前播放器:按曲目 ID 找得到就放。
 		if r, ok := spotifyLocalLyricsFor(artist, title, album); ok {
 			raw[spotifyLocalLyricsSource] = r
+		}
+		// Amazon Music 本地歌词同 KKBOX:正用它放歌时读,按 ASIN 认这首(见 amazonlibrary.go)。
+		if r, ok := amazonLocalLyricsFor(artist, title); ok {
+			raw[amazonLocalLyricsSource] = r
 		}
 	}
 	// scoreAndSort 用目前为止已经到手的原始结果重新构建候选、算 corroboratedEndings、

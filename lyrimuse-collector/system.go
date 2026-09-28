@@ -469,21 +469,25 @@ func builtinArtistNotReady(bundleID string, raw map[string]any) bool {
 	return trustedPlaybackNotASong(bundleID, artist, album) && !builtinArtistlessContent(bundleID, raw)
 }
 
-// builtinArtistlessContent:artistArrivesLate 的播放器报了一份歌手空、但时长已经有了而且在放的快照 —— 不是开播那一帧
-// (那一帧时长 0、没在放),是本来就没有歌手的非歌曲内容(KKBOX 的播客单集)。KKBOX 放播客时不填系统的播放信息,
-// title 是 Chromium 拿窗口标题凑的,不能当曲名(见 02 章决策 62)。
+// builtinArtistlessContent:歌手空、但时长已经有了而且在放的快照 —— 不是开播那一帧(那一帧时长 0、没在放),是本来
+// 就没有歌手的非歌曲内容。内置播放器只认 playerArtistlessNotMusic 的(KKBOX、Amazon Music 的播客单集);KKBOX 放播客时
+// 不填系统的播放信息,title 是 Chromium 拿窗口标题凑的,不能当曲名(见 02 章决策 62)。信任播放器沿用
+// trustedPlaybackNotASong 那道「歌手或专辑为空」。
 //
 // 调用方当成「没在放音乐」:交回空快照、切歌空档保持当场放手,也不退回去问别家的暂停会话。
 // Swift 侧 TrustedPlayers.artistlessContent 同一套语义。
 func builtinArtistlessContent(bundleID string, raw map[string]any) bool {
 	artist, _ := raw["artist"].(string)
 	album, _ := raw["album"].(string)
-	if !trustedPlaybackNotASong(bundleID, artist, album) {
-		return false
-	}
 	duration, _ := raw["duration"].(float64)
 	playing, _ := raw["playing"].(bool)
-	return duration > 0 && playing
+	if duration <= 0 || !playing {
+		return false
+	}
+	if isKnownPlayerBundleID(bundleID) {
+		return playerArtistlessNotMusic[bundleID] && strings.TrimSpace(artist) == ""
+	}
+	return trustedPlaybackNotASong(bundleID, artist, album)
 }
 
 // isAcceptedPlayerBundleID 是"自动识别"下真正的成员判断:五个内置播放器,**加上**用户
@@ -1065,6 +1069,8 @@ func fetchRawMediaControlState(ctx context.Context) (map[string]any, string, boo
 		"catalogDurationSecs": catalogDuration,
 		// 汽水试听段还在后台搜(见 sodapreview.go),poller 据此先不解析歌词。
 		"sodaPreviewPending": sodaPreviewPending,
+		// 系统元数据的原始时间戳(见 snapshot.MetadataTS)。Amazon Music 不报 elapsedTime,它的时钟要拿这个当开播时刻。
+		"metadataTimestamp": raw.Timestamp,
 	}, raw.BundleID, true
 }
 

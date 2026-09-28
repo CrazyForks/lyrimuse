@@ -451,9 +451,11 @@ public enum MediaControlClient {
         /// 电台 / 直播流才有的电台标识(实测:Apple Music Radio 播放时非空,
         /// 值形如 "CgkIBRoFwOSKqxkQBA")。只当"这是不是电台"的判据用,值本身不看。
         let radioStationHash: String?
+        /// 发布这份 Now Playing 的进程号。Amazon Music 的界面校准要它(见 AmazonMusicUIProbe)。
+        let processIdentifier: Int?
 
         private enum CodingKeys: String, CodingKey {
-            case title, artist, album, bundleIdentifier, playing, playbackRate, radioStationHash
+            case title, artist, album, bundleIdentifier, playing, playbackRate, radioStationHash, processIdentifier
         }
 
         /// 带 `--micros` 调用时四个时间键会被**替换**成微秒版,交给 `MediaControlMicros.TimeFields`
@@ -466,6 +468,7 @@ public enum MediaControlClient {
             bundleIdentifier = try c.decodeIfPresent(String.self, forKey: .bundleIdentifier)
             playing = try c.decodeIfPresent(Bool.self, forKey: .playing)
             playbackRate = try c.decodeIfPresent(Double.self, forKey: .playbackRate)
+            processIdentifier = try? c.decodeIfPresent(Int.self, forKey: .processIdentifier)
             radioStationHash = try c.decodeIfPresent(String.self, forKey: .radioStationHash)
             let times = try MediaControlMicros.TimeFields(from: decoder)
             duration = times.duration
@@ -1921,12 +1924,28 @@ public enum MediaControlClient {
             : nil
         // 报单曲位置的台不顶替:位置与锚点保留系统原值,下游按普通 Apple Music 曲目处理(见 RadioTrackClock.State.perTrack)。
         let radioPosition: Double? = radioClock?.perTrack == true ? nil : radioClock?.position
+        // Amazon Music 不报 elapsedTime:位置换成按它的日志重放出来的,读不到日志时自记时(见 AmazonMusicPlayhead)。
+        // 跟电台同一个理由换在这里:下游拿到的是一份锚点干净的快照。上一次会话留下的旧曲目那一帧不采纳。
+        var amazonPosition: Double?
+        if bundleID == PlaybackPlayer.amazonMusic.bundleIdentifier, !(raw.title ?? "").isEmpty {
+            let watcher = AmazonMusicLogWatcher.shared
+            watcher.ensureStarted()
+            let reading = watcher.reading(
+                trackKey: trackKey, metadataTimestamp: timestampDate, playing: playing == true,
+                pauseObservedAt: Self.lastPauseObservedAt(), now: sampledAt,
+                pid: raw.processIdentifier.map { pid_t($0) }, duration: raw.duration)
+            if reading.staleMetadata {
+                setSnapshotFailure(.notASong)
+                return nil
+            }
+            amazonPosition = reading.position
+        }
         var snapshot = MediaControlSnapshot(
             title: raw.title,
             artist: raw.artist,
             album: raw.album,
             duration: raw.duration,
-            elapsedTime: radioPosition ?? elapsed,
+            elapsedTime: amazonPosition ?? radioPosition ?? elapsed,
             playing: playing,
             playbackRate: raw.playbackRate,
             // 复用这个字段原本的语义("这是当前选定播放器的一份有效快照",见
@@ -1937,13 +1956,13 @@ public enum MediaControlClient {
             bundleIdentifier: bundleID,
             // 电台把锚点也换成自己那块表:留着原始值会让下游"锚点是不是开播那个"的判定
             // (anchorElapsedTime == 0)按整档节目的钟去解读,自相矛盾。
-            anchorElapsedTime: radioPosition ?? raw.elapsedTime,
+            anchorElapsedTime: amazonPosition ?? radioPosition ?? raw.elapsedTime,
             isRadio: isRadio ? true : nil,
             anchorStartCorrection: startCorrection
         )
         // 读到之后主线程可能要等一两百毫秒才处理(换歌那一刻加载封面 / 歌词,实测 0.21s),位置得按读到的时刻
         // 补到处理那一刻(见 MediaControlSnapshot.capturedAt)。只对实测过的播放器开(决策 41)。
-        if Self.stampsCaptureTime(bundleID: bundleID) { snapshot.capturedAt = sampledAt }
+        if Self.stampsCaptureTime(bundleID: bundleID) || amazonPosition != nil { snapshot.capturedAt = sampledAt }
         return (snapshot, bundleID)
     }
 

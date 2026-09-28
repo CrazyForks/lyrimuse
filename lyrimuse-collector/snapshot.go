@@ -30,6 +30,9 @@ type snapshot struct {
 	Elapsed float64
 	Rate    float64
 	McTS    time.Time
+	// MetadataTS:系统 Now Playing 元数据的原始时间戳(McTS 是这一拍读到的时刻,不是它)。只有 media-control 那条路
+	// 有;Amazon Music 的时钟拿它当开播时刻(见 amazonmusic.go)。
+	MetadataTS time.Time
 	// media-control 原始的锚点 elapsedTime(未经任何派生)。只用来判"这个锚点是不是开播那个"
 	// (0 = 开播锚点;>0 = 播放器后来重新发布的锚点:暂停冻结 / 恢复 / 拖动)—— Spotify 自然切歌
 	// 偏置只属于开播锚点,见 updatePosition 里清零那一处。
@@ -169,7 +172,14 @@ func extract(state map[string]any) snapshot {
 	if radio {
 		duration = num("catalogDurationSecs")
 	}
+	var metadataTS time.Time
+	if ts := str("metadataTimestamp"); ts != "" {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			metadataTS = t
+		}
+	}
 	return snapshot{
+		MetadataTS:       metadataTS,
 		Title:            str("title"),
 		Artist:           str("artist"),
 		Album:            str("album"),

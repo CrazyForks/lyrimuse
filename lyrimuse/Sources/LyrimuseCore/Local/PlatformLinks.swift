@@ -20,6 +20,8 @@ import Foundation
 ///   只有 `playsong` / `downloadsong`(二进制取证),没有任何"打开这一页"的语义 ——
 ///   而且 `playsong` 会把正在放的这首从头重播,不是我们要的。所以别把它写成「在 QQ 音乐中打开」。
 /// - KKBOX 那条是 `kkbox://song/<id>#view`,**在 KKBOX 里打开这首的页面**(不播放),所以写成「在 KKBOX 中显示」。
+/// - Amazon Music 那条是网页曲目页 `music.amazon.com/tracks/<ASIN>`(它的 URL scheme 没有公开的「打开这一首」写法),
+///   跟 QQ / 网易云一样写成「歌曲页」。
 public struct PlatformLinks: Sendable, Equatable {
     /// Apple Music 曲目页(已是 `music://`,进 App)。
     public let appleMusic: URL?
@@ -36,14 +38,17 @@ public struct PlatformLinks: Sendable, Equatable {
     public let spotifySong: URL?
     /// KKBOX 曲目页 `kkbox://song/<id>#view`(进 App,不播放)。由 collector 存的歌曲页换算,见 `kkboxAppURL`。
     public let kkboxSong: URL?
+    /// Amazon Music 曲目页 `https://music.amazon.com/tracks/<ASIN>`(浏览器)。collector 用它放这首时从日志里记下的 ASIN,
+    /// 形状闸见 `amazonTrackURL`。
+    public let amazonSong: URL?
 
     public var isEmpty: Bool {
         appleMusic == nil && qqSong == nil && qqAlbum == nil && qqArtist == nil && neteaseSong == nil && spotifySong == nil
-            && kkboxSong == nil
+            && kkboxSong == nil && amazonSong == nil
     }
 
     public init(appleMusic: URL?, qqSong: URL?, qqAlbum: URL?, qqArtist: URL?, neteaseSong: URL?, spotifySong: URL? = nil,
-                kkboxSong: URL? = nil) {
+                kkboxSong: URL? = nil, amazonSong: URL? = nil) {
         self.appleMusic = appleMusic
         self.qqSong = qqSong
         self.qqAlbum = qqAlbum
@@ -51,11 +56,12 @@ public struct PlatformLinks: Sendable, Equatable {
         self.neteaseSong = neteaseSong
         self.spotifySong = spotifySong
         self.kkboxSong = kkboxSong
+        self.amazonSong = amazonSong
     }
 
     /// 歌曲页所在的平台 —— 给「简介」面板那行选文案用(名字在 App 层本地化,这里只给身份)。
     public enum Platform: String, Sendable, Equatable {
-        case appleMusic, qqMusic, netease, spotify, kkbox
+        case appleMusic, qqMusic, netease, spotify, kkbox, amazonMusic
     }
 
     /// **当前播放器自己那个平台**上这首歌的歌曲页(规则:简介面板的「网页」行
@@ -81,11 +87,22 @@ public struct PlatformLinks: Sendable, Equatable {
         case PlaybackPlayer.netease.bundleIdentifier: return neteaseSong.map { (.netease, $0) }
         case PlaybackPlayer.spotify.bundleIdentifier: return spotifySong.map { (.spotify, $0) }
         case PlaybackPlayer.kkbox.bundleIdentifier: return kkboxSong.map { (.kkbox, $0) }
+        case PlaybackPlayer.amazonMusic.bundleIdentifier: return amazonSong.map { (.amazonMusic, $0) }
         default: return nil
         }
     }
 
     // MARK: - 纯函数(selftest 钉住)
+
+    /// collector 存的 Amazon Music 曲目页。形状闸与 collector 的 `amazonTrackURL` 同源:ASIN 是 10 位大写字母数字,
+    /// 别的一律不认。
+    public static func amazonTrackURL(_ raw: String) -> URL? {
+        let prefix = "https://music.amazon.com/tracks/"
+        guard raw.hasPrefix(prefix) else { return nil }
+        let asin = raw.dropFirst(prefix.count)
+        guard asin.count == 10, asin.allSatisfy({ ($0 >= "A" && $0 <= "Z") || ($0 >= "0" && $0 <= "9") }) else { return nil }
+        return URL(string: raw)
+    }
 
     /// collector 存的 KKBOX 歌曲页(`https://www.kkbox.com/<地区>/<语言>/song/<id>`)换成在 KKBOX 里打开这首的深链
     /// `kkbox://song/<id>#view`。形状闸与 collector 的 `kkboxSongPageURL` 同源,别的一律不认。

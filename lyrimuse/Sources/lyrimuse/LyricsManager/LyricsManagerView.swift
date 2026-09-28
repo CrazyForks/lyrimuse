@@ -264,6 +264,9 @@ func sourceColor(_ source: String) -> Color {
     // Spotify 本地歌词(不是歌词源:Spotify 自己拉过的那份,多是 Musixmatch 供词,见 collector/spotifylyrics.go)。
     // 系统色都被占了,品牌绿跟 QQ 音乐的 .green 分不开,用 .gray。
     case "spotify": return .gray
+    // Amazon Music 本地歌词(不是歌词源:用它放歌时读它自己缓存里的那份,见 collector/amazonlibrary.go)。
+    // 品牌青色跟酷狗的 .cyan 分不开,系统色也没有空位,取偏蓝的浅天蓝。
+    case "amazon": return Color(hue: 0.56, saturation: 0.55, brightness: 0.95)
     default: return .secondary
     }
 }
@@ -304,6 +307,8 @@ func sourceDisplayName(_ source: String) -> String {
     case "kkbox": return "KKBOX"
     // Spotify 本地歌词——品牌名,保留原名。同 KKBOX,不在 LyricsSource 里,只在这份词确实来自 Spotify 缓存时显示。
     case "spotify": return "Spotify"
+    // Amazon Music 本地歌词——品牌名,保留原名。同 KKBOX,不在 LyricsSource 里,只在这份词确实来自它时显示。
+    case "amazon": return "Amazon Music"
     case "": return L10n.t("无来源")
     default: return source
     }

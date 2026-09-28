@@ -717,6 +717,13 @@ func followsRepublishedAnchors(bundle string) bool {
 	return bundle == kkboxBundleID
 }
 
+// snapsToReading:稳定播放时读数跟外推差出 followsAnchorSnapSecs 就对齐读数的播放器:跟随重发锚点的(KKBOX),
+// 加上位置按自己日志算出来的 Amazon Music(读数就是干净的时钟,App 界面校准改提前量时要一步跟上)。
+// 与 App 侧 LocalPlaybackSource.snapsToReportedPosition 同一份名单,两边一起改。
+func snapsToReading(bundle string) bool {
+	return followsRepublishedAnchors(bundle) || bundle == amazonMusicBundleID
+}
+
 func (p *poller) updatePosition(now time.Time) (reanchor bool, loopRestart bool) {
 	key := p.cur.key()
 	if key == "" { // nothing playing
@@ -861,7 +868,7 @@ func (p *poller) updatePosition(now time.Time) (reanchor bool, loopRestart bool)
 		reanchor = false
 		// KKBOX 播放中约每秒重发一次准的锚点,开播第一个却晚约 0.18s:读数跟外推差出 followsAnchorSnapSecs 就对齐读数,
 		// 不然开播头一拍读到那个锚点,整首都慢这一截。与 App 侧 LocalPlaybackSource.followsRepublishedAnchors 同一条规则。
-		if followsRepublishedAnchors(p.cur.Bundle) {
+		if snapsToReading(p.cur.Bundle) {
 			if reading := seedFromMC(); math.Abs(reading-p.trackPos) > followsAnchorSnapSecs {
 				p.trackPos = reading
 				reanchor = true
@@ -1878,6 +1885,10 @@ func (p *poller) poll() {
 	// 对抗审查抓出)。真空态(3 连 null 清空)是新信息,不算陈旧。
 	p.snapshotStale = true
 	if state, ok := getState(p.ctx); ok {
+		// Amazon Music 上一次会话留下的旧曲目当读空(见 amazonStateIsStale):下面按住不采纳的那一支没有上限。
+		if len(state) > 0 && amazonStateIsStale(state) {
+			state = nil
+		}
 		if len(state) == 0 { // "null" — nothing playing, or a transient read glitch
 			if p.nullStreak == 0 {
 				p.nullSince = time.Now()
@@ -1892,7 +1903,9 @@ func (p *poller) poll() {
 			// 撕裂快照按住不采纳:本轮 p.cur 原样保留、snapshotStale 保持 true,跟 getState
 			// 失败同一种处理。必须拦在这里而不是 handle():relay.go / lb.go 也拿 p.cur 调
 			// trackEnrichment,缓存未命中同样会起一次首次解析。
-			if next := extract(state); !p.holdTornTrackChange(next, time.Now()) {
+			// Amazon Music 不报位置,位置 / 锚点换成按它的日志重放出来的(见 amazonmusic.go);上一次会话留下的旧曲目
+			// 在上面已经当读空了。
+			if next := extract(state); !p.holdTornTrackChange(next, time.Now()) && applyAmazonMusicClock(&next, time.Now()) {
 				p.cur = next
 				// 电台:把整档节目的位置/锚点换成按曲目边界自己起的单曲表(见 radioclock.go)。
 				// 换在这里而不是让下游各自判:updatePosition 那套伺服 / 偏置 / 回绕判定拿到的

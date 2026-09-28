@@ -42,9 +42,15 @@ CI 跑 `--check` 保证生成物没被手改、也没忘记重新生成。
                 只给**实测见过**的播放器置 true(KKBOX 约半秒后补齐)。这一帧当作还没准备好、不采纳,
                 跟信任播放器那道「歌手为空就丢」同一处判定:Swift 侧 TrustedPlayers.notASong,Go 侧
                 trustedPlaybackNotASong
+- artistlessNotMusic  歌手空、时长 > 0、在放的快照是非歌曲内容(播客单集),不当成一首歌;auto 为 null
+                只给**实测见过**的播放器置 true(KKBOX、Amazon Music 放播客都是这样)。判定在 Swift 侧
+                TrustedPlayers.artistlessContent / Go 侧 builtinArtistlessContent
 - dropsSessionBetweenTracks  切歌时先撤掉 Now Playing、隔几秒才发下一首;auto 为 null
                 只给**实测见过**的播放器置 true(KKBOX 约 4 秒)。上一首来自它时,这几秒里别的播放器暂停着的
                 旧会话不当成「换播放器了」,判定在 Swift 侧 PlayerGapHold / Go 侧 holdAcrossPlayerGap
+- ignoresSeekCommand  外部的跳转指令(media-control `seek`)它不响应;auto 为 null。只生成 Swift 侧(collector 不发跳转)。
+                只给**实测见过**的播放器置 true(Amazon Music:界面上也没有可设值的进度条)。这类播放器上
+                进度条只显示不能拖、点歌词不跳,`LocalPlaybackSource.seek` 直接不动
 - needsAutomationPermission  这个播放器要不要 macOS 的「自动化」权限(我们向它发 Apple Event);auto 为 null
                 = 它有 AppleScript 字典、且本仓真的在用。只生成 Swift 侧:collector 是独立
                 签名身份、TCC 里是另一条记录,那边没有 API 能查或触发它
@@ -223,6 +229,14 @@ def render_go(spec, players):
             out.append("\t%s: true,\n" % p["goBundleConst"])
     out.append("}\n")
 
+    out.append("\n// playerArtistlessNotMusic 是「bundle id → 歌手空、时长 > 0、在放的是非歌曲内容(播客单集)」。\n"
+               "// 只列**实测见过**的播放器。判定在 builtinArtistlessContent,Swift 侧 artistlessNotMusic 同源。\n"
+               "var playerArtistlessNotMusic = map[string]bool{\n")
+    for p in concrete:
+        if p.get("artistlessNotMusic") and p.get("goBundleConst"):
+            out.append("\t%s: true,\n" % p["goBundleConst"])
+    out.append("}\n")
+
     out.append("\n// playerDropsSessionBetweenTracks 是「bundle id → 切歌时先撤掉 Now Playing、隔几秒才发下一首」。\n"
                "// 只列**实测见过**的播放器。判定在 holdAcrossPlayerGap,Swift 侧 dropsSessionBetweenTracks 同源。\n"
                "var playerDropsSessionBetweenTracks = map[string]bool{\n")
@@ -314,6 +328,22 @@ def render_core_swift(spec, players):
                "    public var artistArrivesLate: Bool {\n        switch self {\n")
     for p in concrete:
         if p.get("artistArrivesLate"):
+            out.append("        case .%s: return true\n" % p["swiftCase"])
+    out.append("        default: return false\n        }\n    }\n")
+
+    out.append("\n    /// 歌手空、时长 > 0、在放的快照是非歌曲内容(播客单集)。只有**实测见过**的播放器为 true。\n"
+               "    /// 判定在 `TrustedPlayers.artistlessContent`,Go 侧同源。\n"
+               "    public var artistlessNotMusic: Bool {\n        switch self {\n")
+    for p in concrete:
+        if p.get("artistlessNotMusic"):
+            out.append("        case .%s: return true\n" % p["swiftCase"])
+    out.append("        default: return false\n        }\n    }\n")
+
+    out.append("\n    /// 外部的跳转指令它不响应。只有**实测见过**的播放器为 true。进度条只显示不能拖,\n"
+               "    /// 见 `LocalPlaybackSource.acceptsSeek`。\n"
+               "    public var ignoresSeekCommand: Bool {\n        switch self {\n")
+    for p in concrete:
+        if p.get("ignoresSeekCommand"):
             out.append("        case .%s: return true\n" % p["swiftCase"])
     out.append("        default: return false\n        }\n    }\n")
 

@@ -21,7 +21,7 @@ import (
 //     也不再认它的失败:那已经证明通道能用,`test` 自己偶发失败时不该把读取切到直问。
 //
 // 坏了之后按顺序问还开着的 Apple Music、Spotify(JXA 脚本自带 running 守卫,不会把播放器拉起来),在放的优先,
-// 都没在放取第一个暂停着的。多选时只问用户勾了的。QQ 音乐 / 网易云 / 酷狗 / 汽水 / KKBOX 没有 AppleScript
+// 都没在放取第一个暂停着的。多选时只问用户勾了的。QQ 音乐 / 网易云 / 酷狗 / 汽水 / KKBOX / Amazon Music 没有 AppleScript
 // 字典,按 bundle id 直查系统的那条路(nowplaying-clients)也是 MediaRemote,跟着一起坏,这里不问。
 // App 侧同一件事在 MediaControlClient.snapshotWhileChannelBroken,两侧口径一致。
 
