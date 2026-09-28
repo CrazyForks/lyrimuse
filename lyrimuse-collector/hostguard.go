@@ -69,7 +69,7 @@ type hostRate struct {
 var hostRateDefault = hostRate{perSec: 3, burst: 10, reserve: 3}
 
 // hostRateFor 按主机给令牌桶参数。改数字之前先按日志里的 api call summary 重新量一遍
-// (docs/features/15 有分档统计的做法)。iTunes 的 search 和 lookup 共用一个主机的额度;
+// (逐接口那一行没失败、不慢时落 Debug,要 log_level=debug 才有;docs/features/15 有分档统计的做法)。iTunes 的 search 和 lookup 共用一个主机的额度;
 // Last.fm 与 App 侧 LastfmRateLimiter(4 次/秒)共用出口 IP,两边加起来别超过它按 IP 的限速。
 func hostRateFor(host string) hostRate {
 	switch host {
@@ -274,18 +274,18 @@ func (g *hostGuard) admit(req *http.Request) error {
 	key := guardEndpointKey(req.URL)
 
 	if until, open := g.endpointOpenUntil(key); open {
-		g.logHeld(host, "endpoint "+key+" failing, circuit open until "+until.Format("15:04:05"))
+		g.logHeld(host, "endpoint "+key+" failing, circuit open until "+logClock(until))
 		return errHostGuarded
 	}
 	if sharedCooldownHosts[host] {
 		if until := sharedCooldownUntil(key, time.Now()); !until.IsZero() {
-			g.logHeld(host, "shared cooldown for "+key+" until "+until.Format("15:04:05"))
+			g.logHeld(host, "shared cooldown for "+key+" until "+logClock(until))
 			return errHostGuarded
 		}
 	}
 	if source == "" {
 		if until, ok := g.endpointBlockedUntil(key); ok {
-			g.logHeld(host, "rate-limited by the server until "+until.Format("15:04:05"))
+			g.logHeld(host, "rate-limited by the server until "+logClock(until))
 			return errHostGuarded
 		}
 	} else if round == nil {
@@ -298,7 +298,7 @@ func (g *hostGuard) admit(req *http.Request) error {
 	lane := outboundLaneOf(ctx)
 	if source != "" && lane == laneBackground {
 		if until, paused := g.backgroundPausedUntil(host); paused {
-			g.logHeld(host, "background requests paused after "+source+" rate-limited us, until "+until.Format("15:04:05"))
+			g.logHeld(host, "background requests paused after "+source+" rate-limited us, until "+logClock(until))
 			if round != nil {
 				round.markSkipped(source)
 			}
@@ -598,7 +598,7 @@ func (g *hostGuard) noteEndpointBad(key string, rejected bool) {
 	h.until = now.Add(endpointCooldownSchedule[idx])
 	trips, d := h.trips, endpointCooldownSchedule[idx]
 	g.mu.Unlock()
-	log.Printf("outbound guard: endpoint %s tripped (trip %d, %d consecutive failures), holding for %s", key, trips, consecutive, d)
+	warnf("outbound guard: endpoint %s tripped (trip %d, %d consecutive failures), holding for %s", key, trips, consecutive, d)
 }
 
 // noteEndpointHealthy:这个端点回了非 5xx(rejected=false)或调用方确认响应体正常(true)。

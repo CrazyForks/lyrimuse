@@ -192,6 +192,17 @@ func translationUsable(e enrichEntry, target string) bool {
 type translationResult struct {
 	lrc          string
 	quotaReached bool
+	// engines:各级各翻成了几行(去重后的行),如 "on-device=40 google=6";只给日志用。
+	engines string
+}
+
+// engineTally 按出场顺序记每级翻译翻成的行数,零行的不记。
+type engineTally []string
+
+func (t *engineTally) add(engine string, n int) {
+	if n > 0 {
+		*t = append(*t, engine+"="+strconv.Itoa(n))
+	}
 }
 
 // machineTranslateLRC 把主歌词逐行机翻成 target 语言,返回一份跟主歌词同时间戳的译文 LRC。
@@ -468,15 +479,21 @@ func machineTranslateLRCWithBase(ctx context.Context, hc *http.Client, baseURL, 
 	//  2. 端上整组没翻成的行(系统太老 / 语言包没装 / 翻出来基本没动)交给 Google。
 	//  3. 前两级合起来还不够数(assembleTranslationLRC 那道 1/3 门槛),剩下没翻出来的行交给 MyMemory。
 	out := make([]string, len(uniqueTexts))
+	var used engineTally
+	done := func() int { return len(uniqueTexts) - len(untranslatedIndexes(uniqueTexts, out)) }
 	pending := translateOnDeviceByScript(ctx, target, uniqueTexts, out)
+	used.add("on-device", done())
 	if len(pending) > 0 {
+		before := done()
 		if got, err := googleTranslateLines(ctx, hc, pickTranslationTexts(uniqueTexts, pending), target); err == nil {
 			fillTranslations(out, pending, got)
 		} else if !errors.Is(err, errGoogleTranslateSkipped) {
-			log.Printf("translate: google failed, falling back to MyMemory: %v", err)
+			infoFailf("translate: google failed, falling back to MyMemory: %v", err)
 		}
+		used.add("google", done()-before)
 	}
 	if res := assembleTranslationLRC(lines, scatter(out), totalAttempted); res.lrc != "" {
+		res.engines = strings.Join(used, " ")
 		return res, nil
 	}
 
@@ -505,8 +522,12 @@ func machineTranslateLRCWithBase(ctx context.Context, hc *http.Client, baseURL, 
 		}
 		translated = append(translated, got...)
 	}
+	before := done()
 	fillTranslations(out, rest, translated)
-	return assembleTranslationLRC(lines, scatter(out), totalAttempted), nil
+	used.add("mymemory", done()-before)
+	res := assembleTranslationLRC(lines, scatter(out), totalAttempted)
+	res.engines = strings.Join(used, " ")
+	return res, nil
 }
 
 // translateOnDeviceByScript 按文字系统(dominantScript)把 texts 分组,每组单独送端上翻译;翻成的写进 out,
@@ -915,7 +936,9 @@ func backfillTranslation(key string) {
 	defer cancel()
 	target := myMemoryLangCode(features().LyricsTranslationLanguage)
 	artist, title, _ := splitEnrichKey(key)
+	started := time.Now()
 	res, err := machineTranslateLRC(ctx, translateClient, lyrics, target, artist, title)
+	took := time.Since(started).Seconds()
 
 	enrichMu.Lock()
 	// 解锁之后再落盘 —— App 侧读的是**磁盘上**这份缓存文件(EnrichCacheReader 每次直读
@@ -972,13 +995,13 @@ func backfillTranslation(key string) {
 	case res.quotaReached:
 		// **不**记这次尝试:配额是全局的、跟这首歌翻不翻得出来无关,记进去等于让今天
 		// 恰好轮到的那几首歌白白烧掉重试额度,以后再也不会被翻。只更新时间戳做节流。
-		log.Printf("translate: %s deferred, daily quota reached", key)
+		log.Printf("translate: %s deferred, daily quota reached (%.1fs)", key, took)
 	case err != nil:
 		e.TranslationRetryCount++
-		log.Printf("translate: %s failed: %v", key, err)
+		warnf("translate: %s failed after %.1fs: %v", key, took, err)
 	case res.lrc == "":
 		e.TranslationRetryCount++
-		log.Printf("translate: %s produced nothing usable (already target language, or too few lines translated)", key)
+		log.Printf("translate: %s produced nothing usable (already target language, or too few lines translated; %.1fs)", key, took)
 	default:
 		e.LyricsTr = res.lrc
 		e.LyricsTrSource = lyricsTrSourceMachine
@@ -987,7 +1010,7 @@ func backfillTranslation(key string) {
 		// 换正文那条路径当场按新正文重翻(translateAfterLyricsSwapLocked),不被节流挡住。
 		e.TranslationTS, e.TranslationRetryCount = 0, 0
 		lyricsChanged = true
-		log.Printf("translate: %s got a machine translation (%d lines)", key, strings.Count(res.lrc, "\n")+1)
+		log.Printf("translate: %s got a machine translation (%d lines, engines: %s, %.1fs)", key, strings.Count(res.lrc, "\n")+1, res.engines, took)
 	}
 	enrichCache[key] = e
 	enrichDirty = true

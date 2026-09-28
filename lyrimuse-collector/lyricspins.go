@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"sync"
 	"time"
@@ -116,7 +115,7 @@ func readLyricsPins(path string) map[string]bool {
 	}
 	var f lyricsPinsFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		log.Printf("lyrics pins: cannot parse %s, treating as empty: %v", path, err)
+		warnf("lyrics pins: cannot parse %s, treating as empty: %v", path, err)
 		return nil
 	}
 	out := make(map[string]bool, len(f.Pins))

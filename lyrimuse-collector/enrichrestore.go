@@ -71,7 +71,7 @@ func adoptEnrichRestore(path string) bool {
 	if err := json.Unmarshal(data, &incoming); err != nil {
 		// 解不出来就**原样留着**:这份文件是用户搬家时的决策数据,删掉等于替他做了
 		// "反正也用不上"的决定。留着还能人工看/修。
-		log.Printf("enrich restore: parse failed, file kept as-is file=%s: %v", filepath.Base(path), err)
+		warnf("enrich restore: parse failed, file kept as-is file=%s: %v", filepath.Base(path), err)
 		return false
 	}
 

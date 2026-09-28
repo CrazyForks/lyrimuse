@@ -102,7 +102,7 @@ func loadPlatformPagesCache(path string) {
 	platformPagesMu.Lock()
 	platformPagesCache = f
 	platformPagesMu.Unlock()
-	slog.Info("cache: loaded platform pages", "artists", len(f.Artists), "albums", len(f.Albums), "tracks", len(f.Tracks))
+	noteCacheLoaded(path, fmt.Sprintf("platform pages (%d artists, %d albums, %d tracks)", len(f.Artists), len(f.Albums), len(f.Tracks)))
 }
 
 func savePlatformPagesCache() {

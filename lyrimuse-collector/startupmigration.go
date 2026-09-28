@@ -151,6 +151,6 @@ func saveMigrationStateLocked() {
 		return
 	}
 	if err := os.WriteFile(migrationStatePath, data, 0o644); err != nil {
-		log.Printf("migration state: save failed (%v) — next startup will re-run the migrations", err)
+		warnf("migration state: save failed (%v) — next startup will re-run the migrations", err)
 	}
 }

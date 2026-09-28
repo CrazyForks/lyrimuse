@@ -144,11 +144,30 @@ func TestLogLyricsDecisionLine(t *testing.T) {
 			scored = append(scored, scoredLyricCandidateResult{Source: "kugou", Score: 100 - i})
 		}
 		out := capture(func() {
-			buildLyricsDecision(lyricsDecisionPathRescore, "a", "t", "", 0, scored, &scored[0], true)
+			buildLyricsDecision(lyricsDecisionPathUpgrade, "a", "t", "", 0, scored, &scored[0], true)
 		})
 		// 别名轮会给同一个源带回好几条,不封顶单行能冲到几百字节。
 		if !strings.Contains(out, "+5") {
 			t.Errorf("候选超过 %d 条时该折叠成 +N: %q", lyricsDecisionLogMaxCandidates, out)
+		}
+	})
+
+	// 没在播的歌的重新打分(全量扫库)落 Debug;在播那首的照常落 Info,并标 playing=true。
+	t.Run("重新打分只在播那首进 Info", func(t *testing.T) {
+		saved := enrichPlayingKey.Load()
+		t.Cleanup(func() { enrichPlayingKey.Store(saved) })
+		scored := []scoredLyricCandidateResult{{Source: "qq", Score: 900}}
+		noteEnrichPlayingKey(enrichKey("Other", "Song", ""))
+		if out := capture(func() {
+			buildLyricsDecision(lyricsDecisionPathRescore, "a", "t", "", 0, scored, &scored[0], false)
+		}); strings.Contains(out, "lyrics decision") {
+			t.Errorf("没在播的重新打分不该落 Info: %q", out)
+		}
+		noteEnrichPlayingKey(enrichKey("a", "t", ""))
+		if out := capture(func() {
+			buildLyricsDecision(lyricsDecisionPathRescore, "a", "t", "", 0, scored, &scored[0], false)
+		}); !strings.Contains(out, "path=rescore playing=true") {
+			t.Errorf("在播那首的重新打分要落 Info 并标 playing=true: %q", out)
 		}
 	})
 }

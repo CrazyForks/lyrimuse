@@ -80,7 +80,7 @@ func (a *alerter) push(title, body string) error {
 	req.Header.Set("Content-Type", contentType)
 	resp, err := doHTTPTracked(client, req)
 	if err != nil {
-		log.Printf("notify push failed (platform=%s): %v", a.platform, err)
+		warnf("notify push failed (platform=%s): %v", a.platform, err)
 		return err
 	}
 	resp.Body.Close()

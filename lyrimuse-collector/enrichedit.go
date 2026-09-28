@@ -131,7 +131,7 @@ func applyEnrichEdit(req enrichEditRequest) enrichEditResult {
 		// 这一场的缓存没读进来、什么都不落盘(见 refuseEnrichSavesThisRun):改了也存不下,
 		// 别让 App 以为改成功了。
 		res.Error = errEnrichCacheNotLoaded.Error()
-		log.Printf("enrich edit: op=%s refused: %v", req.Op, errEnrichCacheNotLoaded)
+		warnf("enrich edit: op=%s refused: %v", req.Op, errEnrichCacheNotLoaded)
 		return res
 	}
 	var out enrichEditOutcome
@@ -153,7 +153,7 @@ func applyEnrichEdit(req enrichEditRequest) enrichEditResult {
 	}
 	if out.err != nil {
 		res.Error = out.err.Error()
-		log.Printf("enrich edit: op=%s failed: %v", req.Op, out.err)
+		warnf("enrich edit: op=%s failed: %v", req.Op, out.err)
 		return res
 	}
 	if out.changed > 0 {
@@ -497,7 +497,7 @@ func processEnrichEditRequests() {
 func writeEnrichEditResult(path string, res enrichEditResult) {
 	data, _ := json.Marshal(res)
 	if err := writeFileAtomic(path, data); err != nil {
-		log.Printf("enrich edit: write result failed: %v", err)
+		warnf("enrich edit: write result failed: %v", err)
 	}
 }
 

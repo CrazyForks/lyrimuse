@@ -14,7 +14,6 @@ import (
 	_ "image/jpeg" // 注册 JPEG 解码器
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	neturl "net/url"
@@ -655,7 +654,7 @@ func loadQQArtistNameCache(path string) {
 		qqArtistNameMu.Lock()
 		qqArtistNameCache = m
 		qqArtistNameMu.Unlock()
-		log.Printf("cache: loaded %d QQ artist names from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d QQ artist names", len(m)))
 	}
 }
 

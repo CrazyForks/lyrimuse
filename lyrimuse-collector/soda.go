@@ -196,7 +196,7 @@ func sodaLyricBySearch(ctx context.Context, artist, title, album string, duratio
 		var err error
 		items, err = sodaSearch(ctx, artist, title)
 		if err != nil {
-			log.Printf("soda: search for %q - %q failed: %v", artist, title, err)
+			infoFailf("soda: search for %q - %q failed: %v", artist, title, err)
 			return sodaResult{}, false
 		}
 		sodaSearchMu.Lock()
@@ -233,7 +233,7 @@ func sodaLyricByID(ctx context.Context, trackID, artist, title string) (sodaResu
 	if err != nil {
 		// 传输层的失败(DNS / 连不上 / 5xx)由 sourcebreaker 按主机记,这里不重复登记 ——
 		// 它们跟"端点改了形状"是两回事,混在一起会把一次网络抖动报成源失效。
-		log.Printf("soda: seo_track for %q - %q (id %s) failed: %v", artist, title, trackID, err)
+		infoFailf("soda: seo_track for %q - %q (id %s) failed: %v", artist, title, trackID, err)
 		return sodaResult{}, false
 	}
 	if broken {

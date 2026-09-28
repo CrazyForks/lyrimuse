@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	neturl "net/url"
@@ -65,7 +64,7 @@ func loadArtistAliasCache(path string) {
 		artistAliasMu.Lock()
 		artistAliasCache = m
 		artistAliasMu.Unlock()
-		log.Printf("cache: loaded %d artist aliases from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d artist aliases", len(m)))
 	}
 }
 
@@ -271,7 +270,7 @@ func loadArtistIdentityCache(path string) {
 		artistIdentityMu.Lock()
 		artistIdentityCache = m
 		artistIdentityMu.Unlock()
-		log.Printf("cache: loaded %d artist identities from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d artist identities", len(m)))
 	}
 }
 
@@ -566,7 +565,7 @@ func loadMBPrimaryNameCache(path string) {
 		mbPrimaryNameMu.Lock()
 		mbPrimaryNameCache = m
 		mbPrimaryNameMu.Unlock()
-		log.Printf("cache: loaded %d MusicBrainz primary names from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d MusicBrainz primary names", len(m)))
 		return
 	}
 	var legacy map[string]string
@@ -580,7 +579,7 @@ func loadMBPrimaryNameCache(path string) {
 		mbPrimaryNameMu.Lock()
 		mbPrimaryNameCache = m
 		mbPrimaryNameMu.Unlock()
-		log.Printf("cache: loaded %d MusicBrainz primary names from %s (legacy format)", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d MusicBrainz primary names (legacy format)", len(m)))
 	}
 }
 

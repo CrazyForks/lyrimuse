@@ -534,7 +534,7 @@ func applyAmazonMusicClock(s *snapshot, now time.Time) bool {
 	if src != amazonClockLastSrc {
 		st := amazonClockTail.state
 		log.Printf("amazon music clock: position from %s (key=%q metadata_ts=%s log_track_started=%s lead=%.1fs log_ok=%v log_events=%v)",
-			src, s.key(), metadataTS.Format("15:04:05.000"), st.trackStartedAt.Format("15:04:05.000"),
+			src, s.key(), logClockMillis(metadataTS), logClockMillis(st.trackStartedAt),
 			metadataTS.Sub(st.trackStartedAt).Seconds(), amazonClockTail.ok, amazonClockTail.seen)
 		amazonClockLastSrc = src
 	}

@@ -109,7 +109,7 @@ func loadAppleAlbumHintCache(path string) {
 		appleAlbumHintMu.Lock()
 		appleAlbumHintCache = m
 		appleAlbumHintMu.Unlock()
-		log.Printf("cache: loaded %d Apple album-hint candidate sets from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d Apple album-hint candidate sets", len(m)))
 	}
 }
 

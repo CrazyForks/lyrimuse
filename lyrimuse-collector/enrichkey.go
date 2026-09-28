@@ -398,7 +398,7 @@ func applyEnrichKeyMigration() bool {
 			// 而没有对应条目的小文件会在启动时被清掉 —— 复制出来的备份就缺了正是要留的那部分。
 			if data, err := json.Marshal(enrichCache); err == nil {
 				if err := os.WriteFile(backup, data, 0o644); err != nil {
-					log.Printf("enrich key migration: backup failed (%v), aborting", err)
+					warnf("enrich key migration: backup failed (%v), aborting", err)
 					return false
 				}
 				log.Printf("enrich key migration: backed up %d entries to %s", len(enrichCache), filepath.Base(backup))
@@ -407,7 +407,7 @@ func applyEnrichKeyMigration() bool {
 			// 最初那份已经在了(不覆盖它),这一次的合并另留一份:只存这一次要并到一起的那几组,每次各留各的 ——
 			// 配置搬家带来别处的旧写法、清洗规则或版本词表改了,都会在以后的启动里触发新的合并。
 			if err := backupEnrichKeyMergeGroups(groups); err != nil {
-				log.Printf("enrich key migration: merge backup failed (%v), aborting", err)
+				warnf("enrich key migration: merge backup failed (%v), aborting", err)
 				return false
 			}
 		}

@@ -668,7 +668,7 @@ func (p *poller) mirrorScrobbleSync(ctx context.Context, artist, title, album st
 		return
 	}
 	if err := p.lfm.scrobble(ctx, artist, title, album, timestamp, durationSecs); err != nil {
-		log.Printf("lastfm mirror scrobble (final flush) failed: %v", err)
+		warnf("lastfm mirror scrobble (final flush) failed: %v", err)
 		// 退出路径同样要留痕 —— 而且这里比活路径更需要:进程正在退出,没有"下一拍"
 		// 可言。这条是同步调用,本来就在主 goroutine 上,不涉及上面那条并发约束。
 		recordFailedMirror(err, rawArtist, title, album, timestamp, durationSecs)
@@ -1075,7 +1075,7 @@ type relayPushResult struct {
 func (p *poller) applyRelayResult(r relayPushResult) {
 	p.relayInflight = false
 	if r.err != nil {
-		log.Printf("relay push failed: %v", r.err)
+		warnf("relay push failed: %v", r.err)
 		p.relayFailKey, p.relayFailAt = r.key, r.at
 		if p.relayBackoff == 0 {
 			p.relayBackoff = 30 * time.Second
@@ -1232,7 +1232,7 @@ func (p *poller) applySubmitOutcome(r submitOutcome) {
 	// 成功"。跟紧上方把 Last.fm 镜像从 LB 成功分支里挪出来是同一个道理。
 	p.recordLastfmListen(r.sess, r.artistName, r.meta, r.startedAt)
 	if r.err != nil {
-		log.Printf("submit listen failed: %v", r.err)
+		warnf("submit listen failed: %v", r.err)
 		// 会话已经结束就不会再有人重试它(播放中每拍重试只管当前会话),交给待重发队列;
 		// LB 明确拒收(4xx)的重发也没用,不进队列。
 		if errors.Is(r.err, errListenRejected) {
@@ -1383,7 +1383,7 @@ func (p *poller) announce(now time.Time, why string) {
 		}
 		err := p.lb.submit(p.ctx, "playing_now", 0, m)
 		if err != nil {
-			log.Printf("submit playing_now (%s) failed: %v", why, err)
+			warnf("submit playing_now (%s) failed: %v", why, err)
 		}
 		select {
 		case p.announceDoneCh <- announceOutcome{sess: sess, at: now, ok: err == nil}:
@@ -1452,9 +1452,10 @@ func (p *poller) handle(now time.Time, reanchored, loopRestart bool) {
 		}
 		p.recentFinalized = nil
 		// 带上 bundle:换歌是按播放器排查问题的起点(预解析走哪一层、署名修正、本地缓存命中都按
-		// 播放器分流),不带就追不到这一首是哪个播放器在放。
-		// bundle 放在最后,前半段格式不变,按「now playing: 歌手 - 歌名」grep 的老习惯照样好用。
-		log.Printf("now playing: %s - %s (bundle=%s)", p.cur.Artist, p.cur.Title, p.cur.Bundle)
+		// 播放器分流),不带就追不到这一首是哪个播放器在放。专辑和时长是缓存 key 与选版本的依据,
+		// 不带的话要另外去查这一首落在哪条缓存上。
+		// 括号里的放在最后,前半段格式不变,按「now playing: 歌手 - 歌名」grep 的老习惯照样好用。
+		log.Printf("now playing: %s - %s (album=%q duration=%.0fs bundle=%s)", p.cur.Artist, p.cur.Title, p.cur.Album, p.cur.Duration, p.cur.Bundle)
 		// 记下正在播的这首:它的歌词提交要当场落盘、不走 2 秒节流(App 读的是磁盘文件,见 enrichsave.go)。
 		// 只能在这里记 —— trackEnrichment 也会被「上一首」调到(切歌后给上一首提交收听、空闲时中继推上一首)。
 		noteEnrichPlayingKey(enrichKey(p.cur.Artist, p.cur.Title, p.cur.Album))
@@ -1658,7 +1659,7 @@ func (p *poller) forwardBridgeListens(items []bridgeForwardItem) {
 				out = append(out, bridgeForwardResult{item: it, rejected: true})
 				continue
 			}
-			log.Printf("bridge: forward lastfm listen failed, will retry: %v", err)
+			warnf("bridge: forward lastfm listen failed, will retry: %v", err)
 			break
 		}
 		out = append(out, bridgeForwardResult{item: it})
@@ -1847,7 +1848,7 @@ func (p *poller) applyBridgeResult(r bridgeFetchResult) {
 	// 即可,不需要像 single 提交那样经 channel 回主循环。
 	go func() {
 		if err := p.lb.submit(p.ctx, "playing_now", 0, meta); err != nil {
-			log.Printf("bridge: submit lastfm playing_now failed: %v", err)
+			warnf("bridge: submit lastfm playing_now failed: %v", err)
 		} else {
 			log.Printf("bridge: now playing (iPhone via Last.fm): %s - %s", artist, title)
 		}
@@ -2134,7 +2135,7 @@ func run(ctx context.Context, cfg *config, lb *lbClient) error {
 				if shortTrackLastfmOnly(p.sess.meta.Duration) {
 					p.recordRecentMacListen(p.sess.meta.Artist, p.sess.meta.Title, p.sess.startedAt.Unix())
 				} else if err := lb.submit(flushCtx, "single", p.sess.startedAt.Unix(), lm); err != nil {
-					log.Printf("final listen flush failed: %v", err)
+					warnf("final listen flush failed: %v", err)
 					// 进程正在退出,没有下一拍重试它了:交给 LB 待重发队列(同 applySubmitOutcome 里会话已结束那一支)。
 					if !errors.Is(err, errListenRejected) {
 						enqueueLBRetry(p.sess.startedAt.Unix(), lm)

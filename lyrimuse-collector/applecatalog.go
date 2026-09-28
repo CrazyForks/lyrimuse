@@ -184,7 +184,7 @@ func loadAppleCatalogCache(path string) {
 		appleCatalogMu.Lock()
 		appleCatalogCache = m
 		appleCatalogMu.Unlock()
-		log.Printf("cache: loaded %d Apple catalog tracks from %s", len(m), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d Apple catalog tracks", len(m)))
 	}
 }
 
@@ -515,7 +515,7 @@ func loadAppleStorefrontArtistCache(path string) {
 		appleStorefrontArtistMu.Lock()
 		appleStorefrontArtistCache = f.Entries
 		appleStorefrontArtistMu.Unlock()
-		log.Printf("cache: loaded %d Apple storefront artist entries from %s", len(f.Entries), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d Apple storefront artist entries", len(f.Entries)))
 		return
 	}
 	var legacy map[string][]string
@@ -590,7 +590,7 @@ func loadAppleStorefrontTitleCache(path string) {
 		appleStorefrontTitleMu.Lock()
 		appleStorefrontTitleCache = f.Entries
 		appleStorefrontTitleMu.Unlock()
-		log.Printf("cache: loaded %d Apple storefront title entries from %s", len(f.Entries), path)
+		noteCacheLoaded(path, fmt.Sprintf("%d Apple storefront title entries", len(f.Entries)))
 	}
 }
 

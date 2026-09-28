@@ -10,6 +10,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,9 +120,16 @@ func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, err
 		if ue, ok := err.(*url.Error); ok {
 			safeErr = ue.Err
 		}
-		// 失败逐条记、Warn 级:这是要看的信号,不进汇总里被平均掉(汇总仍计一次 failed)。
-		slog.Warn("api call: "+target+" FAILED", "elapsed_ms", elapsed.Milliseconds(), "err", safeErr)
-		recordAPICall(summaryKey, elapsed, true, false, time.Now())
+		if errors.Is(err, context.Canceled) {
+			// 调用方主动取消(这一轮已经选出结果、切歌、扫描被叫停)是正常收尾,不是失败:逐条只到
+			// Debug,汇总里单独计 canceled,不进 failed。
+			slog.Debug("api call: "+target+" canceled", "elapsed_ms", elapsed.Milliseconds())
+			recordCanceledAPICall(summaryKey, elapsed, time.Now())
+		} else {
+			// 失败逐条记、Warn 级:这是要看的信号,不进汇总里被平均掉(汇总仍计一次 failed)。
+			slog.Warn("api call: "+target+" FAILED", "elapsed_ms", elapsed.Milliseconds(), "err", safeErr)
+			recordAPICall(summaryKey, elapsed, true, false, time.Now())
+		}
 		// 歌词源级熔断的失败观察(见 sourcebreaker.go):只有歌词源的主机会被记,别的请求
 		// 在 lyricSourceForHost 那里直接归零。
 		lyricSourceBreakerShared.observeTraced(req.URL.Host, guardEndpointKey(req.URL), err, 0, "", tr)
@@ -160,25 +168,51 @@ func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, err
 
 // ---- 审计汇总----
 //
-// 同一 target 在一分钟窗口内的调用合成一行 Info:
+// 同一 target 在一分钟窗口内的调用合成一行:
 //
 //	api call summary target="GET ws.audioscrobbler.com/2.0/ method=user.getrecenttracks" count=12 failed=0 p50_ms=350 max_ms=800 span_s=55
 //
 // 窗口从这个 target 第一次被记开始算,满一分钟后由维护循环(logsink.go,每 30 秒)或退出前
 // (flushLogSink)结算。failed 同时计传输失败和 HTTP 4xx/5xx —— 这两种在逐条 Warn 里都能
 // 看到细节,汇总只回答"这一分钟里失败了几次"。
+//
+// 逐 target 那一行只在窗口里有失败、或最慢一次不短于 apiCallSlowMax 时落 Info,其余落 Debug
+// (log_level=debug 时可见,按接口量速率用这一档)。每次结算另写一行 Info 总计(api call rollup),
+// 按歌词源(lyricSourceForHost)或主机给出调用次数:搜一首歌要打二三十个接口,逐接口各一行
+// 的话这一类会占掉日志的一半以上。
 
 const apiCallSummaryWindow = time.Minute
 
+// apiCallSlowMax:窗口里最慢一次不短于它,这个 target 的汇总行就落 Info。
+const apiCallSlowMax = 5 * time.Second
+
 // normalizeAuditPath:把路径里像资源标识符的段抹成占位,让汇总按"接口"而不是按"某一个资源"
-// 分组。首次装机实测不抹的话:启动期给几十张封面各发一次 HEAD
-// (np.yudaotor.me/artwork/<hash>.jpg)、每个艺人查一次 MusicBrainz(/ws/2/artist/<uuid>),
-// 一个资源一行汇总,比逐次记还长。四类占位:<uuid> / <hex>(≥8 位十六进制)/ <n>(≥3 位纯数字)/
-// <id>(≥24 字符且含数字的长 token);扩展名保留(能看出是 .jpg 还是 .ttml)。版本段(v8、2.0、1)
-// 太短不会被碰。只动汇总的分组键,逐条的 Debug / Warn 行仍写真实路径 —— 排查时要知道是哪一个。
+// 分组。不抹的话一个资源一行汇总,比逐次记还长(启动期几十张封面的 HEAD、每个艺人一次
+// MusicBrainz、咪咕每首歌的歌词文件、amll 每首歌一个 ttml)。占位:
+//   - <uuid>;<hex>(≥8 位十六进制);<n>(≥3 位纯数字);
+//   - <id>:≥24 字符且含数字的长 token,或 ≥10 位、字母数字混排的 token(QQ 的 songmid 如
+//     001WYlp031x9Gz、Spotify 的 22 位 id);
+//   - <path>:连续三段以上、每段一两个字母数字的分桶目录(咪咕 /data/oss/resource/00/2c/n2/lf、
+//     mzstatic 的 /v4/30/0c/5a)整段并成一个。
+//
+// 扩展名保留(能看出是 .jpg 还是 .ttml)。版本段(v8、2.0、1)、接口名(client_search_cp、
+// fcg_query_lyric_new.fcg)不会被碰。只动汇总的分组键,逐条的 Debug / Warn 行仍写真实路径 ——
+// 排查时要知道是哪一个。
 func normalizeAuditPath(p string) string {
 	segs := strings.Split(p, "/")
-	for i, seg := range segs {
+	out := make([]string, 0, len(segs))
+	for i := 0; i < len(segs); {
+		j := i
+		for j < len(segs) && len(segs[j]) >= 1 && len(segs[j]) <= 2 && isAlnumToken(segs[j]) {
+			j++
+		}
+		if j-i >= 3 {
+			out = append(out, "<path>")
+			i = j
+			continue
+		}
+		seg := segs[i]
+		i++
 		base, ext := seg, ""
 		if dot := strings.LastIndexByte(seg, '.'); dot > 0 && len(seg)-dot <= 5 {
 			base, ext = seg[:dot], seg[dot:]
@@ -186,16 +220,29 @@ func normalizeAuditPath(p string) string {
 		switch {
 		case base == "":
 		case isUUIDToken(base):
-			segs[i] = "<uuid>" + ext
+			seg = "<uuid>" + ext
 		case len(base) >= 8 && allInSet(base, "0123456789abcdefABCDEF"):
-			segs[i] = "<hex>" + ext
+			seg = "<hex>" + ext
 		case len(base) >= 3 && allInSet(base, "0123456789"):
-			segs[i] = "<n>" + ext
+			seg = "<n>" + ext
 		case len(base) >= 24 && strings.ContainsAny(base, "0123456789"):
-			segs[i] = "<id>" + ext
+			seg = "<id>" + ext
+		case len(base) >= 10 && isAlnumToken(base) && strings.ContainsAny(base, "0123456789") &&
+			strings.IndexFunc(base, func(r rune) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }) >= 0:
+			seg = "<id>" + ext
+		}
+		out = append(out, seg)
+	}
+	return strings.Join(out, "/")
+}
+
+func isAlnumToken(s string) bool {
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return false
 		}
 	}
-	return strings.Join(segs, "/")
+	return s != ""
 }
 
 func allInSet(s, set string) bool {
@@ -231,7 +278,9 @@ type apiCallWindow struct {
 	count       int
 	failed      int
 	// notfound:窗口里应答 404 的次数。跟 failed 分开记,理由见 doHTTPTracked 里那段 提醒。
-	notfound  int
+	notfound int
+	// canceled:调用方主动取消的次数,不进 failed、不进耗时分位(没等到应答)。
+	canceled  int
 	durations []time.Duration
 }
 
@@ -243,12 +292,7 @@ var apiCallAgg = struct {
 func recordAPICall(target string, elapsed time.Duration, failed, notFound bool, now time.Time) {
 	apiCallAgg.mu.Lock()
 	defer apiCallAgg.mu.Unlock()
-	w := apiCallAgg.windows[target]
-	if w == nil {
-		w = &apiCallWindow{first: now}
-		apiCallAgg.windows[target] = w
-	}
-	w.last = now
+	w := apiCallWindowLocked(target, now)
 	w.count++
 	if failed {
 		w.failed++
@@ -257,6 +301,25 @@ func recordAPICall(target string, elapsed time.Duration, failed, notFound bool, 
 		w.notfound++
 	}
 	w.durations = append(w.durations, elapsed)
+}
+
+// recordCanceledAPICall:调用方主动取消的一次,只计 canceled。
+func recordCanceledAPICall(target string, elapsed time.Duration, now time.Time) {
+	apiCallAgg.mu.Lock()
+	defer apiCallAgg.mu.Unlock()
+	w := apiCallWindowLocked(target, now)
+	w.count++
+	w.canceled++
+}
+
+func apiCallWindowLocked(target string, now time.Time) *apiCallWindow {
+	w := apiCallAgg.windows[target]
+	if w == nil {
+		w = &apiCallWindow{first: now}
+		apiCallAgg.windows[target] = w
+	}
+	w.last = now
+	return w
 }
 
 // flushAPICallSummaries:把开窗满一分钟的 target 各写一行汇总;force = 不管满没满全部结算
@@ -276,23 +339,81 @@ func flushAPICallSummaries(now time.Time, force bool) {
 		delete(apiCallAgg.windows, target)
 	}
 	apiCallAgg.mu.Unlock()
+	if len(ready) == 0 {
+		return
+	}
 	sort.Slice(ready, func(i, j int) bool { return ready[i].target < ready[j].target })
+	var calls, failed, notfound, canceled int
+	bySource := map[string]int{}
 	for _, d := range ready {
-		sort.Slice(d.w.durations, func(i, j int) bool { return d.w.durations[i] < d.w.durations[j] })
-		p50 := d.w.durations[len(d.w.durations)/2]
-		max := d.w.durations[len(d.w.durations)-1]
-		// notfound 只在非零时出现 —— 绝大多数目标一个 404 都没有,给每行都挂一个
-		// notfound=0 是纯粹的体积浪费(汇总行本身就占日志四成)。
+		calls += d.w.count
+		failed += d.w.failed
+		notfound += d.w.notfound
+		canceled += d.w.canceled
+		bySource[apiCallRollupGroup(d.target)] += d.w.count
+		// notfound / canceled 只在非零时出现 —— 绝大多数目标一个都没有,给每行都挂一个恒为 0 的字段
+		// 是纯粹的体积浪费。
 		attrs := []any{"target", d.target, "count", d.w.count, "failed", d.w.failed}
 		if d.w.notfound > 0 {
 			attrs = append(attrs, "notfound", d.w.notfound)
 		}
-		attrs = append(attrs,
-			"p50_ms", p50.Milliseconds(),
-			"max_ms", max.Milliseconds(),
-			"span_s", int(d.w.last.Sub(d.w.first).Round(time.Second).Seconds()))
-		slog.Info("api call summary", attrs...)
+		if d.w.canceled > 0 {
+			attrs = append(attrs, "canceled", d.w.canceled)
+		}
+		var max time.Duration
+		if n := len(d.w.durations); n > 0 {
+			sort.Slice(d.w.durations, func(i, j int) bool { return d.w.durations[i] < d.w.durations[j] })
+			max = d.w.durations[n-1]
+			attrs = append(attrs, "p50_ms", d.w.durations[n/2].Milliseconds(), "max_ms", max.Milliseconds())
+		}
+		attrs = append(attrs, "span_s", int(d.w.last.Sub(d.w.first).Round(time.Second).Seconds()))
+		if d.w.failed > 0 || max >= apiCallSlowMax {
+			slog.Info("api call summary", attrs...)
+		} else {
+			slog.Debug("api call summary", attrs...)
+		}
 	}
+	groups := make([]string, 0, len(bySource))
+	for g := range bySource {
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if bySource[groups[i]] != bySource[groups[j]] {
+			return bySource[groups[i]] > bySource[groups[j]]
+		}
+		return groups[i] < groups[j]
+	})
+	parts := make([]string, len(groups))
+	for i, g := range groups {
+		parts[i] = g + "=" + strconv.Itoa(bySource[g])
+	}
+	attrs := []any{"targets", len(ready), "calls", calls, "failed", failed}
+	if notfound > 0 {
+		attrs = append(attrs, "notfound", notfound)
+	}
+	if canceled > 0 {
+		attrs = append(attrs, "canceled", canceled)
+	}
+	slog.Info("api call rollup", append(attrs, "by_source", strings.Join(parts, " "))...)
+}
+
+// apiCallRollupGroup:汇总总计里的分组名。歌词源按源名合并(QQ 的五六个主机算一个 qq),
+// 其余按主机。target 形如 "GET host/path"。
+func apiCallRollupGroup(target string) string {
+	host := target
+	if sp := strings.IndexByte(host, ' '); sp >= 0 {
+		host = host[sp+1:]
+	}
+	if sl := strings.IndexByte(host, '/'); sl >= 0 {
+		host = host[:sl]
+	}
+	if sp := strings.IndexByte(host, ' '); sp >= 0 {
+		host = host[:sp]
+	}
+	if src := lyricSourceForHost(host); src != "" {
+		return src
+	}
+	return host
 }
 
 // networkLooksDown 判断"这一轮联网搜索期间,是不是网络本身就不通"。至少尝试过 3 次

@@ -334,7 +334,7 @@ func startLfmRetryLoop(ctx context.Context) {
 func disableLastfmOnFatal(s *lastfmScrobbler, err error, now time.Time) {
 	var apiErr *lastfmAPIError
 	if errors.As(err, &apiErr) && s.shouldDisable(apiErr, now) && s.dead.CompareAndSwap(false, true) {
-		log.Printf("lastfm mirror DISABLED: %v (fatal credential error; reconnect the account in Lyrimuse settings to resume)", apiErr)
+		warnf("lastfm mirror DISABLED: %v (fatal credential error; reconnect the account in Lyrimuse settings to resume)", apiErr)
 		writeLastfmMirrorStatus(apiErr)
 	}
 }

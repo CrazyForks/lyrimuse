@@ -62,7 +62,7 @@ func markCollectorNetworkDown() {
 		return
 	}
 	collectorStatusNetworkDown = true
-	log.Printf("collector status: network down, every lyric source failed this round")
+	warnf("collector status: network down, every lyric source failed this round")
 }
 
 // clearCollectorNetworkDown 在任何一次成功的解析之后调用 —— 有结果就说明网络是通的。
@@ -75,7 +75,7 @@ func clearCollectorNetworkDown() {
 	// 不看 collectorStatusNetworkDown 这个内存标志就直接删:进程刚起来时标志是 false,
 	// 而盘上可能还留着上一次运行写下的文件。
 	if err := os.Remove(collectorStatusPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("collector status: clear failed: %v", err)
+		warnf("collector status: clear failed: %v", err)
 	}
 	if collectorStatusNetworkDown {
 		log.Printf("collector status: network restored")

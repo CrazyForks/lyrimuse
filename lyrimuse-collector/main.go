@@ -283,6 +283,8 @@ func main() {
 	loadEnrichCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-enrich-cache.json"))
 	// 按歌手(不是按曲目)缓存的 MusicBrainz 中文别名查询结果,同目录下单独一份文件——
 	// 见 musicbrainz.go 顶部注释。
+	// 下面这一串辅助缓存载入完合成一行日志,见 cacheload.go。
+	beginCacheLoadBatch(filepath.Dir(*cfgPath))
 	loadArtistAliasCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-artist-alias-cache.json"))
 	// 用户校准过歌词时间轴的曲目名单(App 侧写、这边只读),见 lyricspins.go。刻意不在
 	// 这里读一次就完 —— lyricsPinned 每次按 mtime 自己判断要不要重读。
@@ -307,6 +309,7 @@ func main() {
 	loadPlatformPagesCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-platform-pages-cache.json"))
 	// 「歌手来自哪里」的汇总与歌手 mbid → 国家代码,见 artistregions.go。
 	loadArtistRegionsCache(filepath.Join(filepath.Dir(*cfgPath), clientName+"-artist-regions.json"))
+	endCacheLoadBatch()
 	// 启动期存量迁移的「已完成水位」(startupmigration.go)。必须在下面那串迁移之前载入。
 	loadMigrationState(filepath.Join(filepath.Dir(*cfgPath), clientName+"-migrations.json"))
 	// 歌词部分(lyrics/lyrics_tr/lyrics_roma/lyrics_yrc/lyrics_source/manual_lyrics)以

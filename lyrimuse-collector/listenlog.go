@@ -151,7 +151,7 @@ func appendListenLogLine(line listenLogLine) error {
 	}
 	data, err := json.Marshal(line)
 	if err != nil {
-		log.Printf("listen log: marshal failed: %v", err)
+		warnf("listen log: marshal failed: %v", err)
 		return err
 	}
 	// collector 全仓库只有 lyricsexport.go 建过目录,而 loadConfig 容忍 config.json

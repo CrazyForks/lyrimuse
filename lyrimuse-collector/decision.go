@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -303,8 +304,12 @@ func logLyricsDecision(d *lyricsDecision, picked *scoredLyricCandidateResult) {
 	if picked != nil {
 		winner, score = picked.Source, picked.Score
 	}
+	cur := enrichPlayingKey.Load()
+	playing := cur != nil && *cur == enrichKey(d.QueryArtist, d.QueryTitle, d.QueryAlbum)
 	attrs := []any{
 		"path", d.Path,
+		// playing:评估的是不是此刻在播的那首。预取、补空、全量扫库的决策都是 false。
+		"playing", playing,
 		"artist", d.QueryArtist,
 		"title", d.QueryTitle,
 		"album", d.QueryAlbum,
@@ -321,5 +326,11 @@ func logLyricsDecision(d *lyricsDecision, picked *scoredLyricCandidateResult) {
 	if d.CorrectedTitle != "" {
 		attrs = append(attrs, "corrected_title", d.CorrectedTitle)
 	}
-	slog.Info("lyrics decision", append(attrs, "candidates", sb.String())...)
+	// 没在播的歌的重新打分几乎都来自全量扫库,一轮上千条;明细已经存进条目(「解析决策」面板),
+	// 换了源的另有一行 "lyrics rescore: … -> …"。这一类落 Debug。
+	level := slog.LevelInfo
+	if d.Path == lyricsDecisionPathRescore && !playing {
+		level = slog.LevelDebug
+	}
+	slog.Log(context.Background(), level, "lyrics decision", append(attrs, "candidates", sb.String())...)
 }

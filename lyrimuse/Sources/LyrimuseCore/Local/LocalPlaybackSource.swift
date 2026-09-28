@@ -1032,7 +1032,7 @@ public final class LocalPlaybackSource: ObservableObject {
             let legacy = env.defaults.double(forKey: Self.legacyProbeLeadDefaultsKey)
             if table.isEmpty, let route = env.outputRoute() {
                 table[route.uid] = legacy
-                logger.notice("probe lead: migrated legacy value \(legacy, format: .fixed(precision: 3)) to device \(route.name, privacy: .public)")
+                logger.notice("probe lead: migrated legacy value \(legacy, format: .fixed(precision: 3)) to device \(route.name, privacy: .private)")
             }
             env.defaults.removeObject(forKey: Self.legacyProbeLeadDefaultsKey)
             persistProbeLeadTable(table)
@@ -1150,7 +1150,7 @@ public final class LocalPlaybackSource: ObservableObject {
         let prior = probeLeadByDevice[route.uid]
         let next = Self.learnedProbeLead(current: prior ?? Self.probeLeadPrior(for: route.transport),
                                          residual: residual, hasPrior: prior != nil)
-        logger.notice("probe lead learned: residual=\(residual, format: .fixed(precision: 3)) device=\(route.name, privacy: .public) (\(route.transport.rawValue, privacy: .public)) lead \(self.probeLeadSecs, format: .fixed(precision: 3)) -> \(next, format: .fixed(precision: 3))")
+        logger.notice("probe lead learned: residual=\(residual, format: .fixed(precision: 3)) device=\(route.name, privacy: .private) (\(route.transport.rawValue, privacy: .public)) lead \(self.probeLeadSecs, format: .fixed(precision: 3)) -> \(next, format: .fixed(precision: 3))")
         guard prior != next else { return }
         probeLeadByDevice[route.uid] = next
         persistProbeLeadTable(probeLeadByDevice)
@@ -1163,7 +1163,7 @@ public final class LocalPlaybackSource: ObservableObject {
         guard route != currentOutputRoute else { return }
         let before = probeLeadSecs
         currentOutputRoute = route
-        logger.notice("output route changed: \(route?.name ?? "-", privacy: .public) (\(route?.transport.rawValue ?? "-", privacy: .public)) probe lead \(before, format: .fixed(precision: 3)) -> \(self.probeLeadSecs, format: .fixed(precision: 3))")
+        logger.notice("output route changed: \(route?.name ?? "-", privacy: .private) (\(route?.transport.rawValue ?? "-", privacy: .public)) probe lead \(before, format: .fixed(precision: 3)) -> \(self.probeLeadSecs, format: .fixed(precision: 3))")
         if posBiasFromProbe, posWasPlaying,
            lastSnapshot?.bundleIdentifier == PlaybackPlayer.spotify.bundleIdentifier {
             env.spotifyProbeRequestConfirmation(posTrackingKey)

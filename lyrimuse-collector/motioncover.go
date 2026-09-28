@@ -132,7 +132,7 @@ func loadMotionCoverCache(path string) {
 				withMotion++
 			}
 		}
-		log.Printf("cache: loaded %d motion-cover entries (%d with video) from %s", len(m), withMotion, path)
+		noteCacheLoaded(path, fmt.Sprintf("%d motion-cover entries (%d with video)", len(m), withMotion))
 	}
 }
 
@@ -189,7 +189,7 @@ func motionCoverFor(collectionID int64) (motionCover, bool) {
 		log.Printf("motion-cover: album %d has no fetchable page: %v", collectionID, err)
 	case err != nil:
 		// 请求失败**不写缓存**:跟"这张没有"是两件事,下次还该再试。
-		log.Printf("motion-cover: album %d fetch failed: %v", collectionID, err)
+		infoFailf("motion-cover: album %d fetch failed: %v", collectionID, err)
 		return motionCover{}, false
 	default:
 		var res motionParse

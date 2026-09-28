@@ -319,7 +319,7 @@ func parseScrobbleEntries(raw json.RawMessage) []scrobbleEntry {
 	if err := json.Unmarshal(raw, &one); err == nil {
 		return []scrobbleEntry{one}
 	}
-	log.Printf("backfill: could not parse scrobble entries: %s", truncateForLog(raw))
+	warnf("backfill: could not parse scrobble entries: %s", truncateForLog(raw))
 	return nil
 }
 
@@ -450,7 +450,7 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 			definitelyNotStored := backfillBatchNeverStored(err)
 			if definitelyNotStored {
 				out.AbortedReason = err.Error()
-				log.Printf("backfill: aborted, %d listen(s) stay pending (server refused, nothing stored): %v", len(batch), err)
+				warnf("backfill: aborted, %d listen(s) stay pending (server refused, nothing stored): %v", len(batch), err)
 				return out
 			}
 			// 状态未知(网络错误/超时/服务端说自己暂时不可用/回执畸形)→ 可能已落库,
@@ -469,7 +469,7 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 			case res.accepted[it.UTS]:
 				if err := markBackfilledChecked(it.UTS); err != nil {
 					out.AbortedReason = "listen log write failed: " + err.Error()
-					log.Printf("backfill: aborted, accepted by Last.fm but the receipt could not be written: %v", err)
+					warnf("backfill: aborted, accepted by Last.fm but the receipt could not be written: %v", err)
 					return out
 				}
 				out.Accepted++
@@ -483,7 +483,7 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 				// 请求成功了,但这条的回执没回来 —— join 不上就当状态未知。
 				if err := markQuarantinedChecked(it.UTS); err != nil {
 					out.AbortedReason = "listen log write failed: " + err.Error()
-					log.Printf("backfill: aborted, quarantine mark could not be written: %v", err)
+					warnf("backfill: aborted, quarantine mark could not be written: %v", err)
 					return out
 				}
 				out.Quarantined++

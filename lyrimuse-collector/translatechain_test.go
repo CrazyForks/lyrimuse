@@ -64,6 +64,9 @@ func TestMixedScriptSongTranslatesEveryScript(t *testing.T) {
 	if len(batches) != 2 {
 		t.Fatalf("该按文字系统分两批送,实际 %d 批: %q", len(batches), batches)
 	}
+	if res.engines != "on-device=5" {
+		t.Errorf("engines = %q", res.engines)
+	}
 }
 
 // 端上翻不了的那一组(比如语言包没装)交给 Google 补,端上已经翻好的那组不再送出去。
@@ -102,6 +105,9 @@ func TestOnDeviceFailedGroupFilledByGoogle(t *testing.T) {
 	}
 	if len(sent) != 2 {
 		t.Fatalf("只该把端上没翻成的两行英文送 Google,实际送了 %q", sent)
+	}
+	if res.engines != "on-device=3 google=2" {
+		t.Errorf("engines = %q", res.engines)
 	}
 }
 
@@ -143,6 +149,9 @@ func TestMyMemoryOnlyFillsWhatIsStillMissing(t *testing.T) {
 	}
 	if len(asked) != 4 {
 		t.Fatalf("MyMemory 只该收到还没翻出来的 4 行,实际 %q", asked)
+	}
+	if res.engines != "google=1 mymemory=4" {
+		t.Errorf("engines = %q", res.engines)
 	}
 }
 

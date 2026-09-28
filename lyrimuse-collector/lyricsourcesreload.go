@@ -103,7 +103,7 @@ func readLyricSources(path string) map[string]bool {
 		SodaLyrics       *bool    `json:"soda_lyrics"`
 	}
 	if err := json.Unmarshal(data, &f); err != nil {
-		log.Printf("lyrics sources: cannot parse %s, keeping the set loaded at startup: %v", path, err)
+		warnf("lyrics sources: cannot parse %s, keeping the set loaded at startup: %v", path, err)
 		return nil
 	}
 	return resolveLyricsSources(f.LyricsSources, f.AMLLLyrics, f.LyricFindLyrics, f.KuwoLyrics, f.MiguLyrics, f.DeezerLyrics, f.AppleMusicLyrics, f.SodaLyrics)

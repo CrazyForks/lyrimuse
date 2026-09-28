@@ -293,7 +293,7 @@ func (c *lastfmCatalogMatcher) resolve(ctx context.Context, artist, track string
 	if err != nil {
 		// 查不动(限流/网络/Last.fm 抽风)时不缓存也不改写:下次再判,别把一次偶发失败
 		// 变成一个永久的错误决定。
-		log.Printf("lastfm catalog: lookup %q / %q failed: %v (keeping as-is, not cached)", trimmedArtist, trimmedTrack, err)
+		infoFailf("lastfm catalog: lookup %q / %q failed: %v (keeping as-is, not cached)", trimmedArtist, trimmedTrack, err)
 		return artist, track, false
 	}
 	if d.Verdict == verdictDefer && durationSecs <= 0 {

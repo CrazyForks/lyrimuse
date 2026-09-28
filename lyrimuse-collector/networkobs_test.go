@@ -229,18 +229,19 @@ func TestAPICallSummary_AggregatesPerTargetPerMinute(t *testing.T) {
 	if strings.Contains(out, "notfound") {
 		t.Fatalf("窗口里没有 404,汇总行不该出现 notfound=,got: %q", out)
 	}
+	if !strings.Contains(out, `api call rollup targets=1 calls=3 failed=1 by_source="example.com=3"`) {
+		t.Fatalf("每次结算要有一行总计,got: %q", out)
+	}
 	buf.Reset()
 	flushAPICallSummaries(t0.Add(61*time.Second), true)
-	if !strings.Contains(buf.String(), `target="POST example.com/b"`) || !strings.Contains(buf.String(), "count=1") {
-		t.Fatalf("force flush must summarize the remaining window, got: %q", buf.String())
+	// b 没有失败、也不慢:逐 target 那一行落 Debug,Info 这一档只剩总计。
+	if strings.Contains(buf.String(), `target="POST example.com/b"`) {
+		t.Fatalf("没失败、不慢的 target 不该落 Info,got: %q", buf.String())
 	}
 	// 404 既要单独现列,又不能混进 failed —— 混进去的话 lrclib 那类源的失败率会常年虚高
 	// 到 60%+,真故障(503)反而看不出来。
-	if !strings.Contains(buf.String(), "notfound=1") {
-		t.Fatalf("404 应在汇总里单独记成 notfound=1,got: %q", buf.String())
-	}
-	if !strings.Contains(buf.String(), "failed=0") {
-		t.Fatalf("404 不该计进 failed,got: %q", buf.String())
+	if !strings.Contains(buf.String(), "calls=1 failed=0 notfound=1") {
+		t.Fatalf("404 应在总计里单独记成 notfound=1、不计进 failed,got: %q", buf.String())
 	}
 	buf.Reset()
 	flushAPICallSummaries(t0.Add(time.Hour), true)
@@ -259,8 +260,16 @@ func TestNormalizeAuditPath(t *testing.T) {
 		"/1/submit-listens":                    "/1/submit-listens",
 		"/api/search/get":                      "/api/search/get",
 		"/lyrics/1234567/lrc":                  "/lyrics/<n>/lrc",
-		"/dl/ABCDEFGHIJKLMNOPQRSTUVWX0123456789/song.ttml": "/dl/<id>/song.ttml",
-		"": "",
+		"/dl/ABCDEFGHIJKLMNOPQRSTUVWX0123456789/song.ttml":          "/dl/<id>/song.ttml",
+		"/amll-dev/amll-ttml-db/main/qq-lyrics/001WYlp031x9Gz.ttml": "/amll-dev/amll-ttml-db/main/qq-lyrics/<id>.ttml",
+		"/embed/album/4ggV0IaczfDFjVSwBM8yvi":                       "/embed/album/<id>",
+		"/data/oss/resource/00/2c/n2/lf":                            "/data/oss/resource/<path>",
+		"/image/thumb/Music221/v4/4d/1e/25/x.jpg":                   "/image/thumb/Music221/<path>/x.jpg",
+		"/ws/2/artist/":                           "/ws/2/artist/",
+		"/soso/fcgi-bin/client_search_cp":         "/soso/fcgi-bin/client_search_cp",
+		"/lyric/fcgi-bin/fcg_query_lyric_new.fcg": "/lyric/fcgi-bin/fcg_query_lyric_new.fcg",
+		"/MIGUM3.0/v1.0/content/search_all.do":    "/MIGUM3.0/v1.0/content/search_all.do",
+		"":                                        "",
 	}
 	for in, want := range cases {
 		if got := normalizeAuditPath(in); got != want {
@@ -391,22 +400,25 @@ func TestDoHTTPTracked404IsNotAFailure(t *testing.T) {
 
 	buf.Reset()
 	flushAPICallSummaries(time.Now(), true)
-	var gone, broken string
+	var gone, broken, rollup string
 	for _, line := range strings.Split(buf.String(), "\n") {
 		switch {
 		case strings.Contains(line, "/gone"):
 			gone = line
 		case strings.Contains(line, "/broken"):
 			broken = line
+		case strings.Contains(line, "api call rollup"):
+			rollup = line
 		}
 	}
-	if gone == "" || broken == "" {
-		t.Fatalf("两个目标都该有汇总行,got: %q", buf.String())
+	// 只有 404 的 target 没有失败,逐 target 那一行落 Debug;总计里照样看得到 notfound。
+	if gone != "" || broken == "" || rollup == "" {
+		t.Fatalf("500 那个 target 该有 Info 汇总行、404 那个不该有,总计要有,got: %q", buf.String())
 	}
 	// 汇总口径:404 进 notfound、不进 failed。混进去的话 lrclib 那类源的失败率会常年
 	// 虚高到 60%+,真故障(503)反而挑不出来。
-	if !strings.Contains(gone, "failed=0") || !strings.Contains(gone, "notfound=1") {
-		t.Errorf("404 该记成 failed=0 notfound=1,got: %q", gone)
+	if !strings.Contains(rollup, "calls=2 failed=1 notfound=1") {
+		t.Errorf("404 该记成 notfound、不进 failed,got: %q", rollup)
 	}
 	if !strings.Contains(broken, "failed=1") {
 		t.Errorf("500 该记成 failed=1,got: %q", broken)
@@ -414,4 +426,45 @@ func TestDoHTTPTracked404IsNotAFailure(t *testing.T) {
 	if strings.Contains(broken, "notfound") {
 		t.Errorf("500 不是 404,不该出现 notfound=,got: %q", broken)
 	}
+}
+
+// 调用方主动取消:不逐条记 WARN、不进 failed,汇总单独计 canceled;没有应答时长,不出分位。
+// 总计按歌词源合并主机(QQ 的几个主机算一个 qq)。
+func TestAPICallSummary_CanceledAndRollupBySource(t *testing.T) {
+	apiCallAgg.mu.Lock()
+	apiCallAgg.windows = map[string]*apiCallWindow{}
+	apiCallAgg.mu.Unlock()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	t0 := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	recordCanceledAPICall("GET c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg", time.Second, t0)
+	recordAPICall("POST u.y.qq.com/cgi-bin/musicu.fcg", 6*time.Second, false, false, t0)
+	recordAPICall("GET api.example.org/x", time.Millisecond, false, false, t0)
+	flushAPICallSummaries(t0.Add(61*time.Second), false)
+	out := buf.String()
+	if strings.Contains(out, "smartbox_new") {
+		t.Fatalf("只有取消的 target 不该落 Info,got: %q", out)
+	}
+	if !strings.Contains(out, `target="POST u.y.qq.com/cgi-bin/musicu.fcg"`) || !strings.Contains(out, "max_ms=6000") {
+		t.Fatalf("最慢一次不短于 5 秒的 target 要落 Info,got: %q", out)
+	}
+	if !strings.Contains(out, `targets=3 calls=3 failed=0 canceled=1 by_source="qq=2 api.example.org=1"`) {
+		t.Fatalf("总计里取消单独计数、QQ 的主机合并成 qq,got: %q", out)
+	}
+
+	// doHTTPTracked 端到端:ctx 已取消的请求不逐条记 WARN。
+	buf.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:1/canceled-probe", nil)
+	if _, err := doHTTPTracked(http.DefaultClient, req); err == nil {
+		t.Fatal("已取消的请求应该返回错误")
+	}
+	if strings.Contains(buf.String(), "canceled-probe") {
+		t.Fatalf("主动取消不该逐条记 WARN,got: %q", buf.String())
+	}
+	flushAPICallSummaries(time.Now(), true)
 }

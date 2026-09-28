@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -124,7 +123,7 @@ func readLastfmExcludedBundles(path string) map[string]bool {
 		LastfmExcludedBundles []string `json:"lastfm_excluded_bundles"`
 	}
 	if err := json.Unmarshal(data, &f); err != nil {
-		log.Printf("lastfm exclude: cannot parse %s, treating as empty: %v", path, err)
+		warnf("lastfm exclude: cannot parse %s, treating as empty: %v", path, err)
 		return nil
 	}
 	return resolveLastfmExcludedBundles(f.LastfmExcludedBundles)

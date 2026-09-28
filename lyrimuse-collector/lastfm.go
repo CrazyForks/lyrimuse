@@ -527,7 +527,7 @@ func mirrorAsync(s *lastfmScrobbler, what string, call func(ctx context.Context)
 			// 只有第一个发现者负责收尾:打一条(且只有一条)显眼日志 + 落状态文件给
 			// App 读。之后 mirrorAsync 在入口处直接短路,不再刷屏、不再白打请求。
 			if s.dead.CompareAndSwap(false, true) {
-				log.Printf("lastfm mirror DISABLED: %v (fatal credential error; reconnect the account in Lyrimuse settings to resume)", apiErr)
+				warnf("lastfm mirror DISABLED: %v (fatal credential error; reconnect the account in Lyrimuse settings to resume)", apiErr)
 				writeLastfmMirrorStatus(apiErr)
 			}
 			// 凭据判死 = 这一条确定没写进去,跟入口短路那条同样要留痕,重新授权后回填能补回来。
@@ -545,7 +545,7 @@ func mirrorAsync(s *lastfmScrobbler, what string, call func(ctx context.Context)
 			}
 			return
 		}
-		log.Printf("lastfm mirror %s failed: %v", what, err)
+		warnf("lastfm mirror %s failed: %v", what, err)
 		if onFail != nil {
 			onFail(err)
 		}
@@ -616,7 +616,7 @@ func lastfmRecent(ctx context.Context, user, apiKey string) (page lastfmRecentPa
 	}
 	resp, err := doHTTPTracked(lastfmReadClient, req)
 	if err != nil {
-		log.Printf("lastfmRecent: request failed: %v", err)
+		infoFailf("lastfmRecent: request failed: %v", err)
 		return lastfmRecentPage{}, false
 	}
 	defer resp.Body.Close()

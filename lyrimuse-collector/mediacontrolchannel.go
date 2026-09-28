@@ -107,7 +107,7 @@ func maybeTestMediaControlChannel(force bool) {
 		mediaControlChannelMu.Unlock()
 		switch {
 		case err != nil && !was:
-			log.Printf("media-control channel test failed (%v); asking Apple Music / Spotify directly until it recovers", err)
+			warnf("media-control channel test failed (%v); asking Apple Music / Spotify directly until it recovers", err)
 		case err == nil && was:
 			log.Printf("media-control channel test passed again")
 		}

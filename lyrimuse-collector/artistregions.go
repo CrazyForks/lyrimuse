@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	neturl "net/url"
 	"os"
@@ -102,7 +103,7 @@ func loadArtistRegionsCache(path string) {
 	artistRegionsMu.Lock()
 	artistRegionsCache = f
 	artistRegionsMu.Unlock()
-	slog.Info("cache: loaded artist regions", "artists", len(f.Artists))
+	noteCacheLoaded(path, fmt.Sprintf("artist regions for %d artists", len(f.Artists)))
 }
 
 func saveArtistRegionsCache() {

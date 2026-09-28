@@ -135,7 +135,7 @@ func (t *proxyFallbackTransport) RoundTrip(req *http.Request) (*http.Response, e
 		// 的那条路怎么了),代理那次的错在返回值里是拿不到的 —— 不在这里记一行,"兜底为什么
 		// 也没兜住"就彻底不可观测。装机验证时正是缺了它,才没法一眼看出第一首
 		// 探测曲的代理那半边是超时还是被代理拒了。
-		log.Printf("proxy: %s direct failed (%v, %s), then failed via system proxy %s too (%v, %s)",
+		warnf("proxy: %s direct failed (%v, %s), then failed via system proxy %s too (%v, %s)",
 			host, directErr, directElapsed.Round(time.Millisecond),
 			proxy.Host, proxyErr, time.Since(proxyStart).Round(time.Millisecond))
 		return nil, directErr

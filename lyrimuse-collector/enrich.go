@@ -2280,16 +2280,28 @@ var deviceCoverSettleDelays = []time.Duration{3 * time.Second, 5 * time.Second, 
 // 换歌之后这个 goroutine 不会往上一首的记录里写东西:每一档都完整走一遍
 // deviceCoverUpgradePass,那里面的 fetchNowPlayingArtwork(核对此刻在播的就是这首歌)和
 // 写入前重读条目两道守卫各自都拦得住。
+//
+// 整张表跑完条目还不是设备封面(播放器一直没报图、报的是占位图、或报的是别的歌)时记一行,
+// 说明这首为什么停在网络封面上。
 func settleDeviceCover(ctx context.Context, key, artist, title, album, bundleID string) {
+	var waited time.Duration
 	for _, d := range deviceCoverSettleDelays {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(d):
 		}
+		waited += d
 		if deviceCoverUpgradePass(ctx, key, artist, title, album, bundleID) {
 			return
 		}
+	}
+	enrichMu.Lock()
+	e, ok := enrichCache[key]
+	enrichMu.Unlock()
+	if ok && e.CoverSource != "device" {
+		log.Printf("device artwork: no usable artwork from %s for %q within %s, keeping the %q cover",
+			bundleID, key, waited, e.CoverSource)
 	}
 }
 

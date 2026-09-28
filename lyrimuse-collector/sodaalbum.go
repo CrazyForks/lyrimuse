@@ -53,7 +53,7 @@ func sodaAlbumTracks(artist, title, album string) ([]albumTrack, bool) {
 	defer cancel()
 	page, err := sodaFetchAlbumPage(ctx, albumID)
 	if err != nil {
-		log.Printf("album prefetch: soda album %s page failed: %v", albumID, err)
+		infoFailf("album prefetch: soda album %s page failed: %v", albumID, err)
 		return nil, false
 	}
 	tracks := sodaParseAlbumPage(page, albumID)
