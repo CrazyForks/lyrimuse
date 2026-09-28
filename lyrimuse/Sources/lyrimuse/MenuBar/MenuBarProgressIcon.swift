@@ -47,9 +47,10 @@ enum MenuBarProgressIcon {
         MenuBarIconStyle.cachedImage(for: style).size
     }
 
-    /// 染好色的一张位图。
+    /// 染好色的一枚图标。
     struct Prepared {
-        let cg: CGImage
+        /// 把图标画进图层的上下文(`MenuBarDrawnLayer.painter`),理由见那个类型。
+        let paint: (CGContext) -> Void
         /// 像素/点比例,图层的 `contentsScale` 要用它,不能猜。
         let scale: CGFloat
         let size: CGSize
@@ -71,23 +72,20 @@ enum MenuBarProgressIcon {
     static func tinted(style: MenuBarIconStyle, color: NSColor, scale: CGFloat) -> Prepared? {
         let image = MenuBarIconStyle.cachedImage(for: style)
         let size = image.size
-        let pxW = Int((size.width * scale).rounded())
-        let pxH = Int((size.height * scale).rounded())
-        guard pxW > 0, pxH > 0,
-              let rep = NSBitmapImageRep(
-                bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
-                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-        else { return nil }
-        // rep 的**点**尺寸(像素尺寸已经由上面的 pxW/pxH 定了),不设的话画出来只占左下角。
-        rep.size = size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(origin: .zero, size: size))
-        color.set()
-        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
-        NSGraphicsContext.restoreGraphicsState()
-        guard let cg = rep.cgImage else { return nil }
-        return Prepared(cg: cg, scale: scale, size: size)
+        guard Int((size.width * scale).rounded()) > 0, Int((size.height * scale).rounded()) > 0 else { return nil }
+        // 动态色在这里解析成定值,理由同 `MenuBarMarqueeRenderer.prepare`。
+        let resolved = NSColor(cgColor: color.cgColor) ?? color
+        let paint: (CGContext) -> Void = { ctx in
+            // 图层的上下文里还有别的内容时 .sourceAtop 会连它一起染;先开一层透明层,只染这枚图标。
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            image.draw(in: NSRect(origin: .zero, size: size))
+            resolved.set()
+            NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
+            NSGraphicsContext.restoreGraphicsState()
+            ctx.endTransparencyLayer()
+        }
+        return Prepared(paint: paint, scale: scale, size: size)
     }
 }

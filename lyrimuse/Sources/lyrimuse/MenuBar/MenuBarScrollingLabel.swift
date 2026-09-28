@@ -36,16 +36,16 @@ import SwiftUI
 //     ├ clipLayer   (masksToBounds,尺寸/位置 = NSStatusBarButton 画 image 的那一块)
 //     │    └ contentLayer  (滚动动画动的是它的 position.x)
 //     │         ├ baseClipLayer  (masksToBounds,只露出**未唱**区 [边界, 句尾])
-//     │         │    └ textLayer      (contents = 整句长图,基础色)
+//     │         │    └ textLayer      (MenuBarDrawnLayer,现画整句,基础色)
 //     │         └ fillClipLayer  (masksToBounds,只露出**已唱**区 [0, 边界])
-//     │              └ fillTextLayer (contents = 同一句的强调色长图)
+//     │              └ fillTextLayer (同一句的强调色版)
 //     └ iconHostLayer (歌词旁那枚带播放进度的图标,;关掉时整层 isHidden)
 //          ├ iconBaseClipLayer (masksToBounds,只露出**还没放到**的那截 [边界, 顶])
-//          │    └ iconBaseLayer (contents = 图标模板图,基础色)
+//          │    └ iconBaseLayer (图标模板图,基础色)
 //          └ iconFillClipLayer (masksToBounds,只露出**已经放过**的那截 [底, 边界])
-//               └ iconFillLayer (contents = 同一枚图标的强调色版)
+//               └ iconFillLayer (同一枚图标的强调色版)
 //     └ secondaryClipLayer (masksToBounds,副行那一格,双排;单行时 isHidden;装不下时 mask 尾部渐隐)
-//          └ secondaryTextLayer (contents = 副行长图,**不滚**;opacity 按档位压淡)
+//          └ secondaryTextLayer (副行,**不滚**;opacity 按档位压淡)
 //
 // 图标那一支**挂在 self.layer 上、不挂在 clipLayer/contentLayer 里** —— 它不跟着歌词滚,
 // 也不该被歌词那一格的裁剪窗切掉;它跟歌词是并排的两块,只在 layout() 里一起排位。
@@ -84,16 +84,16 @@ final class MenuBarScrollingLabel: NSView {
     private let clipLayer = CALayer()
     private let contentLayer = CALayer()
     private let baseClipLayer = CALayer()
-    private let textLayer = CALayer()
+    private let textLayer = MenuBarDrawnLayer()
     private let fillClipLayer = CALayer()
-    private let fillTextLayer = CALayer()
+    private let fillTextLayer = MenuBarDrawnLayer()
     private let iconHostLayer = CALayer()
     private let iconBaseClipLayer = CALayer()
-    private let iconBaseLayer = CALayer()
+    private let iconBaseLayer = MenuBarDrawnLayer()
     private let iconFillClipLayer = CALayer()
-    private let iconFillLayer = CALayer()
+    private let iconFillLayer = MenuBarDrawnLayer()
     private let secondaryClipLayer = CALayer()
-    private let secondaryTextLayer = CALayer()
+    private let secondaryTextLayer = MenuBarDrawnLayer()
     /// 前奏/间奏那三颗呼吸圆点。**挂在 `contentLayer` 里**,跟(这一档里是空白的)文字长图
     /// 同一个坐标系 —— 静止落位、对齐方式、槽宽让位这些都由既有的文字那条路算好了,圆点
     /// 只要贴着那张空白位图画就天然落在对的地方,不用再写一套摆位。
@@ -462,14 +462,14 @@ final class MenuBarScrollingLabel: NSView {
         preparedSecondary = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        textLayer.contents = nil
-        fillTextLayer.contents = nil
+        textLayer.painter = nil
+        fillTextLayer.painter = nil
         fillClipLayer.isHidden = true
         gapDotsHostLayer.isHidden = true
-        secondaryTextLayer.contents = nil
+        secondaryTextLayer.painter = nil
         secondaryClipLayer.isHidden = true
-        iconBaseLayer.contents = nil
-        iconFillLayer.contents = nil
+        iconBaseLayer.painter = nil
+        iconFillLayer.painter = nil
         iconHostLayer.isHidden = true
         CATransaction.commit()
         isHidden = true
@@ -500,12 +500,12 @@ final class MenuBarScrollingLabel: NSView {
         preparedSecondary = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        textLayer.contents = nil
-        fillTextLayer.contents = nil
+        textLayer.painter = nil
+        fillTextLayer.painter = nil
         fillClipLayer.isHidden = true
         gapDotsHostLayer.isHidden = true
         // 副行是歌词的一部分,跟主行一起收(图标留着)。
-        secondaryTextLayer.contents = nil
+        secondaryTextLayer.painter = nil
         secondaryClipLayer.isHidden = true
         CATransaction.commit()
     }
@@ -614,7 +614,9 @@ final class MenuBarScrollingLabel: NSView {
         else { return nil }
         let clipW = slot.width
         let y = rows?.mainY ?? ((bounds.height - height) / 2).rounded()
-        let lyricsX = slot.x
+        // 左沿取整点:图标宽可以是小数(「经典」20.5pt),落在半个点上的歌词格在 1x 屏(含外接屏菜单栏的
+        // 复制品)上就是半个像素,整行字被插值、发软。向上取,图标和歌词之间的间距只会多、不会挤。
+        let lyricsX = slot.x.rounded(.up)
         // 图标的 x **也从 slot 推**,不许自己再算一遍。
         //
         // 这里原来有一份**重复的**居中算式(`let left = (bounds.width - contentW) / 2`),
@@ -629,9 +631,9 @@ final class MenuBarScrollingLabel: NSView {
         let iconX: CGFloat
         switch plan.icon?.position {
         case .leading:
-            iconX = max(0, lyricsX - reserved)
+            iconX = max(0, (lyricsX - reserved).rounded(.down))
         case .trailing:
-            iconX = lyricsX + clipW + MenuBarProgressIcon.gap
+            iconX = (lyricsX + clipW + MenuBarProgressIcon.gap).rounded()
         default:
             iconX = 0
         }
@@ -905,37 +907,37 @@ final class MenuBarScrollingLabel: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layoutGapDots(boxWidth: built.textWidth, boxHeight: built.pointHeight, color: dotCGColor)
-        textLayer.contents = built.cg
+        textLayer.painter = built.paint
         textLayer.contentsScale = built.scale
         // 用 bounds 而不是 frame:frame 会连 position 一起写,那就把动画的落点冲掉了。
         textLayer.bounds = CGRect(x: 0, y: 0, width: built.textWidth, height: built.pointHeight)
         if let fillBuilt {
-            fillTextLayer.contents = fillBuilt.cg
+            fillTextLayer.painter = fillBuilt.paint
             fillTextLayer.contentsScale = fillBuilt.scale
             fillTextLayer.bounds = CGRect(x: 0, y: 0, width: fillBuilt.textWidth,
                                           height: fillBuilt.pointHeight)
             // 只动高,不碰宽 —— 宽是填色动画的领地(见 applyKaraokeFill)。
             fillClipLayer.bounds.size.height = fillBuilt.pointHeight
         } else {
-            fillTextLayer.contents = nil
+            fillTextLayer.painter = nil
         }
         preparedSecondary = secondaryBuilt
         if let secondaryBuilt {
-            secondaryTextLayer.contents = secondaryBuilt.cg
+            secondaryTextLayer.painter = secondaryBuilt.paint
             secondaryTextLayer.contentsScale = secondaryBuilt.scale
             secondaryTextLayer.bounds = CGRect(x: 0, y: 0, width: secondaryBuilt.textWidth,
                                                height: secondaryBuilt.pointHeight)
             secondaryTextLayer.opacity = MenuBarLyricRows.secondaryOpacity(for: plan.secondaryKind)
         } else {
-            secondaryTextLayer.contents = nil
+            secondaryTextLayer.painter = nil
         }
         // 副行的横向落点 / 渐隐在 layout() 里按最新格宽摆(下面 needsLayout = true 会带到)。
         if let iconBase, let iconFill {
             preparedIcon = (iconBase, iconFill)
-            iconBaseLayer.contents = iconBase.cg
+            iconBaseLayer.painter = iconBase.paint
             iconBaseLayer.contentsScale = iconBase.scale
             iconBaseLayer.bounds = CGRect(origin: .zero, size: iconBase.size)
-            iconFillLayer.contents = iconFill.cg
+            iconFillLayer.painter = iconFill.paint
             iconFillLayer.contentsScale = iconFill.scale
             iconFillLayer.bounds = CGRect(origin: .zero, size: iconFill.size)
             // 只动宽,不碰高 —— 高是进度动画的领地(见 applyProgressFill)。
@@ -943,8 +945,8 @@ final class MenuBarScrollingLabel: NSView {
             iconHostLayer.isHidden = false
         } else {
             preparedIcon = nil
-            iconBaseLayer.contents = nil
-            iconFillLayer.contents = nil
+            iconBaseLayer.painter = nil
+            iconFillLayer.painter = nil
             iconHostLayer.isHidden = true
         }
         CATransaction.commit()

@@ -284,8 +284,9 @@ enum MenuBarMarqueeRenderer {
     /// 一个 image(text:width:offset:)(每帧重排整段文本)。两个都随 MenuBarExtra 一起
     /// 删掉了:现在没有任何一方需要"某一帧长什么样"这个概念 —— 那正是逐帧驱动才需要的东西。
     struct PreparedLine {
-        let cg: CGImage
-        /// 位图的像素/点比例。图层的 contentsScale 要用它,不能猜。
+        /// 把这一句画进图层的上下文(`MenuBarDrawnLayer.painter`)。颜色已按排版那一刻的外观解析成定值。
+        let paint: (CGContext) -> Void
+        /// 排版时按的像素/点比例。图层的 contentsScale 要用它,不能猜。
         let scale: CGFloat
         /// 整条长图的点宽 = 这句话画出来有多宽。
         let textWidth: CGFloat
@@ -319,26 +320,58 @@ enum MenuBarMarqueeRenderer {
             : ceil((text as NSString).size(withAttributes: attributes).width)
         // 不留尾部空白:图层平移 + 上层 masksToBounds 裁剪,平移量永远不超过
         // textWidth - windowWidth,右边不会露出图外,不需要额外留白兜底。
-        let pxW = Int(textWidth * scale), pxH = Int(box * scale)
-        guard pxW > 0, pxH > 0,
-              let ctx = CGContext(
-                data: nil, width: pxW, height: pxH, bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-        ctx.scaleBy(x: scale, y: scale)
-        let ns = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = ns
-        // flipped: false → 原点在左下、y 向上。NSString.draw(at:) 收的是文本框左下角,
-        // 所以 y 给 1 就是"底部留 1pt 内边距"(双排 exactBox 不留,贴 0)。
-        if !isGapDots {
-            (text as NSString).draw(at: NSPoint(x: 0, y: exactBox ? 0 : 1), withAttributes: attributes)
+        guard Int(textWidth * scale) > 0, Int(box * scale) > 0 else { return nil }
+        // 动态色(labelColor 等)在这里按调用方套好的外观解析成定值:图层真正调 draw(in:) 的时候
+        // 已经不在那层 performAsCurrentDrawingAppearance 里了。
+        var drawAttributes = attributes
+        drawAttributes[.foregroundColor] = NSColor(cgColor: color.cgColor) ?? color
+        let paint: (CGContext) -> Void = { ctx in
+            guard !isGapDots else { return }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            // flipped: false → 原点在左下、y 向上。NSString.draw(at:) 收的是文本框左下角,
+            // 所以 y 给 1 就是"底部留 1pt 内边距"(双排 exactBox 不留,贴 0)。
+            (text as NSString).draw(at: NSPoint(x: 0, y: exactBox ? 0 : 1), withAttributes: drawAttributes)
+            NSGraphicsContext.restoreGraphicsState()
         }
-        NSGraphicsContext.restoreGraphicsState()
-        guard let cg = ctx.makeImage() else { return nil }
-        return PreparedLine(cg: cg, scale: scale, textWidth: textWidth,
+        return PreparedLine(paint: paint, scale: scale, textWidth: textWidth,
                             pointHeight: box, text: text, color: color)
+    }
+}
+
+/// 菜单栏里画文字 / 图标的图层:内容在 `draw(in:)` 里现画,不塞现成的 CGImage。
+///
+/// 外接屏的菜单栏上显示的是 AppKit 给每块屏做的复制品(replicant)。现画的内容会按那块屏
+/// 自己的比例重画一遍;塞进 `contents` 的位图只能原样搬过去 —— 状态项的窗口挂在 2x 屏上时,
+/// 1x 屏上看到的就是 2x 位图硬缩一半,整行发软。别改回 `contents = CGImage`。
+final class MenuBarDrawnLayer: CALayer {
+    /// nil = 不画、立刻清掉旧内容。
+    var painter: ((CGContext) -> Void)? {
+        didSet {
+            if painter == nil { contents = nil } else { setNeedsDisplay() }
+        }
+    }
+
+    override init() {
+        super.init()
+        // 重画出来的新内容不淡入:换色 / 换句都是硬切,跟原来直接换 contents 一样。
+        actions = ["contents": NSNull()]
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+        painter = (layer as? MenuBarDrawnLayer)?.painter
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(in ctx: CGContext) {
+        if contentsAreFlipped() {
+            ctx.translateBy(x: 0, y: bounds.height)
+            ctx.scaleBy(x: 1, y: -1)
+        }
+        painter?(ctx)
     }
 }
 

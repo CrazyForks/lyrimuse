@@ -1822,7 +1822,13 @@ func runSourceContractTests() {
             // 静置(暂停 / 这句唱完)摆在此刻该在的滚动位置,不是起点 —— 否则唱完那一刻跳回开头。
             expectEqual(row.contains("let offset = MenuBarMarquee.karaokeFillX(atMs: nowMs, path: scrollPath)"), true,
                         "图层滚动行: 静置位置按此刻的滚动偏移取")
-            expectEqual(row.contains("restingX - offset"), true, "图层滚动行: 静置时减去此刻的偏移")
+            expectEqual(row.contains("restingX - pixelAligned(offset)"), true, "图层滚动行: 静置时减去此刻的偏移")
+            // 位图像素数跟图层点尺寸 × 比例对不上,或长图停在半像素上,Core Animation 都会重采样,1x 屏上整行发糊。
+            expectEqual(row.contains("boxHeight = Self.alignedUp(") && row.contains("imageWidth = Self.alignedUp(boxWidth, scale: scale)")
+                        && row.contains("Int((imageWidth * scale).rounded(.up))"), true,
+                        "图层滚动行: 位图宽高对齐到整像素,贴图不拉伸")
+            expectEqual(row.contains("let restingX = pixelAligned(") && row.contains("pixelAligned((bounds.height - boxHeight) / 2)"), true,
+                        "图层滚动行: 静置落点对齐到整像素")
             // 停 / 走、显示窗口只影响动画,不重画长图。
             expectEqual(row.contains("a.paused = b.paused") && row.contains("a.pacedWindow = b.pacedWindow"), true,
                         "图层滚动行: sameImages 忽略 paused / pacedWindow")
@@ -3231,6 +3237,13 @@ func runSourceContractTests() {
             expectEqual(src.contains("override func viewDidChangeBackingProperties()"), true,
                         "位图比例: \(f) 接住换屏重排")
             expectEqual(src.contains("menuBarBitmapScale"), true, "位图比例: \(f) 用所在窗口的比例")
+        }
+        // 外接屏菜单栏显示的是复制品:现画的内容按那块屏的比例重画,塞进 contents 的位图只能原样缩放,1x 屏上发软。
+        let label = (try? String(contentsOfFile: menuBarDir.appendingPathComponent("MenuBarScrollingLabel.swift").path, encoding: .utf8)) ?? ""
+        for name in ["textLayer", "fillTextLayer", "secondaryTextLayer", "iconBaseLayer", "iconFillLayer"] {
+            expectEqual(label.contains("private let \(name) = MenuBarDrawnLayer()"), true,
+                        "菜单栏现画: \(name) 是 MenuBarDrawnLayer")
+            expectEqual(label.contains("\(name).contents = "), false, "菜单栏现画: \(name) 不塞位图")
         }
     }
 

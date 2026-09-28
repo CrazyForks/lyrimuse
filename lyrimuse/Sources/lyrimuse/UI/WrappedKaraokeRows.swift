@@ -188,12 +188,15 @@ final class WrappedKaraokeRowsView: NSView {
 
         for (i, row) in geo.rows.enumerated() {
             let slack = max(0, geo.wrapWidth - row.width)
-            let indent: CGFloat
+            var indent: CGFloat
             switch spec.rowAlignment {
             case .leading: indent = 0
             case .trailing: indent = slack
             case .center: indent = slack / 2
             }
+            // 行框落在整像素上,理由同 `OverlayLyricScrollView.pixelAligned`。
+            let scale = window?.backingScaleFactor ?? 2
+            indent = (indent * scale).rounded() / scale
             // 行框 = 这一行的长图(含四周描边预留)再宽 1pt:图层行判「装得下」用的是 `<=`,留 1pt
             // 余量免得浮点误差把它判成要滚。长图按 .leading 静置,多出来那 1pt 落在右边、是透明的。
             let frame = CGRect(x: indent, y: CGFloat(i) * geo.pitch,

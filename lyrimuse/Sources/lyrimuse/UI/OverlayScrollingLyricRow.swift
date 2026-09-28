@@ -114,6 +114,9 @@ final class OverlayLyricScrollView: NSView {
     /// 长图(= contentLayer)的点宽 / 点高。描边开着时四周各含一圈 `inset`。
     private var boxWidth: CGFloat = 0
     private var boxHeight: CGFloat = 0
+    /// 长图位图的点宽 = `boxWidth` 向上对齐到整像素。放不放得下、滚多远照旧按 `boxWidth` 算;
+    /// 位图和贴它的图层都用这个宽,像素数正好等于点宽 × 比例,贴图时不被拉伸重采样。
+    private var imageWidth: CGFloat = 0
     /// 长图四周的预留 = 描边预留(开着 = `LyricsTextStrokeMetrics.inset`,同 `OptionalTextStroke` 的
     /// padding)+ 阴影出血 `bleed`。
     private var inset: CGFloat = 0
@@ -269,15 +272,18 @@ final class OverlayLyricScrollView: NSView {
         inset = (spec.strokeColor == nil ? 0 : LyricsTextStrokeMetrics.inset) + bleed
         mainHeight = Self.textHeight(spec.font)
         romaHeight = spec.groups == nil ? 0 : Self.textHeight(spec.romaFont)
-        boxHeight = mainHeight + romaHeight + 2 * inset
+        // 高和宽都对齐到整像素(见 `imageWidth`):位图像素数跟图层点尺寸 × 比例对不上时,Core Animation
+        // 按 .resize 把整张图缩放一点点贴上去,每个字都被重采样,1x 屏上整行发糊。
+        boxHeight = Self.alignedUp(mainHeight + romaHeight + 2 * inset, scale: scale)
         layOut(spec: spec)
+        imageWidth = Self.alignedUp(boxWidth, scale: scale)
         baseTextLayer.contents = drawText(spec: spec, main: spec.baseColor, roma: spec.romaBaseColor, scale: scale)
         fillTextLayer.contents = drawText(spec: spec, main: spec.fillColor, roma: spec.romaFillColor, scale: scale)
         strokeLayer.contents = spec.strokeColor.flatMap { drawStroke(spec: spec, color: $0, scale: scale) }
         for l in [strokeLayer, baseTextLayer, fillTextLayer] {
             l.contentsScale = scale
             l.position = .zero
-            l.bounds = CGRect(x: 0, y: 0, width: boxWidth, height: boxHeight)
+            l.bounds = CGRect(x: 0, y: 0, width: imageWidth, height: boxHeight)
         }
         // 阅读位置按"不含预留"的坐标算、再整体平移 inset:否则开头那一截填色边界会先在左侧预留里
         // 空走一段(followReadingPath 的首点 x 恒为 0)。
@@ -285,6 +291,16 @@ final class OverlayLyricScrollView: NSView {
         readingPath = spec.pacedWindow != nil ? [] : MenuBarMarquee.followReadingPath(
             words: flatWords, wordEndXs: wordEndXs.map { $0 - inset })
             .map { MenuBarMarquee.KaraokeFillPoint(ms: $0.ms, x: $0.x + inset) }
+    }
+
+    private static func alignedUp(_ v: CGFloat, scale: CGFloat) -> CGFloat {
+        (v * scale - 0.001).rounded(.up) / scale
+    }
+
+    /// 落到整像素上。长图在半像素上静置时,Core Animation 会在相邻两列 / 两行像素之间插值,字发糊。
+    private func pixelAligned(_ v: CGFloat) -> CGFloat {
+        let scale = bitmapScale
+        return (v * scale).rounded() / scale
     }
 
     /// 逐词 / 逐组排版:每个词的起止 x、罗马音每段的落点、长图总宽。规则在 Core 的
@@ -304,7 +320,7 @@ final class OverlayLyricScrollView: NSView {
 
     /// 一张空白长图的绘制上下文(sRGB、预乘 alpha、已按 scale 缩放到点坐标)。
     private func makeContext(scale: CGFloat) -> CGContext? {
-        let pxW = Int((boxWidth * scale).rounded(.up))
+        let pxW = Int((imageWidth * scale).rounded(.up))
         let pxH = Int((boxHeight * scale).rounded(.up))
         guard pxW > 0, pxH > 0,
               let ctx = CGContext(data: nil, width: pxW, height: pxH, bitsPerComponent: 8,
@@ -413,15 +429,15 @@ final class OverlayLyricScrollView: NSView {
         installedAtTime = CACurrentMediaTime()
         // 装不下才滚;装得下时按对齐方式静置。溢出时一律从左起滚:靠右摆等于一上来就把开头几个字
         // 挂到可视窗外面(同 `MarqueeText.restingAlignment`)。
-        let restingX: CGFloat = (layoutW <= viewW ? restingOriginX(viewWidth: viewW, layoutWidth: layoutW) : 0) - bleed
+        let restingX = pixelAligned((layoutW <= viewW ? restingOriginX(viewWidth: viewW, layoutWidth: layoutW) : 0) - bleed)
         // 静置时(暂停 / 这一句唱完、等下一句)必须摆在**此刻该在的滚动位置**,不能摆回起点:
         // 唱完那一刻 `paused` 翻 true、动画被摘掉,摆回起点就是"滚到底又跳回开头"。
         // 过了路径末尾 `karaokeFillX` 取末值(= 最大偏移),正好停在句尾。
         let offset = MenuBarMarquee.karaokeFillX(atMs: nowMs, path: scrollPath)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        contentLayer.bounds = CGRect(x: 0, y: 0, width: boxWidth, height: boxHeight)
-        contentLayer.position = CGPoint(x: restingX - offset, y: (bounds.height - boxHeight) / 2)
+        contentLayer.bounds = CGRect(x: 0, y: 0, width: imageWidth, height: boxHeight)
+        contentLayer.position = CGPoint(x: restingX - pixelAligned(offset), y: restingY)
         // 配速行整行都是"已唱"那张(fillColor),不走填色边界。
         applyFill(x: spec.pacedWindow != nil ? boxWidth : MenuBarMarquee.karaokeFillX(atMs: nowMs, path: readingPath))
         CATransaction.commit()
@@ -436,6 +452,9 @@ final class OverlayLyricScrollView: NSView {
         installFill(nowMs: nowMs)
         installScroll(nowMs: nowMs, restingX: restingX)
     }
+
+    /// 长图在视图里垂直居中的落点,对齐到整像素。
+    private var restingY: CGFloat { pixelAligned((bounds.height - boxHeight) / 2) }
 
     private func restingOriginX(viewWidth: CGFloat, layoutWidth: CGFloat) -> CGFloat {
         switch spec?.alignment ?? .center {
@@ -523,7 +542,7 @@ final class OverlayLyricScrollView: NSView {
         guard !scrollPath.isEmpty,
               let frames = MenuBarMarquee.karaokeFillKeyframes(path: scrollPath, nowMs: nowMs, rate: effectiveRate)
         else { return }
-        let y = (bounds.height - boxHeight) / 2
+        let y = restingY
         let move = CAKeyframeAnimation(keyPath: "position")
         move.values = frames.widths.map { CGPoint(x: restingX - $0, y: y) }
         move.keyTimes = frames.keyTimes.map(NSNumber.init(value:))
