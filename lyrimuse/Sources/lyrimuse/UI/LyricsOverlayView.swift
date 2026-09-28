@@ -1882,29 +1882,38 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
 // 提高辨识度,是字幕类悬浮显示的常见做法。
 //
 // 描边参考 katagaki/DJDX(View Modifiers/TextStroke.swift)的做法:content 先
-// .blur(radius:) 让字形轮廓往外"胀"开一圈,Canvas 里用 .addFilter(.alphaThreshold(min:))
-// 把这层模糊的 alpha 通道硬切成非 0 即 1,拿这个剪影当 mask 盖一层纯色矩形垫在原始文字
+// .blur(radius:) 让字形轮廓往外"胀"开一圈,Canvas 里用 .addFilter(.colorMatrix)
+// 把这层模糊的 alpha 通道拉成实心、外沿只留一像素过渡(见 `LyricsTextStrokeMetrics.alphaRamp`),拿这个剪影当 mask 盖一层纯色矩形垫在原始文字
 // (不模糊、保留自己的渐变/颜色)下面当描边。这个技术只需要文字的"形状"(alpha 通道),
 // 不关心文字本身画的是纯色还是渐变,所以能像阴影一样整体套在 mainLine 外面一次搞定,
-// 不需要对每个字分别处理;开销是固定的"整体渲染一遍 + 一次模糊 + 一次阈值",不随描边
+// 不需要对每个字分别处理;开销是固定的"整体渲染一遍 + 一次模糊 + 一次透明度拉伸",不随描边
 // 粗细变化。备选的"N 个方向各偏移一份内容再叠加"写法更简单,但每多一个方向就多渲染一份
 // 完整内容,用在这里(mainLine 是 60fps 逐字填色的热路径)会造成 N 倍重复开销,故未采用。
 // maskSource(性能审计落地):剪影 mask 的自定义静态源,nil = 直接用 content
 // 本身。静态文本(罗马音/译文/占位符/整行高亮)的 content 本来就不逐帧变,自身当 symbol
 // 没有任何浪费;但逐字填色路径的 content 里活跃词的渐变每 tick 都在变 —— content 值一变
-// Canvas symbol 就失效,整行位图被二次合成并重跑高斯模糊 + alphaThreshold,而 mask 只
+// Canvas symbol 就失效,整行位图被二次合成并重跑高斯模糊 + 透明度拉伸,而 mask 只
 // 消费 alpha 剪影,剪影在一行存续期内根本不变。那条路径改传一份同排版的纯色副本,
 // 描边层就只随换行/字体/宽度变化重建。
 /// 歌词描边的几何参数。换行模式(`OptionalTextStroke`,SwiftUI)和滚动模式
 /// (`OverlayScrollingLyricRow`,位图)两条渲染路都读这一份 —— 两边算法相同(剪影模糊后
-/// 按透明度硬阈值出实心轮廓),参数也必须相同,否则两种模式的描边粗细不一样。
+/// 按透明度拉成实心轮廓),参数也必须相同,否则两种模式的描边粗细不一样。
 enum LyricsTextStrokeMetrics {
     /// 剪影模糊半径(点)。不做成可调项,设置里只开颜色。
     static let width: CGFloat = 1.2
     /// 描边在内容四周预留的空白(点):模糊会让剪影往外胀,不留这一圈就会被裁掉。
     static var inset: CGFloat { width * 2 }
-    /// 模糊后透明度不低于它的像素整片涂成描边色。
-    static let alphaThreshold: Double = 0.01
+    /// 描边外沿 = 模糊剪影透明度 1% 的等值线,在直边上离字边 2.326σ。
+    private static let edgeSigmas = 2.326
+
+    /// 模糊剪影的透明度在 `lo...hi` 之间线性拉到 0...1,低于 lo 全透、高于 hi 实心。
+    /// 区间按直边算:以外沿等值线为中心、横跨一个设备像素,所以描边粗细不随比例变,
+    /// 外沿有一像素的过渡。别改回单一硬阈值:外沿二值化,1x 屏上是一格一格的锯齿。
+    static func alphaRamp(scale: CGFloat) -> (lo: Double, hi: Double) {
+        let half = Double(0.5 / (width * max(scale, 1)))
+        func tail(_ x: Double) -> Double { 0.5 * erfc(x / 2.0.squareRoot()) }
+        return (tail(edgeSigmas + half), tail(edgeSigmas - half))
+    }
 }
 
 private struct OptionalTextStroke<MaskSource: View>: ViewModifier {
@@ -1913,6 +1922,7 @@ private struct OptionalTextStroke<MaskSource: View>: ViewModifier {
     let maskSource: MaskSource?
     private let width = LyricsTextStrokeMetrics.width
     private let symbolID = "np-lyrics-stroke"
+    @Environment(\.displayScale) private var displayScale
 
     init(enabled: Bool, color: Color, maskSource: MaskSource?) {
         self.enabled = enabled
@@ -1931,8 +1941,9 @@ private struct OptionalTextStroke<MaskSource: View>: ViewModifier {
                     Rectangle()
                         .foregroundStyle(color)
                         .mask {
-                            Canvas { context, size in
-                                context.addFilter(.alphaThreshold(min: LyricsTextStrokeMetrics.alphaThreshold))
+                            // 浮点画布:外沿那段透明度只有百分之几,8 位存储只剩几级,过渡又成台阶。
+                            Canvas(colorMode: .linear) { context, size in
+                                context.addFilter(.colorMatrix(Self.alphaRampMatrix(scale: displayScale)))
                                 context.drawLayer { ctx in
                                     if let resolved = context.resolveSymbol(id: symbolID) {
                                         ctx.draw(resolved, at: CGPoint(x: size.width / 2, y: size.height / 2))
@@ -1965,6 +1976,16 @@ private struct OptionalTextStroke<MaskSource: View>: ViewModifier {
         } else {
             content
         }
+    }
+
+    /// 只看 alpha 的 mask:透明度按 `LyricsTextStrokeMetrics.alphaRamp` 线性拉伸。
+    private static func alphaRampMatrix(scale: CGFloat) -> ColorMatrix {
+        let ramp = LyricsTextStrokeMetrics.alphaRamp(scale: scale)
+        let k = 1 / (ramp.hi - ramp.lo)
+        var m = ColorMatrix()
+        m.a4 = Float(k)
+        m.a5 = Float(-ramp.lo * k)
+        return m
     }
 
     // 剪影源:有静态副本用副本,没有就用 content 本身。副本跟 content 同排版同字体,

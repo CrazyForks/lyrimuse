@@ -1756,8 +1756,12 @@ func runSourceContractTests() {
             // 换行模式那条 SwiftUI 描边跟滚动模式的图层描边同一组参数。
             expectEqual(view.contains("private let width = LyricsTextStrokeMetrics.width"), true,
                         "描边: SwiftUI 那条的粗细读共享常量")
-            expectEqual(view.contains(".alphaThreshold(min: LyricsTextStrokeMetrics.alphaThreshold)"), true,
-                        "描边: SwiftUI 那条的阈值读共享常量")
+            expectEqual(view.contains("LyricsTextStrokeMetrics.alphaRamp(scale: scale)")
+                        && view.contains(".colorMatrix(Self.alphaRampMatrix(scale: displayScale))"), true,
+                        "描边: SwiftUI 那条的外沿过渡读共享参数、按屏幕比例取")
+            // 硬阈值 = 外沿二值化,1x 屏上成锯齿;8 位画布同理只剩几级。
+            expectEqual(view.contains(".alphaThreshold(") || !view.contains("Canvas(colorMode: .linear)"), false,
+                        "描边: SwiftUI 那条不用硬阈值、画布用浮点存储")
             // 内容变高、窗口还没跟上的那几帧:没有 minHeight: 0,frame 取内容高度、被宿主垂直居中,整块上跳。
             expectEqual(view.contains(".frame(minHeight: 0, maxHeight: .infinity, alignment: playback.placementMode.anchorsBottom ? .bottom : .top)"), true,
                         "悬浮高度: 根视图贴锚边那条 frame 必须带 minHeight: 0(否则换行变高时整块跳一下)")
@@ -1824,8 +1828,8 @@ func runSourceContractTests() {
                         "图层滚动行: 暂停时 predictedMs 冻在装动画那一刻")
             expectEqual(row.contains("applyingGaussianBlur(sigma: LyricsTextStrokeMetrics.width * scale)"), true,
                         "描边: 图层那条的模糊半径读共享常量(跟换行模式同一个 σ)")
-            expectEqual(row.contains("LyricsTextStrokeMetrics.alphaThreshold * 255"), true,
-                        "描边: 图层那条的阈值读共享常量")
+            expectEqual(row.contains("LyricsTextStrokeMetrics.alphaRamp(scale: scale)"), true,
+                        "描边: 图层那条的外沿过渡读共享参数、按位图比例取")
         } else {
             expectEqual(true, false, "图层滚动行: 读不到 UI/OverlayScrollingLyricRow.swift(路径挪了?)")
         }

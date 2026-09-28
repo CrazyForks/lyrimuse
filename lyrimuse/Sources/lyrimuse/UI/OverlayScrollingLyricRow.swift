@@ -17,7 +17,7 @@ import SwiftUI
 // 已唱 / 未唱必须**互补裁剪**,别改成强调色那张叠在基础色上面:叠画时字形边缘的半透明像素会让
 // 底下那张透出来,深底上镶一圈白边。
 // 描边必须跟换行模式(`OptionalTextStroke`)同一个算法、同一组参数(`LyricsTextStrokeMetrics`):
-// 剪影高斯模糊 σ = width,再按 alphaThreshold 硬阈值出实心轮廓。别换成 AppKit 的 `.strokeWidth` ——
+// 剪影高斯模糊 σ = width,再按 alphaRamp 拉成实心轮廓。别换成 AppKit 的 `.strokeWidth` ——
 // 那是沿轮廓居中描的细线,粗细和形状都跟换行模式对不上。
 @MainActor
 struct OverlayScrollingLyricRow: NSViewRepresentable {
@@ -348,17 +348,27 @@ final class OverlayLyricScrollView: NSView {
         return ctx.makeImage()
     }
 
-    /// 描边:剪影高斯模糊 σ = width,透明度 ≥ alphaThreshold 的像素整片涂成描边色 —— 跟
-    /// `OptionalTextStroke`(Canvas `.alphaThreshold` + `.blur(radius:)`)同一个算法、同一组参数。
-    /// 模糊结果裁回长图范围,对应那边 Canvas 裁在"内容 + inset"之内。
+    /// 描边:剪影高斯模糊 σ = width,透明度按 `LyricsTextStrokeMetrics.alphaRamp` 拉成实心轮廓、
+    /// 再乘描边色 —— 跟 `OptionalTextStroke`(Canvas `.colorMatrix` + `.blur(radius:)`)同一个算法、
+    /// 同一组参数。模糊结果裁回长图范围,对应那边 Canvas 裁在"内容 + inset"之内。
     private func drawStroke(spec: OverlayScrollingLyricRow.Spec, color: NSColor, scale: CGFloat) -> CGImage? {
         guard let silhouette = drawText(spec: spec, main: .black, roma: .black, scale: scale, withShadow: false),
               let rgb = color.usingColorSpace(.sRGB) else { return nil }
         let source = CIImage(cgImage: silhouette)
-        let blurred = source.clampedToExtent()
+        // 拉伸在 CoreImage 的浮点中间结果上做:外沿那段透明度只有百分之几,先落成 8 位就只剩几级。
+        let ramp = LyricsTextStrokeMetrics.alphaRamp(scale: scale)
+        let k = CGFloat(1 / (ramp.hi - ramp.lo))
+        let zero = CIVector(x: 0, y: 0, z: 0, w: 0)
+        let mask = source.clampedToExtent()
             .applyingGaussianBlur(sigma: LyricsTextStrokeMetrics.width * scale)
             .cropped(to: source.extent)
-        guard let soft = Self.ciContext.createCGImage(blurred, from: source.extent, format: .RGBA8,
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": zero, "inputGVector": zero, "inputBVector": zero,
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: k),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: -CGFloat(ramp.lo) * k),
+            ])
+            .applyingFilter("CIColorClamp")
+        guard let soft = Self.ciContext.createCGImage(mask, from: source.extent, format: .RGBA8,
                                                       colorSpace: Self.colorSpace),
               let ctx = CGContext(data: nil, width: soft.width, height: soft.height, bitsPerComponent: 8,
                                   bytesPerRow: soft.width * 4, space: Self.colorSpace,
@@ -366,20 +376,15 @@ final class OverlayLyricScrollView: NSView {
               let data = ctx.data
         else { return nil }
         ctx.draw(soft, in: CGRect(x: 0, y: 0, width: soft.width, height: soft.height))
-        func byte(_ v: CGFloat) -> UInt8 { UInt8((min(max(v, 0), 1) * 255).rounded()) }
+        // 预乘 alpha:每个分量 = 描边色(已预乘)× mask。
         let alpha = rgb.alphaComponent
-        let fill = (r: byte(rgb.redComponent * alpha), g: byte(rgb.greenComponent * alpha),
-                    b: byte(rgb.blueComponent * alpha), a: byte(alpha))
-        // 8 位下 ≥ alphaThreshold 的精确等价:0.01 × 255 = 2.55,取整到 3。
-        let threshold = UInt8((LyricsTextStrokeMetrics.alphaThreshold * 255).rounded(.up))
+        let fill = [rgb.redComponent * alpha, rgb.greenComponent * alpha, rgb.blueComponent * alpha, alpha]
+            .map { Float(min(max($0, 0), 1)) }
         let count = soft.width * soft.height * 4
         let px = data.bindMemory(to: UInt8.self, capacity: count)
         for i in stride(from: 0, to: count, by: 4) {
-            if px[i + 3] >= threshold {
-                px[i] = fill.r; px[i + 1] = fill.g; px[i + 2] = fill.b; px[i + 3] = fill.a
-            } else {
-                px[i] = 0; px[i + 1] = 0; px[i + 2] = 0; px[i + 3] = 0
-            }
+            let m = Float(px[i + 3])
+            for c in 0..<4 { px[i + c] = UInt8((fill[c] * m).rounded()) }
         }
         return ctx.makeImage()
     }
