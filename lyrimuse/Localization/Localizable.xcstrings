@@ -29451,25 +29451,25 @@
         }
       }
     },
-    "只影响装得下的句子。\n固定：短句也占满设定宽度，位置不变。\n自适应：短句按自己的宽度占位，这一项随句变宽变窄，旁边的图标跟着挪。" : {
+    "固定：所有歌都用设定的宽度。\n自适应：每首歌按自己的歌词定一个宽度，不超过设定宽度。" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Only affects lines that already fit.\nFixed: short lines still fill the set width, so the item never moves.\nAdaptive: short lines take only what they need; the item's width changes with each line and the icons beside it shift along."
+            "value" : "Fixed: every song uses the set width.\nAdaptive: each song gets its own width from its lyrics, up to the set width."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只影响装得下的句子。\n固定：短句也占满设定宽度，位置不变。\n自适应：短句按自己的宽度占位，这一项随句变宽变窄，旁边的图标跟着挪。"
+            "value" : "固定：所有歌都用设定的宽度。\n自适应：每首歌按自己的歌词定一个宽度，不超过设定宽度。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只影響裝得下的句子。\n固定：短句也佔滿設定寬度，位置不變。\n自適應：短句按自己的寬度佔位，這一項隨句變寬變窄，旁邊的圖像跟著挪。"
+            "value" : "固定：所有歌都用設定的寬度。\n自適應：每首歌按自己的歌詞定一個寬度，不超過設定寬度。"
           }
         }
       }

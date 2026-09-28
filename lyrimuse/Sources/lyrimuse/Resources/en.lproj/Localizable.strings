@@ -432,7 +432,6 @@
 "只对判定为韩语的歌词生效，例如 안녕하세요 → annyeonghaseyo" = "Applies only to lyrics judged Korean, e.g. 안녕하세요 → annyeonghaseyo";
 "只对悬浮歌词生效" = "Applies to the desktop overlay only";
 "只对灵动岛生效" = "Applies to the notch only";
-"只影响装得下的句子。\n固定：短句也占满设定宽度，位置不变。\n自适应：短句按自己的宽度占位，这一项随句变宽变窄，旁边的图标跟着挪。" = "Only affects lines that already fit.\nFixed: short lines still fill the set width, so the item never moves.\nAdaptive: short lines take only what they need; the item's width changes with each line and the icons beside it shift along.";
 "只影响装得下的短句：它在固定宽度那一格里靠哪边。放不下的句子会横向滚动，没有多余空间，对齐不起作用" = "Only affects lines that fit: which side of the fixed-width slot they sit on. Lines too long to fit scroll horizontally — there is no spare space, so alignment does nothing";
 "只影响装得下的短句：它在歌词行里靠哪边。「自动」按对唱声部走：谁唱靠谁那边、合唱居中，没有对唱信息就靠左。放不下的句子会横向滚动，没有多余空间，对齐不起作用" = "Only affects short lines that fit: where they sit in the lyric row. Automatic follows the duet part — each singer's lines sit on their side, choruses are centered, and lines without duet info stay left. Lines that don't fit scroll horizontally, so alignment has no effect on them";
 "只恢复当前预览的尺寸" = "Only the size shown in the preview";
@@ -477,6 +476,7 @@
 "回到当前播放" = "Jump to Now Playing";
 "因网络不通已停下" = "Stopped: no connection";
 "固定" = "Fixed";
+"固定：所有歌都用设定的宽度。\n自适应：每首歌按自己的歌词定一个宽度，不超过设定宽度。" = "Fixed: every song uses the set width.\nAdaptive: each song gets its own width from its lyrics, up to the set width.";
 "在 %@ 中打开" = "Open in %@";
 "在 %@ 中显示" = "Show in %@";
 "在 Apple Music 中打开" = "Open in Apple Music";

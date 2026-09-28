@@ -572,7 +572,7 @@ struct MenuBarWidthModeRow: View {
             // 图标会停在旧位置(错位、闪动),左键面板也可能被挤掉。UI 上现在只保留它的
             // **可见结果**(宽度随句变、旁边图标跟着挪)——那是"效果";成因和"别用"属于
             // 判断,不进这行字。
-            help: L10n.t("只影响装得下的句子。\n固定：短句也占满设定宽度，位置不变。\n自适应：短句按自己的宽度占位，这一项随句变宽变窄，旁边的图标跟着挪。")
+            help: L10n.t("固定：所有歌都用设定的宽度。\n自适应：每首歌按自己的歌词定一个宽度，不超过设定宽度。")
         ) {
             SettingsSegmentedControlHashable(
                 selection: $settings.menuBarLyricsWidthMode,
