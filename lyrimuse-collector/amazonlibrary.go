@@ -221,6 +221,19 @@ func amazonLocalLyricsFor(artist, title string) (lyricSourceResult, bool) {
 	return r, true
 }
 
+// amazonProvisionalLyrics:首次解析开跑时先上屏的那份(见 resolveEnrichAsync)。只给正用 Amazon Music 放着的这首
+// (isNewTrack),而且它本机缓存里有这首的歌词;别的情况返回 false。
+func amazonProvisionalLyrics(isNewTrack bool, bundleID, artist, title string) (enrichEntry, bool) {
+	if !isNewTrack || bundleID != amazonMusicBundleID {
+		return enrichEntry{}, false
+	}
+	r, ok := amazonLocalLyricsFor(artist, title)
+	if !ok {
+		return enrichEntry{}, false
+	}
+	return enrichEntry{Lyrics: r.lyr, LyricsSource: amazonLocalLyricsSource}, true
+}
+
 // amazonLyricsAvailableTTL:同一首记多久。trackEnrichment 在一首歌的播放期间会被反复调用,每次都扫一遍 Hammer Cache
 // 不值当;Amazon Music 开播前就把词拉好了,30 秒内问到的都是同一个答案。
 const amazonLyricsAvailableTTL = 30 * time.Second
@@ -321,12 +334,16 @@ func parseAmazonQueueLine(line string) ([]string, bool) {
 
 // amazonUpcoming:队列窗口里当前这首后面那几首。窗口第一首必须是日志里正在放的那首、而且就是播放器报的这首,
 // 否则拿不准(用户刚点了别的、日志没对上),退回同专辑预取。歌名 / 歌手 / 专辑 / 时长从目录缓存查,查不到的不交。
+// 一首都查不到时:放的是电台(云端队列)就不预取 —— 同专辑的歌放不到,整张专辑解析一遍只会跟正在放的那首抢歌词源;
+// 歌单 / 专辑才退回同专辑预取。
 func amazonUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 	amazonClockMu.Lock()
 	cur := amazonCurrentTrack
 	var queue []string
+	cloudQueue := false
 	if amazonClockTail != nil {
 		queue = slices.Clone(amazonClockTail.queue)
+		cloudQueue = amazonClockTail.cloudQueue
 	}
 	amazonClockMu.Unlock()
 	if cur.artist != artist || cur.title != title || cur.trackID == "" {
@@ -367,6 +384,10 @@ func amazonUpcoming(artist, title string, n int) ([]upcomingTrack, bool) {
 		}
 	}
 	amazonQueueMu.Unlock()
+	if len(out) == 0 && cloudQueue {
+		log.Printf("amazon music upcoming: none of the queued tracks is in the local catalog cache; playing a station, skipping album prefetch")
+		return nil, true
+	}
 	if len(out) == 0 {
 		log.Printf("amazon music upcoming: none of the queued tracks is in the local catalog cache; falling back to album prefetch")
 		return nil, false

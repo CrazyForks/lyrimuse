@@ -94,6 +94,30 @@ public enum AmazonMusicPlayhead {
         return lineTimeFormatter.date(from: head)
     }
 
+    /// 重放从哪个字节开始:末尾 `tailBytes`,但不晚于最后一次开播那一行(再往前留 `replayLead`,带上紧挨着它的
+    /// `End of stream`,自然连播要靠它认)。开播后暂停得久,Amazon 照样往日志里写,开播行会被推到末尾那段之前:实测暂停
+    /// 54 分钟后开播行离末尾 303 KB,只看末尾就认不出这首、退回自记时,位置按开播时刻一路外推到曲尾卡住。
+    /// 同 Go 侧 amazonReplayStart。纯函数。
+    public static func replayStart(_ data: Data, tailBytes: Int) -> Int {
+        let bytes = [UInt8](data)
+        let start = max(0, bytes.count - tailBytes)
+        let needle = Array("new track playing".utf8)
+        guard bytes.count >= needle.count else { return start }
+        var last = -1
+        var i = bytes.count - needle.count
+        while i >= 0 {
+            if bytes[i] == needle[0], Array(bytes[i ..< i + needle.count]) == needle { last = i; break }
+            i -= 1
+        }
+        guard last >= 0, last < start else { return start }
+        var back = max(0, last - replayLead)
+        while back > 0, bytes[back - 1] != UInt8(ascii: "\n") { back -= 1 }
+        return back
+    }
+
+    /// 见 `replayStart`。
+    public static let replayLead = 4096
+
     /// 重放历史行时,行首只到秒,真实时刻落在 [该秒, 该秒 + 1),取中点。实时读到的行用读到的那一刻。
     public static let replayedLineOffset: TimeInterval = 0.5
 

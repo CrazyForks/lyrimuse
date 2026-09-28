@@ -383,7 +383,7 @@ func amazonMusicLogPath() string {
 }
 
 // amazonLogTail 增量读日志:记着读到哪了,每拍只读新写的部分;文件变短(Amazon Music 重启后重写)就从头读。
-// 第一次读只看末尾 amazonLogTailOnFirstRead 字节 —— 一份日志一天能长到几 MB,当前这首的开播一定在最后这段里。
+// 第一次读只看末尾 amazonLogTailOnFirstRead 字节(一份日志一天能长到几 MB),但至少从最后一次开播读起,见 amazonReplayStart。
 type amazonLogTail struct {
 	path    string
 	offset  int64
@@ -392,6 +392,50 @@ type amazonLogTail struct {
 	queue   []string // 最近一次 updateQueue 的窗口(当前这首 + 后两首),见 parseAmazonQueueLine
 	seen    bool     // 认出过至少一个事件
 	ok      bool     // 这一拍读到了文件
+	// cloudQueue:最近一次开播走的是云端队列(电台,见 amazonPlaybackStartKind)。后面放什么由服务器边放边定,
+	// 同专辑的其它歌基本放不到。
+	cloudQueue bool
+}
+
+// amazonPlaybackStartKind 认日志里的开播请求:云端队列(`CQPlaybackRequestImpl … StartingCQPlayback`,电台一类:
+// 开播带一串种子 ASIN,之后剩 5 首就向服务器再要一批)返回 cloud=true;普通开播(`BasePlaybackRequest …
+// StartPlaybackLookupCompleted`,歌单 / 专辑)和播客开播返回 cloud=false。不是开播行 ok=false。纯函数。
+func amazonPlaybackStartKind(line string) (cloud, ok bool) {
+	switch {
+	case strings.Contains(line, "StartingCQPlayback"):
+		return true, true
+	case strings.Contains(line, "StartPlaybackLookupCompleted"), strings.Contains(line, "StartPodcastPlayback"):
+		return false, true
+	}
+	return false, false
+}
+
+// amazonReplayStart:第一次读从哪个字节开始 —— 末尾 tail 字节,但不晚于最后一次开播那一行(再往前留 amazonReplayLead,
+// 带上紧挨着它的 End of stream,自然连播要靠它认)。开播后暂停得久,Amazon 照样往日志里写,开播行会被推到末尾那段之前:
+// 实测暂停 54 分钟后开播行离末尾 303 KB,只看末尾就认不出这首、退回自记时,位置按开播时刻一路外推到曲尾卡住。
+// 同 Swift 侧 AmazonMusicPlayhead.replayStart。纯函数。
+func amazonReplayStart(data []byte, tail int) int {
+	start := max(0, len(data)-tail)
+	last := bytes.LastIndex(data, []byte("new track playing"))
+	if last < 0 || last >= start {
+		return start
+	}
+	back := max(0, last-amazonReplayLead)
+	if nl := bytes.LastIndexByte(data[:back], '\n'); nl >= 0 {
+		return nl + 1
+	}
+	return 0
+}
+
+// amazonReplayLead 同 Swift 侧 replayLead。
+const amazonReplayLead = 4096
+
+// amazonLastStartIsCloudQueue:一段日志里最后一次开播是不是云端队列。第一次只读末尾一段,开播行常在更前面,
+// 这里补看一遍前面那部分。
+func amazonLastStartIsCloudQueue(data []byte) bool {
+	cq := bytes.LastIndex(data, []byte("StartingCQPlayback"))
+	plain := max(bytes.LastIndex(data, []byte("StartPlaybackLookupCompleted")), bytes.LastIndex(data, []byte("StartPodcastPlayback")))
+	return cq > plain
 }
 
 func (t *amazonLogTail) poll() {
@@ -409,10 +453,15 @@ func (t *amazonLogTail) poll() {
 	t.ok = true
 	size := info.Size()
 	if size < t.offset {
-		t.offset, t.partial, t.state, t.queue, t.seen = 0, nil, amazonPlayheadState{}, nil, false
+		t.offset, t.partial, t.state, t.queue, t.seen, t.cloudQueue = 0, nil, amazonPlayheadState{}, nil, false, false
 	}
 	if t.offset == 0 && size > amazonLogTailOnFirstRead {
-		t.offset = size - amazonLogTailOnFirstRead
+		if all, err := io.ReadAll(io.LimitReader(f, size)); err == nil {
+			t.offset = int64(amazonReplayStart(all, amazonLogTailOnFirstRead))
+			t.cloudQueue = amazonLastStartIsCloudQueue(all[:t.offset])
+		} else {
+			t.offset = size - amazonLogTailOnFirstRead
+		}
 	}
 	if size == t.offset {
 		return
@@ -435,6 +484,10 @@ func (t *amazonLogTail) poll() {
 	for _, raw := range bytes.Split(data[:last], []byte{'\n'}) {
 		if q, ok := parseAmazonQueueLine(string(raw)); ok {
 			t.queue = q
+			continue
+		}
+		if cloud, ok := amazonPlaybackStartKind(string(raw)); ok {
+			t.cloudQueue = cloud
 			continue
 		}
 		at, ev, ok := parseAmazonLogLine(string(raw))

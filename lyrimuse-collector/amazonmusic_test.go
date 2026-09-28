@@ -402,3 +402,25 @@ func TestAmazonSnapsToReading(t *testing.T) {
 		t.Error("KKBOX 照旧对齐,Spotify 不对齐")
 	}
 }
+
+// 开播后暂停得久,开播行会被推到末尾那段之前:第一次读至少从最后一次开播(连同它前面的 End of stream)读起。
+func TestAmazonReplayStart(t *testing.T) {
+	start := "260928:122914      Browser INFO in Harley : DT:M [Filter.cpp:157] End of stream reached\n" +
+		"260928:122914      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : asin://B0TESTAAA1:286:87015\n"
+	filler := strings.Repeat("260928:123000      Browser INFO in Harley : DT:M idle while paused\n", 400)
+	data := []byte(strings.Repeat("260928:120000 earlier line\n", 200) + start + filler)
+	got := amazonReplayStart(data, 1000)
+	if !strings.Contains(string(data[got:]), "new track playing") || !strings.Contains(string(data[got:]), "End of stream") {
+		t.Fatalf("开播行在末尾那段之前,要往前读到它(连同 End of stream): start=%d", got)
+	}
+	if got > 0 && data[got-1] != '\n' {
+		t.Error("从一行的开头读起")
+	}
+	recent := []byte(string(data) + start + "260928:130000 after\n")
+	if got := amazonReplayStart(recent, 1000); got != len(recent)-1000 {
+		t.Errorf("末尾那段里就有开播,照旧只读末尾: %d", got)
+	}
+	if got := amazonReplayStart([]byte(filler), 1000); got != len(filler)-1000 {
+		t.Errorf("整份日志都没有开播,照旧只读末尾: %d", got)
+	}
+}

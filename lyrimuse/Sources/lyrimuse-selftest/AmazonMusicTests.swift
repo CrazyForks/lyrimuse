@@ -245,6 +245,23 @@ func runAmazonMusicTests() {
                     "Amazon 自记时: 第一次见到就是暂停着的,按时间戳到现在估一个停着的位置")
     }
 
+    // ---- 重放起点:开播后暂停得久,开播行被推到末尾那段之前 ----
+    do {
+        let start = "260928:122914      Browser INFO in Harley : DT:M [Filter.cpp:157] End of stream reached\n" +
+            "260928:122914      Browser INFO in Harley : DT:M [TrackPreFetcher.cpp:74] new track playing : asin://B0TESTAAA1:286:87015\n"
+        let filler = String(repeating: "260928:123000      Browser INFO in Harley : DT:M idle while paused\n", count: 400)
+        let data = Data((String(repeating: "260928:120000 earlier line\n", count: 200) + start + filler).utf8)
+        let from = P.replayStart(data, tailBytes: 1000)
+        let rest = String(decoding: data[from...], as: UTF8.self)
+        expectEqual(rest.contains("new track playing") && rest.contains("End of stream"), true,
+                    "Amazon 重放: 开播行在末尾那段之前,往前读到它(连同 End of stream)")
+        expectEqual(from == 0 || data[from - 1] == UInt8(ascii: "\n"), true, "Amazon 重放: 从一行的开头读起")
+        let recent = data + Data((start + "260928:130000 after\n").utf8)
+        expectEqual(P.replayStart(recent, tailBytes: 1000), recent.count - 1000, "Amazon 重放: 末尾那段里就有开播,照旧只读末尾")
+        let none = Data(filler.utf8)
+        expectEqual(P.replayStart(none, tailBytes: 1000), none.count - 1000, "Amazon 重放: 整份都没有开播,照旧只读末尾")
+    }
+
     // ---- 拖进度:Amazon 不吃外部跳转指令 ----
     do {
         expectEqual(LocalPlaybackSource.acceptsSeek(bundleID: PlaybackPlayer.amazonMusic.bundleIdentifier), false,

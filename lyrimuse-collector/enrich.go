@@ -2097,6 +2097,17 @@ func resolveEnrichAsync(ctx context.Context, key, artist, title, album, bundleID
 		commitEnrichEntrySince(key, p, stamp)
 		log.Printf("lyrics: committed early for %q (source=%s), peripheral fields still resolving", key, p.LyricsSource)
 	}
+	// Amazon Music 开播前就把这首的歌词拉进了本机缓存(按 ASIN 认,见 amazonlibrary.go):先把这份上屏,不等各歌词源 ——
+	// 待播曲目常常认不出歌名、预取不到(见 amazonUpcoming),不垫这一份,开头要空到网络那份回来。选定的那份照常经
+	// early / 最终提交整条覆盖它。只管正在放的这首(isNewTrack),预取的那些不是在放的歌。
+	if p, ok := amazonProvisionalLyrics(isNewTrack, bundleID, artist, title); ok && ctx.Err() == nil {
+		enrichMu.Lock()
+		enrichProvisional[key] = true
+		enrichMu.Unlock()
+		p.TS = time.Now().Unix()
+		commitEnrichEntrySince(key, p, stamp)
+		log.Printf("lyrics: showing Amazon Music's cached lyrics for %q while the sources resolve", key)
+	}
 	e := resolveTrackEnrichment(ctx, artist, title, album, durationSecs, deviceCoverURL, early, lyricsDecisionPathFirstResolve)
 	// 首次解析:换曲那一拍 poller 留下的 Spotify 曲目 ID 一并写进条目(见 spotifytrack.go)。首次解析的 key
 	// 就是原始 key(canonical 命中的话走的是上面缓存命中那条路),直接按它查。

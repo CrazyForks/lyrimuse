@@ -19,7 +19,7 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
     public static let shared = AmazonMusicLogWatcher()
 
     private static let logger = Logger(subsystem: "me.yudaotor.lyrimuse", category: "amazon-music")
-    /// 第一次读只看末尾这么多字节:一份日志一天能长到几 MB,当前这首的开播一定在最后这段里。
+    /// 第一次读只看末尾这么多字节(一份日志一天能长到几 MB),但至少从最后一次开播读起,见 `AmazonMusicPlayhead.replayStart`。
     static let initialTailBytes = 256 << 10
     /// 日志不存在(没装 / 还没启动)时隔多久再看一眼。
     static let missingRetry: TimeInterval = 10
@@ -186,7 +186,12 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
         handle = h
         setAvailable(true)
         let size = (try? h.seekToEnd()) ?? 0
-        offset = replay && size > UInt64(Self.initialTailBytes) ? size - UInt64(Self.initialTailBytes) : 0
+        offset = 0
+        if replay, size > UInt64(Self.initialTailBytes) {
+            try? h.seek(toOffset: 0)
+            let all = (try? h.readToEnd()) ?? Data()
+            offset = UInt64(AmazonMusicPlayhead.replayStart(all, tailBytes: Self.initialTailBytes))
+        }
         partial = Data()
         lock.lock()
         state = AmazonMusicPlayhead.State()

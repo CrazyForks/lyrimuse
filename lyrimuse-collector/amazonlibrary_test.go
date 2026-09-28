@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,6 +109,20 @@ func TestAmazonUpcomingAndLocalLyrics(t *testing.T) {
 	if _, ok := amazonUpcoming("Morgan Wallen", "Been By Now", 5); ok {
 		t.Error("窗口第一首不是当前这首,退回")
 	}
+	// 窗口里的都查不到名字:电台不预取(ok、零首),歌单 / 专辑退回同专辑预取。
+	amazonClockMu.Lock()
+	amazonClockTail.queue = []string{"asin://B0TESTAAA1", "asin://B0MISSING0"}
+	amazonClockTail.cloudQueue = true
+	amazonClockMu.Unlock()
+	if got, ok := amazonUpcoming("Morgan Wallen", "Been By Now", 5); !ok || len(got) != 0 {
+		t.Errorf("电台里认不出名字就不预取,也不退回同专辑: %+v ok=%v", got, ok)
+	}
+	amazonClockMu.Lock()
+	amazonClockTail.cloudQueue = false
+	amazonClockMu.Unlock()
+	if _, ok := amazonUpcoming("Morgan Wallen", "Been By Now", 5); ok {
+		t.Error("歌单 / 专辑认不出名字,退回同专辑预取")
+	}
 
 	// 队列里那首解析歌词时按记下的 ASIN 认身份(歌名是剥过 [Explicit] 的);只在正用 Amazon Music 放时读。
 	setNativeLyricSourcesForPlayer(amazonMusicBundleID)
@@ -116,9 +131,20 @@ func TestAmazonUpcomingAndLocalLyrics(t *testing.T) {
 	if !ok || r.source != amazonLocalLyricsSource || !r.identityFromLocalClient || r.srcDur != 229 || r.matchAlbum == "" {
 		t.Fatalf("本地歌词: %+v ok=%v", r, ok)
 	}
+	// 开播先上屏的那份:只给正在放的这首,预取的(isNewTrack=false)不垫。
+	if p, ok := amazonProvisionalLyrics(true, amazonMusicBundleID, "Ella Langley & Morgan Wallen", "I Can't Love You Anymore"); !ok ||
+		p.LyricsSource != amazonLocalLyricsSource || !strings.Contains(p.Lyrics, "nightstand") {
+		t.Errorf("开播先上屏 Amazon 缓存里的那份: %+v ok=%v", p, ok)
+	}
+	if _, ok := amazonProvisionalLyrics(false, amazonMusicBundleID, "Ella Langley & Morgan Wallen", "I Can't Love You Anymore"); ok {
+		t.Error("预取的不是在放的歌,不垫")
+	}
 	setNativeLyricSourcesForPlayer(spotifyBundleID)
 	if _, ok := amazonLocalLyricsFor("Ella Langley & Morgan Wallen", "I Can't Love You Anymore"); ok {
 		t.Error("没在用 Amazon Music 放时不读")
+	}
+	if _, ok := amazonProvisionalLyrics(true, spotifyBundleID, "Ella Langley & Morgan Wallen", "I Can't Love You Anymore"); ok {
+		t.Error("别的播放器不垫")
 	}
 }
 
@@ -133,5 +159,54 @@ func TestAmazonLyricsWorthRecheck(t *testing.T) {
 	}
 	if amazonLyricsWorthRecheck(enrichEntry{}, kkboxBundleID, false, true, true) {
 		t.Error("只管 Amazon Music")
+	}
+}
+
+// 开播请求的两种形态:云端队列(电台)与普通开播(歌单 / 专辑)、播客。行照真实日志的形状。
+func TestAmazonPlaybackStartKind(t *testing.T) {
+	cq := "260928:082218 MorphoBrowser : I CQPlaybackRequestImpl : PlayerFlow : StartingCQPlayback : function = startPlayback , identifierType = TRACK_LIST_SEED , identifiers = B0TESTAAA1, B0TESTAAA2 : line 58, "
+	plain := "260928:073659 MorphoBrowser : I BasePlaybackRequest : PlayerFlow : StartPlaybackLookupCompleted : function = startPlaybackCallback : line 115, "
+	podcast := "260928:030035 MorphoBrowser : I PodcastPlayback : PlayerFlow : StartPodcastPlayback : function = startPlayback : line 108, "
+	if cloud, ok := amazonPlaybackStartKind(cq); !ok || !cloud {
+		t.Error("云端队列开播认成电台")
+	}
+	for _, l := range []string{plain, podcast} {
+		if cloud, ok := amazonPlaybackStartKind(l); !ok || cloud {
+			t.Errorf("普通开播 / 播客不算电台: %q", l)
+		}
+	}
+	if _, ok := amazonPlaybackStartKind("260928:082220 MorphoBrowser : I CQPlaybackRequestImpl : PlayerFlow : CheckingRemainingTracks : function = needToGetNextTracks"); ok {
+		t.Error("别的行不认")
+	}
+	if !amazonLastStartIsCloudQueue([]byte(plain+"\n"+cq+"\n")) || amazonLastStartIsCloudQueue([]byte(cq+"\n"+plain+"\n")) {
+		t.Error("按最后一次开播算")
+	}
+	if amazonLastStartIsCloudQueue(nil) {
+		t.Error("没有开播行不算电台")
+	}
+}
+
+// 第一次只读末尾一段时,开播行在更前面也要认得出来。
+func TestAmazonLogTailCloudQueueFromHead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "AmazonMusic.log")
+	cq := "260928:082218 MorphoBrowser : I CQPlaybackRequestImpl : PlayerFlow : StartingCQPlayback : function = startPlayback , identifierType = TRACK_LIST_SEED , identifiers = B0TESTAAA1 : line 58, \n"
+	filler := strings.Repeat("260928:082300      Browser INFO in Harley : DT:M [DASHRangeFragmentLoader.cpp:100] Fetching fragment\n", (amazonLogTailOnFirstRead/80)+10)
+	if err := os.WriteFile(path, []byte(cq+filler), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tail := &amazonLogTail{path: path}
+	tail.poll()
+	if !tail.cloudQueue {
+		t.Error("开播行在末尾那段之前,也要从前面补看出来")
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("260928:090000 MorphoBrowser : I BasePlaybackRequest : PlayerFlow : StartPlaybackLookupCompleted : function = startPlaybackCallback : line 115, \n")
+	f.Close()
+	tail.poll()
+	if tail.cloudQueue {
+		t.Error("之后换成普通开播就不再算电台")
 	}
 }
