@@ -168,7 +168,13 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 			}
 			delete(present, name)
 		}
-		_ = os.Remove(filepath.Join(dir, name)) // 忽略"文件本来就不存在"的错误,这是预期情况
+		path := filepath.Join(dir, name)
+		// 认不出头部的文件(用户手改坏了、别的程序写的同名文件)不是这边导出的那份,不直接删:挪进废纸篓。
+		if data, err := os.ReadFile(path); err == nil && !parseLyricsBytes(data).ok {
+			trashFile(path)
+		} else {
+			_ = os.Remove(path) // 忽略"文件本来就不存在"的错误,这是预期情况
+		}
 		forgetLyricsFile(dir, name)
 	}
 
@@ -244,9 +250,15 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 				}
 			}
 			if info != nil {
-				if existing, err := os.ReadFile(path); err == nil && string(existing) == string(full) {
+				existing, err := os.ReadFile(path)
+				if err == nil && string(existing) == string(full) {
 					recordLyricsFile(dir, name, info, sum)
 					continue
+				}
+				// 盘上这份认不出头部:导入没采纳它(见 importLyricsFrom 的 variantBody),这里要拿缓存里的内容
+				// 盖掉它 —— 先挪进废纸篓留一份。
+				if err == nil && !parseLyricsBytes(existing).ok {
+					trashFile(path)
 				}
 			}
 			if err := writeLyricsFileAtomic(path, full); err != nil {

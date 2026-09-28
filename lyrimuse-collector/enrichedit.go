@@ -124,6 +124,16 @@ type enrichEditOutcome struct {
 // applyEnrichEdit 执行一份请求:改内存缓存、存盘、同步歌词文件。常驻进程和 CLI 子命令共用。
 func applyEnrichEdit(req enrichEditRequest) enrichEditResult {
 	res := enrichEditResult{ID: req.ID}
+	enrichMu.Lock()
+	loadFailed := enrichLoadFailed
+	enrichMu.Unlock()
+	if loadFailed {
+		// 这一场的缓存没读进来、什么都不落盘(见 refuseEnrichSavesThisRun):改了也存不下,
+		// 别让 App 以为改成功了。
+		res.Error = errEnrichCacheNotLoaded.Error()
+		log.Printf("enrich edit: op=%s refused: %v", req.Op, errEnrichCacheNotLoaded)
+		return res
+	}
 	var out enrichEditOutcome
 	switch req.Op {
 	case "adopt_restore":
@@ -161,9 +171,15 @@ func applyEnrichEdit(req enrichEditRequest) enrichEditResult {
 		if out.trashAll {
 			trashAllLyricsFiles()
 		}
-		saveEnrichCache()
+		saveErr := saveEnrichCacheChecked()
 		exportLyricsFilesFor(out.exports...)
 		nudgeEnrichPush()
+		if saveErr != nil {
+			// 内存里已经改了(常驻进程下一次保存还会再写),但这一刻没落盘:如实回给 App。
+			res.Error = saveErr.Error()
+			log.Printf("enrich edit: op=%s applied but not saved: %v", req.Op, saveErr)
+			return res
+		}
 	}
 	res.OK = true
 	res.Changed = out.changed

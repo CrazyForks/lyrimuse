@@ -37,6 +37,8 @@ const enrichBodyLoadWorkers = 8
 type bodyHydrateStats struct {
 	lean, restored, newer, missing int
 	missingKeys                    []string // 最多记 3 条,日志里点名
+	// missingSet:正文小文件缺失或损坏的全部 key。启动那次导入按它让 lyrics/ 里的文件补回正文。
+	missingSet map[string]bool
 	// full:正文还整块写在主缓存里的条目(老格式)。非零时第一次改写成精简格式之前要先留一份备份。
 	full int
 }
@@ -94,6 +96,10 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 		switch b := bodies[i]; {
 		case b == nil:
 			st.missing++
+			if st.missingSet == nil {
+				st.missingSet = map[string]bool{}
+			}
+			st.missingSet[k] = true
 			if len(st.missingKeys) < 3 {
 				st.missingKeys = append(st.missingKeys, k)
 			}

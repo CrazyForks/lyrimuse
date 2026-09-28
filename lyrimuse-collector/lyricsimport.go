@@ -47,7 +47,8 @@ func parseLyricsFile(path string) parsedLyricsFile {
 // parseLyricsBytes 是 parseLyricsFile 的解析部分(文件内容已经读进来了),规则见 parseLyricsFile。
 func parseLyricsBytes(data []byte) parsedLyricsFile {
 	var p parsedLyricsFile
-	lines := strings.Split(string(data), "\n")
+	// 有的编辑器存盘时给文件开头加 UTF-8 BOM:不去掉的话第一行认不出歌手头,整份文件被当成坏的。
+	lines := strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n")
 	get := func(i int) (string, bool) {
 		if i < 0 || i >= len(lines) {
 			return "", false
@@ -162,6 +163,15 @@ func lyricsFileSuffixOf(name string) string {
 	return suffix
 }
 
+// 这次启动的缓存没能完整读进来时,导入不能按「文件没动过就跳过」:跳过的前提是缓存里还是导出时那一份。
+// lyricsImportRestoreAll:主缓存读不出 / 解析不动,从空库起;lyricsImportRestoreKeys:主缓存读进来了,但这几条
+// 的正文小文件缺失或损坏,只剩主歌词。这些条目这一轮让 lyrics/ 里的文件赢,把译文 / 罗马音 / 逐字补回来 ——
+// 不然导出看到字段是空的,会把正好存着它们的那几个文件删掉。只对下一次导入有效,用完即清。受 enrichMu 保护。
+var (
+	lyricsImportRestoreAll  bool
+	lyricsImportRestoreKeys map[string]bool
+)
+
 // 返回值 = 这一轮真正被文件改写的条目数。调用方(main.go)据此决定要不要作废启动期迁移
 // 水位:用户手改 lyrics/ 里的文件是**外来数据**入口,改过就得让后面那些存量迁移照常跑一遍
 // (见 startupmigration.go)。老调用点忽略返回值即可,行为不变。
@@ -230,8 +240,11 @@ func importLyricsFrom(dir string, persist bool) int {
 	}
 
 	enrichMu.Lock()
+	restoreAll, restoreKeys := lyricsImportRestoreAll, lyricsImportRestoreKeys
+	lyricsImportRestoreAll, lyricsImportRestoreKeys = false, nil
 	for _, g := range groups {
-		if useState && g.unchanged == len(g.files) {
+		groupUnchanged := useState && g.unchanged == len(g.files)
+		if groupUnchanged && !restoreAll && len(restoreKeys) == 0 {
 			continue
 		}
 		// 组里每个文件只读一次:认身份的头部与各变体的正文都从这一份里取,读的时候顺手记下它的状态。
@@ -246,7 +259,6 @@ func importLyricsFrom(dir string, persist bool) int {
 				recordLyricsFile(dir, filepath.Base(path), info, lyricsCRC(data))
 			}
 		}
-		readBody := func(suffix string) string { return bodies[suffix].body }
 		// 4 个后缀里随便挑一个能解析出头部的文件即可——同一组里的头部理应完全一致
 		// (都是同一次 exportLyricsFiles 写出来的)。
 		var parsed parsedLyricsFile
@@ -263,31 +275,43 @@ func importLyricsFrom(dir string, persist bool) int {
 		// (`不散的筵席（I Miss You）`)。这里同样走 enrichKey,老文件才不会把一条已经归并
 		// 好的记录又拆回两条。
 		key := enrichKey(parsed.artist, parsed.title, parsed.album)
+		if groupUnchanged && !restoreAll && !restoreKeys[key] {
+			continue
+		}
+		// 一个变体读不出来、头部认不出(空文件、被别的程序改坏),或者头部说的不是这一首时**不采纳**:它的
+		// 正文是空串,采纳了等于清空这个字段,紧接着导出看到字段为空就把文件删掉。保留缓存里的原值。
+		variantBody := func(suffix string) (string, bool) {
+			p, ok := bodies[suffix]
+			if !ok || !p.ok || p.artist != parsed.artist || p.title != parsed.title || p.album != parsed.album {
+				return "", false
+			}
+			return p.body, true
+		}
 
 		e := enrichCache[key] // 不存在时是 enrichEntry{} 零值,TS 自然留 0
 		changed := false
-		if _, ok := g.files[".lrc"]; ok {
-			if v := readBody(".lrc"); e.Lyrics != v {
+		if v, ok := variantBody(".lrc"); ok {
+			if e.Lyrics != v {
 				e.Lyrics, changed = v, true
 				// 歌词文件里没有背景人声(导出不写它),正文换了就清掉,别挂在新正文下面。
 				e.LyricsBG = ""
 			}
 		}
-		if _, ok := g.files[".tr.lrc"]; ok {
-			if v := readBody(".tr.lrc"); e.LyricsTr != v {
+		if v, ok := variantBody(".tr.lrc"); ok {
+			if e.LyricsTr != v {
 				e.LyricsTr, changed = v, true
 				// 译文被文件里的内容顶替了,原来记的语言不再描述它 —— 清掉,让
 				// translationUsable 退回文本判别,别拿旧语言给新内容背书。
 				e.LyricsTrLang = ""
 			}
 		}
-		if _, ok := g.files[".roma.lrc"]; ok {
-			if v := readBody(".roma.lrc"); e.LyricsRoma != v {
+		if v, ok := variantBody(".roma.lrc"); ok {
+			if e.LyricsRoma != v {
 				e.LyricsRoma, changed = v, true
 			}
 		}
-		if _, ok := g.files[".yrc"]; ok {
-			if v := readBody(".yrc"); e.LyricsYRC != v {
+		if v, ok := variantBody(".yrc"); ok {
+			if e.LyricsYRC != v {
 				e.LyricsYRC, changed = v, true
 				e.LyricsBG = ""
 			}

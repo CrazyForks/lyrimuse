@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	_ "image/jpeg" // 注册 JPEG 解码器
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
 	"log"
@@ -1520,10 +1521,11 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	lyricsChanged := false
 	defer func() {
 		enrichMu.Unlock()
-		requestEnrichSave()
 		if !lyricsChanged {
+			requestEnrichBookkeepingSave(key)
 			return
 		}
+		requestEnrichSave()
 		exportLyricsFilesFor(key)
 		// 非阻塞通知 poll 立刻重推。跟 saveEnrichCache 一样,**四条补全路径都要做** —— 漏了
 		// 的话,同一首歌播到中途才补出来的译文要等下一次换歌才会被推出去(译文其实早就翻好、
@@ -1802,10 +1804,11 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	lyricsChanged := false
 	defer func() {
 		enrichMu.Unlock()
-		requestEnrichSave()
 		if !lyricsChanged {
+			requestEnrichBookkeepingSave(key)
 			return
 		}
+		requestEnrichSave()
 		exportLyricsFilesFor(key)
 		// 非阻塞通知 poll 立刻重推。跟 saveEnrichCache 一样,**四条补全路径都要做** —— 漏了
 		// 的话,同一首歌播到中途才补出来的译文要等下一次换歌才会被推出去(译文其实早就翻好、
@@ -1911,6 +1914,37 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	enrichDirty = true
 }
 
+// peripheralQQURL 外围补全后生效的 QQ 链接:只在这一轮**真的升级了**(拿到真·歌曲页)时才覆盖 ——
+// 兜底搜索链接不该把已经存下来的真链接冲掉(fresh 可能因为一次网络抖动退化成兜底)。
+func peripheralQQURL(existing, fresh string) string {
+	if fresh != "" && (!isQQSearchFallbackURL(fresh) || isQQSearchFallbackURL(existing)) {
+		return fresh
+	}
+	return existing
+}
+
+// peripheralQQMids 是 lookupPeripheralQQMids 在锁外查好的结果;songMid 是按哪一首查的。
+type peripheralQQMids struct {
+	songMid, albumMid, singerMid string
+}
+
+// lookupPeripheralQQMids 在拿 enrichMu 之前,按外围补全落盘时会生效的那个 QQURL 查专辑 / 歌手 mid。
+// 条目不在、两个 mid 都已经有、链接里没有 songmid 时不查。
+func lookupPeripheralQQMids(ctx context.Context, key string, fresh enrichEntry) peripheralQQMids {
+	enrichMu.Lock()
+	e, ok := enrichCache[key]
+	enrichMu.Unlock()
+	if !ok || (e.QQAlbumMid != "" && e.QQSingerMid != "") {
+		return peripheralQQMids{}
+	}
+	songMid := qqMidFromURL(peripheralQQURL(e.QQURL, fresh.QQURL))
+	if songMid == "" {
+		return peripheralQQMids{}
+	}
+	albumMid, singerMid := qqSongCatalogMids(ctx, songMid)
+	return peripheralQQMids{songMid: songMid, albumMid: albumMid, singerMid: singerMid}
+}
+
 // gainsWordTiming:正文不变时唯一要补写的情况 —— 缓存里没有逐字、这一轮的胜者带了逐字。
 // 只补 LyricsYRC,译文/罗马音保持原样(正文没变,它们没有理由跟着换)。rescoreLyrics 和
 // resync-lyrics 两处共用这一条判定。
@@ -1964,7 +1998,9 @@ func resolveEnrichAsync(ctx context.Context, key, artist, title, album, bundleID
 		// applyDeviceCoverUpgrade —— 那条路的闸门是「条目已存在且封面还不是 device」,而这里
 		// 的条目正是这一趟新建的、封面恰恰就是 device,于是占位图会永久钉在这条新记录上。
 		// 第一档延迟之前条目多半还没落盘,那几趟自己会判成「条目还不在」直接跳过。
-		go settleDeviceCover(ctx, key, artist, title, album, bundleID)
+		// 不跟首次解析的 ctx 走:解析一结束 defer 就取消它,而那几档恰恰要在条目落盘**之后**才有事做,
+		// 跟着它走一档都跑不成。三档一共 16 秒、每档都重读条目,自己就是有界的。
+		go settleDeviceCover(context.WithoutCancel(ctx), key, artist, title, album, bundleID)
 	}
 	// 歌词先上屏:resolveTrackEnrichment 选定歌词后、补外围信息之前回调一次,先提交一份只带
 	// 歌词与网易云封面的条目;下面拿到完整结果后再提交一次,整条覆盖它。
@@ -2315,6 +2351,9 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	// 换封面判定用的专辑名:播放器没报时是 Apple 目录回填的那个(刚才 resolveTrackEnrichment 里已经同步查过,
 	// 这里只读缓存)。必须在取 enrichMu 之前算,理由见 trackEnrichment 里同一行的注释。
 	coverAlbum := coverAlbumForTrack(ctx, artist, title, album, durationSecs)
+	// QQ 专辑 / 歌手 mid 的现查是网络请求(单曲详情:几个网页主机各 6 秒,再退客户端网关,没取到不缓存),
+	// 同样必须在拿 enrichMu 之前做完,锁里只认这里查好的结果。
+	qqMids := lookupPeripheralQQMids(ctx, key, fresh)
 	enrichMu.Lock()
 	e, ok := enrichCache[key]
 	if !ok {
@@ -2344,24 +2383,16 @@ func backfillPeripheralFields(key, artist, title, album string, durationSecs flo
 	if fresh.AppleURL != "" {
 		e.AppleURL = fresh.AppleURL
 	}
-	if fresh.QQURL != "" {
-		// 只在这一轮**真的升级了**(拿到真·歌曲页)时才覆盖:兜底搜索链接不该把已经存下来
-		// 的真链接冲掉(fresh 可能因为一次网络抖动退化成兜底)。
-		if !isQQSearchFallbackURL(fresh.QQURL) || isQQSearchFallbackURL(e.QQURL) {
-			e.QQURL = fresh.QQURL
-		}
-	}
-	// 专辑/歌手 mid:按**最终生效**的那个 QQURL 里的 songmid 现查一次(它可能来自这一轮的
-	// fresh,也可能是之前就存下来的)。只在缺的时候查,不给已经有值的条目白发请求。
+	e.QQURL = peripheralQQURL(e.QQURL, fresh.QQURL)
+	// 专辑/歌手 mid:按**最终生效**的那个 QQURL 里的 songmid(锁外已经查好,见 lookupPeripheralQQMids)。
+	// 锁外读到的条目跟这一刻的不是同一首 songmid 时不认,留给下一轮。
 	if e.QQAlbumMid == "" || e.QQSingerMid == "" {
-		if songMid := qqMidFromURL(e.QQURL); songMid != "" {
-			if albumMid, singerMid := qqSongCatalogMids(ctx, songMid); albumMid != "" || singerMid != "" {
-				if e.QQAlbumMid == "" {
-					e.QQAlbumMid = albumMid
-				}
-				if e.QQSingerMid == "" {
-					e.QQSingerMid = singerMid
-				}
+		if songMid := qqMidFromURL(e.QQURL); songMid != "" && songMid == qqMids.songMid {
+			if e.QQAlbumMid == "" {
+				e.QQAlbumMid = qqMids.albumMid
+			}
+			if e.QQSingerMid == "" {
+				e.QQSingerMid = qqMids.singerMid
 			}
 		}
 	}
@@ -4582,27 +4613,37 @@ func loadEnrichCache(path string) {
 	enrichPath = path
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// 文件不存在是首次启动的正常情况;别的读错误必须喊出来 —— 静默当成空库,接下来
-		// 第一次保存就会把用户攒的整个缓存盖成几条新数据(坐实:204 条被磨到 10 条,
-		// 用户手工修过的歌词也在里面)。
+		// 文件不存在是首次启动的正常情况;别的读错误(权限、I/O、打开文件数上限……)不等于没有:
+		// 静默当成空库,接下来第一次保存就会把用户攒的整个缓存盖成几条新数据(坐实:204 条被磨到
+		// 10 条,用户手工修过的歌词也在里面)。所以这个进程**不写**它,见 refuseEnrichSavesThisRun。
 		if !os.IsNotExist(err) {
-			slog.Error("load enrich cache failed — starting empty, existing file left untouched", "err", err)
+			refuseEnrichSavesThisRun()
+			slog.Error("load enrich cache failed — running without saving, existing file left untouched", "err", err)
 		}
 		return
 	}
 	var m map[string]enrichEntry
 	if err := json.Unmarshal(data, &m); err != nil || m == nil {
-		// 解析不动就把原文件挪到一边保住,绝不留在原位等着被后续保存覆盖。
-		side := path + ".corrupt"
+		// 解析不动就把原文件挪到一边保住,绝不留在原位等着被后续保存覆盖。名字带时间:再坏一次时
+		// 不盖掉上一份(跟 App 放弃坏配置文件同一个命名)。
+		suffix := ".corrupt-" + time.Now().Format("20060102-150405")
+		side := path + suffix
 		if renameErr := os.Rename(path, side); renameErr == nil {
+			moveEnrichSideDirsAside(path, suffix)
+			enrichMu.Lock()
+			lyricsImportRestoreAll = true
+			enrichMu.Unlock()
 			log.Printf("enrich cache unreadable (%v) — moved aside to %s, starting empty", err, side)
 		} else {
-			slog.Error("enrich cache unreadable and could not move aside", "err", err, "rename_err", renameErr)
+			refuseEnrichSavesThisRun()
+			slog.Error("enrich cache unreadable and could not move aside — running without saving", "err", err, "rename_err", renameErr)
 		}
 		return
 	}
 	// 正文在小文件里的条目补回正文,见 enrichbodyload.go。
 	bodies := hydrateEnrichBodies(m, enrichBodiesDirFor(path))
+	// 正文小文件缺了的那几条只剩主歌词:启动那次导入要让 lyrics/ 里的文件把它们补回来,见 lyricsImportRestoreKeys。
+	lyricsImportRestoreKeys = bodies.missingSet
 	enrichDiskFullFormat = bodies.full > 0
 	shared := shareIdenticalDecisions(m) // 内存里两槽相同的判决记录共用一个对象,见 enrichdedupe.go
 	enrichMu.Lock()
@@ -4611,6 +4652,36 @@ func loadEnrichCache(path string) {
 	log.Printf("cache: loaded %d track enrichments from %s (%d identical decision pairs shared)", len(m), path, shared)
 	bodies.log()
 	warnEnrichUnknownKeys(m) // 见 enrichjson.go:非零 = 这个构建比缓存文件老
+}
+
+// enrichLoadFailed:这次启动主缓存读不进来、原文件又还在原位(读出错,或解析不动又挪不走)。
+var enrichLoadFailed bool
+
+// refuseEnrichSavesThisRun 让这个进程从空库跑、但什么都不落盘:清空 enrichPath 后 saveEnrichCache、
+// 精简索引、正文小文件、判决旁路文件的写入和启动清扫全是空操作,原文件原样留给下次启动再读。
+// 启动那次导入按「文件全赢」把歌词从 lyrics/ 补回内存,这一场照常出词。
+func refuseEnrichSavesThisRun() {
+	enrichMu.Lock()
+	enrichPath = ""
+	enrichLoadFailed = true
+	lyricsImportRestoreAll = true
+	enrichMu.Unlock()
+}
+
+// moveEnrichSideDirsAside 主缓存挪成坏文件之后,把它的正文小文件目录、判决旁路目录一起挪到旁边(同一个后缀)。
+// 精简格式的主缓存里只剩元数据和主歌词,译文 / 罗马音 / 逐字 / 纯文本 / 背景人声都只在正文小文件里:
+// 留在原位的话,从空库起的这一场会按 lyrics/ 重建的条目重写它们、再把 lyrics/ 里没有的那些当孤儿清掉,
+// 手工救回坏文件时要用的另一半就没了。挪不走只记一笔,不影响启动。
+func moveEnrichSideDirsAside(cachePath, suffix string) {
+	dirs := []string{enrichBodiesDirFor(cachePath), filepath.Join(filepath.Dir(cachePath), clientName+"-decisions")}
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		if err := os.Rename(dir, dir+suffix); err != nil {
+			slog.Error("enrich cache unreadable: could not move side directory aside", "dir", dir, "err", err)
+		}
+	}
 }
 
 // saveEnrichCache atomically writes the cache when dirty (temp file + rename).
@@ -4627,12 +4698,24 @@ func loadEnrichCache(path string) {
 var enrichSaveMu sync.Mutex
 
 func saveEnrichCache() {
+	_ = saveEnrichCacheChecked() // 失败已经记过日志,脏标记也还原了,下一次保存 / 退出前那次会再写
+}
+
+// errEnrichCacheNotLoaded:这次启动主缓存没读进来,这个进程不写它(见 refuseEnrichSavesThisRun)。
+var errEnrichCacheNotLoaded = errors.New("enrich cache could not be loaded this run; not saving over it")
+
+// saveEnrichCacheChecked 同 saveEnrichCache,把失败交回给要告诉别人的调用方(apply-enrich-edit 回给 App)。
+func saveEnrichCacheChecked() error {
 	enrichSaveMu.Lock()
 	defer enrichSaveMu.Unlock()
 	enrichMu.Lock()
 	if !enrichDirty || enrichPath == "" {
+		failed := enrichDirty && enrichLoadFailed
 		enrichMu.Unlock()
-		return
+		if failed {
+			return errEnrichCacheNotLoaded
+		}
+		return nil
 	}
 	snapshot := make(map[string]enrichEntry, len(enrichCache))
 	// 判决记录的候选明细不进主缓存:还带着明细的条目在这里拆开,明细先写旁路文件、内存里换成去掉
@@ -4660,24 +4743,34 @@ func saveEnrichCache() {
 	tmp, err := os.CreateTemp(filepath.Dir(enrichPath), filepath.Base(enrichPath)+".tmp.*")
 	if err != nil {
 		slog.Error("save enrich cache", "err", err)
-		return
+		return enrichSaveFailed(err)
 	}
 	// 流式写,不再先 Marshal 出整份再一次写入(一次保存临时分配约 680 MB,见 enrichsave.go 头注)。
 	if err := writeEnrichSnapshot(tmp, disk); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		slog.Error("save enrich cache", "err", err)
-		return
+		return enrichSaveFailed(err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		slog.Error("save enrich cache", "err", err)
-		return
+		return enrichSaveFailed(err)
 	}
 	if err := os.Rename(tmp.Name(), enrichPath); err != nil {
 		os.Remove(tmp.Name())
 		slog.Error("save enrich cache", "err", err)
-		return
+		return enrichSaveFailed(err)
 	}
 	linkEnrichIndex(snapshot, bodyCRCs)
+	return nil
+}
+
+// enrichSaveFailed 写盘失败时把脏标记还原:快照取完就清了它,不还原的话这批改动只活在内存里,
+// 退出前 flushEnrichSave 看到「不脏」直接跳过,就这么丢了。
+func enrichSaveFailed(err error) error {
+	enrichMu.Lock()
+	enrichDirty = true
+	enrichMu.Unlock()
+	return err
 }
