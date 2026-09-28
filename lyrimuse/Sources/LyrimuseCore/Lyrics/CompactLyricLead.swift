@@ -18,8 +18,8 @@ import Foundation
 ///
 /// - `pos < end`:还在唱,显示本行。
 /// - `pos >= end` 且 `next - pos <= revealMs`:显示**下一句**(未染色)——这就是提前量。
-/// - `pos >= end` 且离下一句还远:显示 `.placeholder`(调用方画 ♪)。已经唱完的句子不该
-///   继续占着那一行冒充"正在唱"。
+/// - `pos >= end` 且离下一句还远:先在本行多停 `tailHoldMs`,之后显示 `.placeholder`(调用方画
+///   「•••」)。已经唱完的句子不该继续占着那一行冒充"正在唱"。
 ///
 /// 短间隙(`next - end <= revealMs`,实测占 97.7%)天然落进第二档,表现就是**唱完即切**。
 ///
@@ -36,11 +36,14 @@ public enum CompactLyricLead {
     /// 让人以为播放卡住了。
     public static let revealMs = 5000
 
+    /// 长间奏里本行唱完之后再停多久才换成占位。必须等于间奏窗口的起点余量(`GapRule.tailMarginMs`):
+    /// 「•••」的窗口从那一刻才有,早一刻换成占位就只能画静态的 ♪。
+    public static let tailHoldMs = LyricsSyncEngine.GapRule.tailMarginMs
 
     public enum Outcome: Equatable {
         /// 显示这一行(下标可能是当前行,也可能是下一行)。
         case line(Int)
-        /// 本行唱完了、下一句还早 —— 调用方画 ♪ 占位。
+        /// 本行唱完了、下一句还早 —— 调用方画「•••」占位。
         case placeholder
     }
 
@@ -61,8 +64,16 @@ public enum CompactLyricLead {
         guard let next = nextStartMs else { return .line(activeIdx) }
         // 进入提前量窗口(短间隙天然一进 end 就满足)→ 亮出下一句。
         if posMs >= next - revealMs { return .line(activeIdx + 1) }
+        // 长间奏开头:间奏窗口还没开始,本行再停一会儿。
+        if posMs < end + tailHoldMs { return .line(activeIdx) }
         // 长间奏中段:唱完了,但下一句还远。
         return .placeholder
+    }
+
+    /// 单行面占位期间「•••」的窗口。原始间奏窗口(`rawGapWindow`)的终点是下一句开始,单行面却提前
+    /// `revealMs` 就换成下一句:按原始终点排,点的动画走不完就被换掉。
+    public static func placeholderDotsWindow(_ raw: LyricsGapWindow) -> LyricsGapWindow {
+        LyricsGapWindow(startMs: raw.startMs, endMs: max(raw.startMs, raw.endMs - revealMs))
     }
 
     /// 某一行在单行展示面上**总共会显示多久**(毫秒)。菜单栏跑马灯拿它配速。
@@ -75,15 +86,15 @@ public enum CompactLyricLead {
     /// 窗口 = [出现, 消失):
     /// - 出现:上一行唱完时 `max(上一行结束, 本行开始 - revealMs)`(不早于此 —— 上一行还在
     ///   唱的时候轮不到它);上一行结束不可知(行级 LRC)就是本行自己的开始时刻。
-    /// - 消失:本行唱完(`lineEndMs`)——那一刻不是切到下一句就是切成 ♪,总之它下场了;
-    ///   行级 LRC 不可知则退回下一句开始;没有下一句则用曲末兜底。
+    /// - 消失:本行唱完(`lineEndMs`)那一刻切到下一句;后面是长间奏时再停 `tailHoldMs` 才换成占位,
+    ///   停不满就在提前量窗口开始时直接换成下一句。行级 LRC 不可知则退回下一句开始;没有下一句则用曲末兜底。
     public static func displayDurationMs(prevLineEndMs: Int?, startMs: Int,
                                          lineEndMs: Int?, nextStartMs: Int?,
                                          fallbackEndMs: Int?) -> Int? {
         let appear = appearMs(prevLineEndMs: prevLineEndMs, startMs: startMs)
         let vanish: Int?
-        if let end = lineEndMs, nextStartMs != nil {
-            vanish = end
+        if let end = lineEndMs, let next = nextStartMs {
+            vanish = max(end, min(end + tailHoldMs, next - revealMs))
         } else if let next = nextStartMs {
             vanish = next
         } else {

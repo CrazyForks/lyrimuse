@@ -56,6 +56,20 @@ public enum LyricSecondaryLine: String, CaseIterable, Sendable {
         showsSecondaryRow ? currentLine : compactLine
     }
 
+    /// 灵动岛喂给 `displayedLine` / `secondaryText` 的当前句:在够格的间奏里(`LyricsGapWindow.isMarked`)
+    /// 当作没有,跟前奏一样 —— 主行画「•••」,副行的「下一句」照旧,译文 / 罗马音跟着没有。同悬浮歌词的
+    /// `inMarkedInterlude`。不够格的句间空档照旧留着上一句,不然每两句之间都闪一下圆点。
+    public static func currentLine(_ line: SyncedLyricLine?, inMarkedInterlude: Bool) -> SyncedLyricLine? {
+        inMarkedInterlude ? nil : line
+    }
+
+    /// 灵动岛主行「•••」的窗口。主行取 `compactLine`、此刻又是它的占位时,下一句会提前 `revealMs` 亮出来,
+    /// 点要在那一刻走完(`CompactLyricLead.placeholderDotsWindow`);其余情形(前奏、副行开着)点一直画到
+    /// 下一句开始,用原始窗口。
+    public func gapDotsWindow(_ raw: LyricsGapWindow, compactPlaceholder: Bool) -> LyricsGapWindow {
+        !showsSecondaryRow && compactPlaceholder ? CompactLyricLead.placeholderDotsWindow(raw) : raw
+    }
+
     // MARK: - 灵动岛专用
 
     /// 展开区那行「下一句歌词预览」(`notchExpandedShowsNextLine`)在这个选项下是否被顶掉:

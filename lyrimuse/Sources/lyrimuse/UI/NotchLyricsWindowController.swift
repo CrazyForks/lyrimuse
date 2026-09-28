@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 import LyrimuseCore
+import os
 
 // 文件级常量(跟 LyricsOverlayWindowController.swift 同一个理由不挂在 @MainActor 类
 // 上)。补上——"显示灵动岛歌词"这个菜单开关(isVisible)之前只存在内存里,
@@ -377,7 +378,10 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             guard let win = note.object as? NSWindow else { return }
             MainActor.assumeIsolated {
                 let visible = win.occlusionState.contains(.visible)
-                if self?.isSurfaceVisible != visible { self?.isSurfaceVisible = visible }
+                if self?.isSurfaceVisible != visible {
+                    self?.isSurfaceVisible = visible
+                    Self.hoverLog.notice("surface visible=\(visible, privacy: .public)")
+                }
             }
         }
 
@@ -662,6 +666,8 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
     //
     // 不再往下压了:这个延迟唯一的作用就是滤掉"鼠标只是路过刘海下方"的误触发,
     // 归零的话光标横穿屏幕顶部就会一路把灵动岛捅开。
+    /// 悬停展开 / 窗口显隐的边沿日志:只在边沿上写,不跟每次指针移动。
+    static let hoverLog = Logger(subsystem: "me.yudaotor.lyrimuse", category: "notch-hover")
     private static let hoverEnterDelay: TimeInterval = 0.12
     private static let hoverExitDelay: TimeInterval = 0.1
     private var pendingHoverWork: DispatchWorkItem?
@@ -691,6 +697,8 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
     /// 卡片自己、简介浮框,任一被指针停着就算悬停。两路都走同一套进入 / 收起延迟。
     private var cardHovered = false
     private var editorialHovered = false
+    /// 控制器此刻认不认为指针在卡片上。`NotchWindowRoot.updateHover` 拿它跟自己的边沿记忆对账。
+    var isCardHovered: Bool { cardHovered }
 
     private func applyHoverIntent() {
         let expanded = cardHovered || editorialHovered
@@ -707,6 +715,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             let wasExpanded = self.isExpanded
             self.hoverExpanded = expanded
             self.refreshExpanded()
+            Self.hoverLog.notice("hover \(expanded ? "expand" : "collapse", privacy: .public) isExpanded=\(self.isExpanded, privacy: .public)")
             // 不再 recomputeGeometry:窗口尺寸跟展开与否无关了,展开这件事整个发生在
             // SwiftUI 那一侧(NotchWindowRoot 的弹簧动画)。
             // 触觉反馈跟着卡片**真正展开**的这一刻给,不再抢在意图延迟兑现之前
@@ -802,6 +811,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             if replayReveal { revealGeneration &+= 1 }
             if orderFront {
                 lastAppliedShouldShow = true
+                Self.hoverLog.notice("window show replayReveal=\(replayReveal, privacy: .public)")
                 // orderFrontRegardless(),不是 orderFront(nil)——这个 App 是 .accessory 策略、
                 // 从不激活成前台 App,只有它能不看"当前是否是活跃 App"这个前提就把窗口调到最前。
                 window?.orderFrontRegardless()
@@ -818,6 +828,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             if isVanished { isVanished = false }
             window?.orderOut(nil)
             resetHoverAfterHide()
+            Self.hoverLog.notice("window hide")
             return
         case .keepPendingVanish:
             return
@@ -851,6 +862,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
                 self.lastAppliedShouldShow = false
                 self.window?.orderOut(nil)   // isVanished 保持 true:下次露面从刘海里长出来
                 self.resetHoverAfterHide()
+                Self.hoverLog.notice("window hide after vanish")
             }
         }
         pendingHideWork = work

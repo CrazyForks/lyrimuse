@@ -1004,6 +1004,30 @@ func runNotchTests() {
                     "主行取句: 副行开着、前奏里还没有当前句 = nil(显示间奏占位),不退回提前量那句")
         expectEqual(LyricSecondaryLine.off.displayedLine(compactLine: nil, currentLine: current), nil,
                     "主行取句: 副行关着、长间奏中段没有提前量 = nil,不退回当前句")
+
+        // 够格的间奏里当前句当作没有:副行开着时主行画「•••」,副行的下一句照旧,译文跟着没有。
+        let sung = SyncedLyricLine(romanization: nil, translation: "译文", mainText: "唱完的那句", words: nil, wordGroups: nil, side: nil)
+        let masked = LyricSecondaryLine.currentLine(sung, inMarkedInterlude: true)
+        expectEqual(masked, nil, "够格间奏: 当前句当作没有")
+        expectEqual(LyricSecondaryLine.currentLine(sung, inMarkedInterlude: false), sung, "句间短空档: 当前句照旧")
+        expectEqual(LyricSecondaryLine.nextLine.displayedLine(compactLine: nil, currentLine: masked), nil,
+                    "够格间奏 + 副行下一句: 主行画「•••」")
+        expectEqual(LyricSecondaryLine.nextLine.secondaryText(currentLine: masked, nextLineText: "下一句"), "下一句",
+                    "够格间奏 + 副行下一句: 副行照旧显示下一句")
+        expectEqual(LyricSecondaryLine.translation.secondaryText(currentLine: masked, nextLineText: "下一句"), nil,
+                    "够格间奏 + 副行译文: 不挂唱完那句的译文")
+
+        // 「•••」的窗口:只有单行面的占位才提前 reveal 走完。
+        let raw = LyricsGapWindow(startMs: 15_200, endMs: 40_000)
+        expectEqual(LyricSecondaryLine.off.gapDotsWindow(raw, compactPlaceholder: true),
+                    LyricsGapWindow(startMs: 15_200, endMs: 40_000 - CompactLyricLead.revealMs),
+                    "三点窗口: 单行面占位,下一句提前亮出那一刻走完")
+        expectEqual(LyricSecondaryLine.off.gapDotsWindow(raw, compactPlaceholder: false), raw,
+                    "三点窗口: 单行面前奏,画到第一句开始")
+        for kind in [LyricSecondaryLine.nextLine, .translation, .romanization] {
+            expectEqual(kind.gapDotsWindow(raw, compactPlaceholder: true), raw,
+                        "三点窗口: 副行开着(\(kind)),画到下一句开始")
+        }
     }
 
     // ---- 跳过广告门槛的短缓存 ----
@@ -1042,6 +1066,12 @@ func runNotchTests() {
                              ("NotchLyricsWindowController", controller)] {
             expectEqual(text.isEmpty, false, "灵动岛契约: 读到 \(name).swift")
         }
+
+        // 悬停边沿跟控制器对账:窗口收走时控制器清了悬停、视图却还记着「在卡片上」,下一次移上去必须重新算作进入。
+        expectEqual(root.contains("let stale = inside && hoveringCard && !controller.isCardHovered"), true,
+                    "悬停契约: 视图的边沿记忆跟控制器对账")
+        expectEqual(root.contains("let changed = inside != hoveringCard || stale"), true,
+                    "悬停契约: 对不上时这一次算边沿")
 
         // 层内停表:NotchLyricsView 自己属性上的 @Environment 读到的是根上的值,拿不到 body 里
         // NotchCardLayerActive 设的层值(同构复现:属性上读 63 次/2 秒不停,子视图里读 0 次)。
@@ -1126,6 +1156,14 @@ func runNotchTests() {
                     "主行取句契约: 灵动岛调 Core 的 displayedLine")
         expectEqual(view.contains("showsSecondaryRow ? current : compact"), false,
                     "主行取句契约: 灵动岛不许再内联写一份取句规则")
+        expectEqual(view.contains("Publishers.CombineLatest4(p.$notchLyrics.map(\\.compactLine), shownCurrentLine,"), true,
+                    "间奏三点契约: 主行取句吃的是间奏里当作没有的当前句")
+        expectEqual(view.contains("Publishers.CombineLatest3(shownCurrentLine, p.$notchLyrics.map(\\.nextText)"), true,
+                    "间奏三点契约: 副行文本吃同一份当前句")
+        expectEqual(view.contains("raw?.isMarked(in: markers) ?? false"), true,
+                    "间奏三点契约: 只有够格的间奏才换成「•••」")
+        expectEqual(view.contains("playback.secondaryLine.gapDotsWindow(raw, compactPlaceholder: playback.compactShowsPlaceholder)"), true,
+                    "间奏三点契约: 三点窗口走 Core 的 gapDotsWindow")
         expectEqual(view.contains("NotchClockPhase.tick(for: anchor, epoch: clockEpoch)"), true,
                     "秒表契约: App 侧的 schedule 由 Core 的 NotchClockPhase 算")
     }

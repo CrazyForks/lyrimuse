@@ -63,6 +63,8 @@ private final class NotchPlayback: ObservableObject {
     /// 跟悬浮歌词同一来源(`PlaybackCoordinator.rawGapWindow`),不设门槛 —— 灵动岛没有
     /// "沿用上一行"这条退路,短前奏/短间奏也要画出来,不然就是兜底状态机漏判退回静态占位符。
     @Published private(set) var rawGapWindow: LyricsGapWindow?
+    /// 单行面此刻是「唱完了、下一句还早」的占位(`SurfaceLyrics.compactPlaceholder`),`gapDotsWindow` 要用。
+    @Published private(set) var compactShowsPlaceholder = false
     /// 这条广告是插播里的第几条 / 一共几条(「广告中,还剩几个广告」
     /// 显示出来)。只有 YT Music 网页广告给得出;拿不到是 nil,那一段整个不画 —— 同
     /// 「时长未知不画倒计时」那条纪律,不编数字。语义见 `LocalPlaybackSource.currentAdSlot`。
@@ -212,6 +214,12 @@ private final class NotchPlayback: ObservableObject {
     init() {
         let p = PlaybackCoordinator.shared
         let s = AppSettings.shared
+        // 主行 / 副行认的当前句:够格的间奏里当作没有(`LyricSecondaryLine.currentLine(_:inMarkedInterlude:)`)。
+        // 均衡器条子的 `currentLine` 不走这里。
+        let shownCurrentLine = p.$notchLyrics.map(\.line)
+            .combineLatest(p.$rawGapWindow.combineLatest(p.$lyricsGapMarkers)
+                .map { raw, markers in raw?.isMarked(in: markers) ?? false })
+            .map { LyricSecondaryLine.currentLine($0, inMarkedInterlude: $1) }
         subs = [
             p.$title.removeDuplicates().sink { [weak self] in self?.title = $0 },
             p.$artist.removeDuplicates().sink { [weak self] in self?.artist = $0 },
@@ -228,7 +236,7 @@ private final class NotchPlayback: ObservableObject {
             // 压成整行之后自然落到 `.plain` 那一档,渲染分支不用改。`currentLine` **不**压 —— 它只给
             // 均衡器条子当"此刻在唱哪个字"的节拍,那是跟着人声动的律动、不是染色,关掉卡拉OK填色不该
             // 让条子一起哑掉。
-            Publishers.CombineLatest4(p.$notchLyrics.map(\.compactLine), p.$notchLyrics.map(\.line),
+            Publishers.CombineLatest4(p.$notchLyrics.map(\.compactLine), shownCurrentLine,
                                       s.$notchLyricsKaraoke, s.$notchSecondaryLine)
                 .map { compact, current, karaoke, secondary -> SyncedLyricLine? in
                     // 挑哪一句在 Core(`LyricSecondaryLine.displayedLine`),菜单栏读的是同一份。
@@ -238,7 +246,7 @@ private final class NotchPlayback: ObservableObject {
                 .removeDuplicates()
                 .sink { [weak self] in self?.displayLine = $0 },
             // 副行文本:按四选一取下一句 / 当前句译文 / 当前句罗马音,空白算没有。
-            Publishers.CombineLatest3(p.$notchLyrics.map(\.line), p.$notchLyrics.map(\.nextText), s.$notchSecondaryLine)
+            Publishers.CombineLatest3(shownCurrentLine, p.$notchLyrics.map(\.nextText), s.$notchSecondaryLine)
                 .map { current, next, secondary -> String? in
                     // 取值规则在 Core(`LyricSecondaryLine.secondaryText`),菜单栏副行读的是同一份。
                     secondary.secondaryText(currentLine: current, nextLineText: next)
@@ -265,6 +273,8 @@ private final class NotchPlayback: ObservableObject {
                 .sink { [weak self] in self?.radioStationImage = $0 },
             p.$rawGapWindow.removeDuplicates()
                 .sink { [weak self] in self?.rawGapWindow = $0 },
+            p.$notchLyrics.map(\.compactPlaceholder).removeDuplicates()
+                .sink { [weak self] in self?.compactShowsPlaceholder = $0 },
             p.$currentAdSlot.removeDuplicates().sink { [weak self] in self?.currentAdSlot = $0 },
             p.$currentLineFillSettled.removeDuplicates().sink { [weak self] in self?.currentLineFillSettled = $0 },
             p.$artworkImage.removeDuplicates(by: { $0 === $1 })
@@ -2051,14 +2061,15 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
                 // 前奏/间奏占位符：跟悬浮歌词一样用三点动画(LyricsGapDotsView),
                 // 替换原来的静态 "♪"。displayLine 为 nil 的成因这里天然合流:
                 // 单行面的长间奏中段(唱完了、下一句还早)、"这一刻不在任何一句上"、
-                // 以及副行开着时的前奏(currentLine 还没到第一句)。
+                // 以及副行开着时的前奏和够格的间奏(见 LyricSecondaryLine.currentLine(_:inMarkedInterlude:))。
                 // 但压根没有曲目时它什么都不代表,留白。上面那一长串 else-if 已经把
                 // 广告/纯音乐/无歌词/断网/搜索中都各自接走了,能落到这里的空态只剩"没有曲目"。
                 if let plainText = playback.displayLine?.plainText {
                     Text(plainText)
                         .foregroundStyle(accentOrWhite)
                         .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
-                } else if !isIdleNoTrack, let window = playback.rawGapWindow {
+                } else if !isIdleNoTrack, let raw = playback.rawGapWindow {
+                    let window = playback.secondaryLine.gapDotsWindow(raw, compactPlaceholder: playback.compactShowsPlaceholder)
                     // 尺寸按字号等比,**不要写死**。原来是 dotSize: 8 / spacing: 6 —— 那是照歌词
                     // 窗口的观感搬过来的数字,可歌词窗口字号至少 22(见 lyricFontSize),它那边 8 只相当于
                     // 0.36 倍字号;灵动岛主行只有 13pt(范围 11…17),同样画 8pt 就是 **0.62 倍**,呼吸到

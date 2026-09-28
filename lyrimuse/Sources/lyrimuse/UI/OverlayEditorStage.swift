@@ -633,22 +633,24 @@ struct OverlayEditorStage: View {
             widthBar
                 .padding(.bottom, Self.widthBarBottomInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            // 「两端已裁切」跟调整条**同一条通道、同一个底距**,靠左端摆(从舞台
-            // 底下那行 caption 搬进来,理由见 totalHeight)。排在调整条之后只是把层序写明确,
-            // 两者横向不重叠:调整条那条胶囊总宽 258pt(10×2 内边距 + 图标 10 + 8 + 滑杆 168
-            // + 8 + 读数 44)居中摆,这颗提示胶囊约 75pt;窗口 minWidth 760 那一档舞台最窄
-            // 约 499pt —— 胶囊左沿 120.5、提示右沿 87,还差着 33pt。要往这条通道里再塞第三
-            // 样东西,先按这笔账重算一遍。
-            if Self.isOverflowing(cardWidth: cardWidth, stageWidth: stageWidth) {
-                overflowHint
-                    .padding(.leading, Self.widthBarBottomInset)
-                    .padding(.bottom, Self.widthBarBottomInset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
         }
         // 宽度用**测出来的实际值**,不用 maxWidth: .infinity —— 后者遇到一个比它还宽的固定尺寸
         // 子视图(超宽的卡片)会被撑到子视图的尺寸,那样"裁切"就无从谈起了。高度是常量。
         .frame(width: stageWidth, height: Self.stageHeight)
+        // 「两端已裁切」跟调整条**同一条通道、同一个底距**,靠舞台左端摆。必须挂在这一层(舞台尺寸)
+        // 的 overlay 上,不能放进上面的 ZStack:卡片超宽时 ZStack 被撑得比舞台还宽、再居中放进舞台,
+        // 它的左沿落在舞台外面,贴着它摆的胶囊会被下面的圆角裁掉半截。
+        // 两者横向不重叠:调整条那条胶囊总宽 258pt(10×2 内边距 + 图标 10 + 8 + 滑杆 168
+        // + 8 + 读数 44)居中摆,这颗提示胶囊约 75pt;窗口 minWidth 760 那一档舞台最窄
+        // 约 499pt —— 胶囊左沿 120.5、提示右沿 87,还差着 33pt。要往这条通道里再塞第三
+        // 样东西,先按这笔账重算一遍。
+        .overlay(alignment: .bottomLeading) {
+            if Self.isOverflowing(cardWidth: cardWidth, stageWidth: stageWidth) {
+                overflowHint
+                    .padding(.leading, Self.widthBarBottomInset)
+                    .padding(.bottom, Self.widthBarBottomInset)
+            }
+        }
         // 超出编辑台的部分在这里裁掉。裁在**舞台**的圆角上而不是给卡片自己套一层裁切:卡片没
         // 超宽时这一层什么也不做,超宽时切出来的边正好贴着编辑台的边框,像是"窗口伸出去了"。
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

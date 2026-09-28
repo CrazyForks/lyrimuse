@@ -209,8 +209,9 @@ struct NotchWindowRoot: View {
                 case .active(let point):
                     updateHover(inside: NotchHoverHit.isInside(point: point,
                                                                cardWidth: cardWidth,
-                                                               cardHeight: cardHeight))
-                case .ended: updateHover(inside: false)
+                                                               cardHeight: cardHeight),
+                                point: point)
+                case .ended: updateHover(inside: false, point: nil)
                 }
             }
             // 贴顶 + 水平居中。窗口本身是按刘海中心点摆的,所以"在窗口里居中"就等于
@@ -230,7 +231,8 @@ struct NotchWindowRoot: View {
             }
     }
 
-    private func updateHover(inside: Bool) {
+    /// `point` 是 `.active` 给的卡片局部坐标,`.ended` 时为 nil;只进边沿日志。
+    private func updateHover(inside: Bool, point: CGPoint?) {
         // 触觉反馈只在 NotchLyricsWindowController.setExpandedFromWindow 里卡片**真正
         // 展开**的那一刻才给(不在这里一进卡片边界就发)——反馈要跟视觉展开同步,提前于
         // hoverEnterDelay 会让震动跟展开动作脱节;反馈模式是更柔和的 .generic。
@@ -241,8 +243,18 @@ struct NotchWindowRoot: View {
         // 起算而不是「进入」起算(hoverEnterDelay 的调校注释按后者理解),指针在卡片上
         // 持续移动就一直不展开,顺带每个事件白做一次 WorkItem 取消+分配。边沿触发后
         // "进了又出净效果为零"的 cancel 语义不受影响(exit 边沿照样撤掉未兑现的 enter)。
-        let changed = inside != hoveringCard
+        //
+        // 边沿按控制器那份对账:控制器单方面清掉过悬停(`resetHoverAfterHide`,窗口收走时)而这里还记着
+        // 「在卡片上」,下一次指针在卡片上移动就不再是边沿,卡片一直不展开。
+        let stale = inside && hoveringCard && !controller.isCardHovered
+        let changed = inside != hoveringCard || stale
         hoveringCard = inside
-        if changed { controller.setExpandedFromWindow(inside) }
+        guard changed else { return }
+        let local = point.map { String(format: "%.1f,%.1f", $0.x, $0.y) } ?? "ended"
+        let mouse = NSEvent.mouseLocation
+        let win = controller.window?.frame ?? .zero
+        NotchLyricsWindowController.hoverLog.notice(
+            "hover \(inside ? "enter" : "exit", privacy: .public)\(stale ? " (re-armed)" : "", privacy: .public) local=\(local, privacy: .public) card=\(Int(cardWidth), privacy: .public)x\(Int(cardHeight), privacy: .public) mouse=\(Int(mouse.x), privacy: .public),\(Int(mouse.y), privacy: .public) win=\(Int(win.minX), privacy: .public),\(Int(win.minY), privacy: .public),\(Int(win.width), privacy: .public)x\(Int(win.height), privacy: .public)")
+        controller.setExpandedFromWindow(inside)
     }
 }

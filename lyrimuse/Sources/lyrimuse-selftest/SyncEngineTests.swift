@@ -1369,10 +1369,21 @@ func runSyncEngineTests() {
         expectEqual(L.resolve(activeIdx: 3, posMs: 9_999, lineEndMs: 10_000, nextStartMs: 12_000),
                     .line(3), "边界:差 1ms 还不算唱完")
 
-        // ③ 长间奏(30s):唱完先切成 ♪,离下一句 reveal 毫秒时才亮出它。
-        //    ——单行面没有「•••」那种可停靠的东西,已经唱完的句子不该继续占着那一行冒充"在唱"。
+        // ③ 长间奏(30s):唱完再停 tailHoldMs,之后切成占位(「•••」),离下一句 reveal 毫秒时才亮出它。
+        //    ——已经唱完的句子不该继续占着那一行冒充"在唱"。
+        let hold = L.tailHoldMs   // 1200
+        expectEqual(hold, LyricsSyncEngine.GapRule.tailMarginMs, "占位前的停留 == 间奏窗口的起点余量")
         expectEqual(L.resolve(activeIdx: 3, posMs: 10_000, lineEndMs: 10_000, nextStartMs: 40_000),
-                    .placeholder, "长间奏中段:♪")
+                    .line(3), "长间奏开头:唱完先停在本行")
+        expectEqual(L.resolve(activeIdx: 3, posMs: 10_000 + hold - 1, lineEndMs: 10_000, nextStartMs: 40_000),
+                    .line(3), "边界:停留还差 1ms")
+        expectEqual(L.resolve(activeIdx: 3, posMs: 10_000 + hold, lineEndMs: 10_000, nextStartMs: 40_000),
+                    .placeholder, "长间奏中段:占位")
+        //    间隙比 reveal 长、却不够停满(5.5s):停在本行,直接换成下一句,不闪占位。
+        for pos in stride(from: 10_000, to: 15_500, by: 100) {
+            expectEqual(L.resolve(activeIdx: 3, posMs: pos, lineEndMs: 10_000, nextStartMs: 15_500) != .placeholder, true,
+                        "停不满的间隙: 不出占位(pos=\(pos))")
+        }
         expectEqual(L.resolve(activeIdx: 3, posMs: 40_000 - reveal - 1, lineEndMs: 10_000, nextStartMs: 40_000),
                     .placeholder, "边界:提前量窗口外还是 ♪")
         expectEqual(L.resolve(activeIdx: 3, posMs: 40_000 - reveal, lineEndMs: 10_000, nextStartMs: 40_000),
@@ -1396,10 +1407,29 @@ func runSyncEngineTests() {
         //    "长句 + 后面接长间奏"时把 dwell 算大,MenuBarMarquee.pacing 按它配速,
         //    句子会只滚出开头一小截就被换掉(比改动前更糟)。
         //    上一句 8s 唱完、本句 10s 开始、13s 唱完、下一句 40s 开始:
-        //      出现 = max(8000, 10000-5000) = 8000;消失 = 13000(唱完即下场)→ 5000ms
+        //      出现 = max(8000, 10000-5000) = 8000;消失 = 13000 + tailHoldMs(唱完再停一会儿就下场)→ 6200ms
         expectEqual(L.displayDurationMs(prevLineEndMs: 8_000, startMs: 10_000,
                                         lineEndMs: 13_000, nextStartMs: 40_000, fallbackEndMs: nil),
-                    5_000, "长间奏在后:窗口到本行下场为止,不能算到下一句开始")
+                    6_200, "长间奏在后:窗口到本行下场为止,不能算到下一句开始")
+        //    停不满:13s 唱完、下一句 18.5s → 13.5s 进提前量窗口就下场 → 5500ms
+        expectEqual(L.displayDurationMs(prevLineEndMs: 8_000, startMs: 10_000,
+                                        lineEndMs: 13_000, nextStartMs: 18_500, fallbackEndMs: nil),
+                    5_500, "停不满的间隙:进提前量窗口那一刻下场")
+        // 窗口终点必须跟 resolve 换走本行的时刻逐毫秒一致,两个下一句位置都验。
+        for next in [14_000, 18_500, 40_000] {
+            let dwell = L.displayDurationMs(prevLineEndMs: 8_000, startMs: 10_000,
+                                            lineEndMs: 13_000, nextStartMs: next, fallbackEndMs: nil) ?? 0
+            let vanish = 8_000 + dwell
+            expectEqual(L.resolve(activeIdx: 3, posMs: vanish - 1, lineEndMs: 13_000, nextStartMs: next), .line(3),
+                        "下场前 1ms 还是本行(next=\(next))")
+            expectEqual(L.resolve(activeIdx: 3, posMs: vanish, lineEndMs: 13_000, nextStartMs: next) != .line(3), true,
+                        "下场那一刻已换走(next=\(next))")
+        }
+        //    占位期间「•••」的窗口:终点提前 reveal,短到不够时收成零长
+        expectEqual(L.placeholderDotsWindow(LyricsGapWindow(startMs: 14_200, endMs: 40_000)),
+                    LyricsGapWindow(startMs: 14_200, endMs: 35_000), "占位三点: 下一句提前亮出那一刻走完")
+        expectEqual(L.placeholderDotsWindow(LyricsGapWindow(startMs: 14_200, endMs: 18_000)),
+                    LyricsGapWindow(startMs: 14_200, endMs: 14_200), "占位三点: 终点不早于起点")
         //    短间隙:上一句 9.8s 唱完、本句 10s 开始、13s 唱完 → 出现 9800、消失 13000
         expectEqual(L.displayDurationMs(prevLineEndMs: 9_800, startMs: 10_000,
                                         lineEndMs: 13_000, nextStartMs: 14_000, fallbackEndMs: nil),
@@ -1450,7 +1480,7 @@ func runSyncEngineTests() {
                                       (2_000, 10_000, 13_000), (11_000, 10_000, 13_000)] {
             let window = L.displayDurationMs(prevLineEndMs: prevEnd, startMs: start,
                                              lineEndMs: end, nextStartMs: 40_000, fallbackEndMs: nil)
-            expectEqual(L.leadInMs(prevLineEndMs: prevEnd, startMs: start) + (end - start), window,
+            expectEqual(L.leadInMs(prevLineEndMs: prevEnd, startMs: start) + (end + L.tailHoldMs - start), window,
                         "提前量 + 开唱到下场 == 整个显示窗口(prevEnd=\(prevEnd))")
         }
     }
@@ -1484,12 +1514,17 @@ func runSyncEngineTests() {
         // 否则 pacing 会随每次 refresh 变、把跑马灯反复打回开头。
         expectEqual(engine.tickQuery(atMs: 12_999).compactLeadInMs, 2_000,
                     "引擎提前量: 窗口内恒定,不随播放位置递减")
-        // 跟 dwell 同一个"出现"原点:2000(提前) + 1000(开唱到唱完) = 3000(整个显示窗口)。
-        expectEqual(lead.compactDwellMs, 3_000, "引擎提前量: 显示窗口 = 提前量 + 开唱到下场")
+        // 跟 dwell 同一个"出现"原点:2000(提前) + 1000(开唱到唱完) + 1200(后面是长间奏,再停 tailHoldMs) = 4200。
+        expectEqual(lead.compactDwellMs, 4_200, "引擎提前量: 显示窗口 = 提前量 + 开唱到下场")
 
         // 长间奏中段(第 1 行 14.0s 唱完、第 2 行 30.0s 才开始):♪ 占位,没有行也就没有提前量。
         let idle = engine.tickQuery(atMs: 20_000)
-        expectEqual(idle.compactLine == nil && idle.compactPlaceholder, true, "引擎提前量: 长间奏中段是 ♪")
+        expectEqual(idle.compactLine == nil && idle.compactPlaceholder, true, "引擎提前量: 长间奏中段是占位")
+        // 占位跟「•••」的窗口同一刻开始:早一刻只能画静态 ♪。
+        expectEqual(engine.tickQuery(atMs: 15_199).compactLine?.plainText, "cc dd ", "引擎: 占位前停在本行")
+        let dotsStart = engine.tickQuery(atMs: 15_200)
+        expectEqual(dotsStart.compactPlaceholder && dotsStart.rawGapWindow?.startMs == 15_200, true,
+                    "引擎: 占位开始那一刻就有间奏窗口")
         expectEqual(idle.compactLeadInMs, nil, "引擎提前量: 没有可显示的行时为 nil")
 
         // 长间奏尾段(第 2 行开始前 5s 内)→ 亮出第 2 行,提前量被 revealMs 夹住。
@@ -1517,7 +1552,7 @@ func runSyncEngineTests() {
         expectEqual(engine.tickQuery(atMs: 26_000).compactDwellMs, nil,
                     "引擎提前量: 不给曲长时最后一句仍算不出窗口(交给上层兜底)")
         // 非最后一句跟曲长无关,喂了也一样。
-        expectEqual(engine.tickQuery(atMs: 11_500, trackEndMs: 40_000).compactDwellMs, 3_000,
+        expectEqual(engine.tickQuery(atMs: 11_500, trackEndMs: 40_000).compactDwellMs, 4_200,
                     "引擎提前量: 非最后一句的窗口不受曲长影响")
 
         // 行级 LRC 一律不抢跑 → 提前量恒为 0,滚动行为一字不变。
