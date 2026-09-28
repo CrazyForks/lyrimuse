@@ -45,6 +45,13 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 歌词窗口:跟当前行重叠着、还没唱完的前几行(对唱 / 背景人声唱进下一句),升序,平时是空数组。
     /// 语义见 LyricsSyncEngine.TickResolution.overlappingIndices;同一套 tick、同一条"只在真的变化时才赋值"纪律。
     @Published public private(set) var overlappingLineIndices: [Int] = []
+    /// 三个单行展示面各自此刻该显示的内容(按各自宽度断句,见 LyricsSyncEngine.surfaceTick)。没开「按宽度
+    /// 重新断句」或那个面还没报宽度时,跟 currentLine / compactLine / nextLine* 那一套逐行结果相同。
+    @Published public private(set) var overlayLyrics = LyricsSyncEngine.SurfaceLyrics.empty
+    @Published public private(set) var notchLyrics = LyricsSyncEngine.SurfaceLyrics.empty
+    @Published public private(set) var menuBarLyrics = LyricsSyncEngine.SurfaceLyrics.empty
+    /// 菜单栏整首里最宽的一行(见 LyricsSyncEngine.widestRow);nil = 没开按宽度断句或还不知道。
+    @Published public private(set) var menuBarWidestRow: CGFloat?
     /// 单行展示面(灵动岛 / 菜单栏)该显示的那一行(「唱完就切到下一句,
     /// 好提前看到歌词跟唱」)。跟 currentLine 的区别是**唱完就切走**;长间奏中段为 nil,
     /// 由 compactShowsPlaceholder 区分成因。规则见 CompactLyricLead —— 它跟歌词窗口的
@@ -212,6 +219,34 @@ public final class LocalPlaybackSource: ObservableObject {
     /// 缓存里存的原文一个字节都不动,切回来是无损的。
     @Published public var chineseVariant: ChineseVariant = .off {
         didSet { reloadCurrentLyrics() }
+    }
+    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度重新断句:放不下的长句拆开、很短的几句并成一句(见
+    /// LyricsSyncEngine.surfaceTick)。改了立刻重新加载当前这首;歌词窗口不受影响。
+    @Published public var resegmentsLyricsByWidth = false {
+        didSet { reloadCurrentLyrics() }
+    }
+
+    /// 一个单行展示面报它的宽度预算(一行多宽 + 按它的字体量宽)。断句变了就立刻按当前位置重新发布。
+    public func setLineLayoutBudget(_ budget: LineLayoutBudget?, for surface: LyricsSurface) {
+        guard syncEngine.setLayoutBudget(budget, for: surface) else { return }
+        if surface == .menuBar { updateMenuBarWidestRow() }
+        if let pos = anchor?.extrapolatedPositionMs() ?? pausedPositionMs {
+            publishSurfaceLyrics(atRawMs: pos)
+        }
+    }
+
+    private func updateMenuBarWidestRow() {
+        let widest = syncEngine.widestRow(.menuBar)
+        if widest != menuBarWidestRow { menuBarWidestRow = widest }
+    }
+
+    private func publishSurfaceLyrics(atRawMs pos: Int) {
+        let overlay = syncEngine.surfaceTick(.overlay, atMs: pos, trackEndMs: currentDurationMs)
+        let notch = syncEngine.surfaceTick(.notch, atMs: pos, trackEndMs: currentDurationMs)
+        let menuBar = syncEngine.surfaceTick(.menuBar, atMs: pos, trackEndMs: currentDurationMs)
+        if overlay != overlayLyrics { overlayLyrics = overlay }
+        if notch != notchLyrics { notchLyrics = notch }
+        if menuBar != menuBarLyrics { menuBarLyrics = menuBar }
     }
     /// 这台机器上**见过**中文歌词没有。一旦见过就不再变回 false —— 设置项靠它决定要不要
     /// 露出简繁开关,而"这首歌不是中文"不该让一个已经露出来的设置消失。
@@ -2228,6 +2263,9 @@ public final class LocalPlaybackSource: ObservableObject {
         if currentLineIndex != nil { currentLineIndex = nil }
         if scrollLineIndex != nil { scrollLineIndex = nil }
         if !overlappingLineIndices.isEmpty { overlappingLineIndices = [] }
+        if overlayLyrics != .empty { overlayLyrics = .empty }
+        if notchLyrics != .empty { notchLyrics = .empty }
+        if menuBarLyrics != .empty { menuBarLyrics = .empty }
         if compactLine != nil { compactLine = nil }
         if compactShowsPlaceholder { compactShowsPlaceholder = false }
         if compactDwellMs != nil { compactDwellMs = nil }
@@ -2263,6 +2301,7 @@ public final class LocalPlaybackSource: ObservableObject {
         if r.overlappingIndices != overlappingLineIndices { overlappingLineIndices = r.overlappingIndices }
         if r.gapIndex != currentGapIndex { currentGapIndex = r.gapIndex }
         if r.rawGapWindow != rawGapWindow { rawGapWindow = r.rawGapWindow }
+        publishSurfaceLyrics(atRawMs: frozen)
         updateLineFillSettled(line: r.line, index: r.index, atRawMs: frozen)
     }
 
@@ -2307,6 +2346,7 @@ public final class LocalPlaybackSource: ObservableObject {
         if r.overlappingIndices != overlappingLineIndices { overlappingLineIndices = r.overlappingIndices }
         if r.gapIndex != currentGapIndex { currentGapIndex = r.gapIndex }
         if r.rawGapWindow != rawGapWindow { rawGapWindow = r.rawGapWindow }
+        publishSurfaceLyrics(atRawMs: pos)
         updateLineFillSettled(line: r.line, index: r.index, atRawMs: pos)
     }
 
@@ -2317,20 +2357,30 @@ public final class LocalPlaybackSource: ObservableObject {
     // 阈值是**行级常量**(只由词/组的时间轴决定),原来每个 tick 都对全行词+组重算一遍
     // O(词数)浮点循环——按行记忆化:引擎的行是按下标记忆化的同一
     // 实例,`==` 走同一性快路径,换行才真的重算一次,tick 退化为一次整数比较。
-    private var settledThresholdLine: SyncedLyricLine?
+    private var settledThresholdLines: [SyncedLyricLine?] = []
+    private var settledThresholdIndex: Int?
     private var settledThresholdMs = 0
 
     private func updateLineFillSettled(line: SyncedLyricLine?, index: Int?, atRawMs rawMs: Int) {
         let settled: Bool
         if let words = line?.words {
-            if line != settledThresholdLine {
-                settledThresholdLine = line
-                // 按歌词窗口那一版的词算(跟下一行重叠的行不压末字、保留真实时间,见 windowLineWords),
-                // 不然窗口里这一行会在词唱完之前被定格成全填色。背景人声也在歌词窗口里逐字填色,常常唱到
-                // 主句结束之后,一并算进去。
-                let fillWords = index.flatMap { syncEngine.windowLineWords(at: $0) } ?? words
-                settledThresholdMs = KaraokeFill.lineFillSettledMs(
-                    words: fillWords + (line?.backgroundWords ?? []), groups: line?.wordGroups)
+            let lines = [line, overlayLyrics.line, notchLyrics.line, menuBarLyrics.line]
+            if lines != settledThresholdLines || index != settledThresholdIndex {
+                settledThresholdLines = lines
+                settledThresholdIndex = index
+                // 各版取最晚的:歌词窗口那一版(跟下一行重叠的行不压末字、保留真实时间,见 windowLineWords)、
+                // 这一行本身,以及三个单行展示面此刻各自显示的那一句(按宽度断句时可能是几句合成的、或者拆开的
+                // 一段)。按早的那版定格,别的面会在词唱完之前被定格成全填色、或者停表冻住。背景人声也逐字填色,
+                // 常常唱到主句结束之后,一并算进去。
+                let windowWords = index.flatMap { syncEngine.windowLineWords(at: $0) } ?? words
+                var threshold = KaraokeFill.lineFillSettledMs(
+                    words: windowWords + (line?.backgroundWords ?? []), groups: nil)
+                for shown in lines {
+                    guard let shown, let shownWords = shown.words else { continue }
+                    threshold = max(threshold, KaraokeFill.lineFillSettledMs(
+                        words: shownWords + (shown.backgroundWords ?? []), groups: shown.wordGroups))
+                }
+                settledThresholdMs = threshold
             }
             // 必须用 effectiveOffsetMs(含歌词自带的 [offset:]),不能用 offsetMs:
             // settledThresholdMs 来自词时间戳(歌词原始时间轴),而"播放位置 → 歌词时间轴"
@@ -2341,7 +2391,7 @@ public final class LocalPlaybackSource: ObservableObject {
             settled = rawMs + syncEngine.effectiveOffsetMs >= settledThresholdMs
         } else {
             settled = true
-            settledThresholdLine = nil
+            settledThresholdLines = []
         }
         if settled != currentLineFillSettled { currentLineFillSettled = settled }
     }
@@ -2378,6 +2428,9 @@ public final class LocalPlaybackSource: ObservableObject {
             currentLineIndex = nil
             scrollLineIndex = nil
             overlappingLineIndices = []
+            overlayLyrics = .empty
+            notchLyrics = .empty
+            menuBarLyrics = .empty
             compactLine = nil
             compactShowsPlaceholder = false
             compactDwellMs = nil
@@ -3443,6 +3496,7 @@ public final class LocalPlaybackSource: ObservableObject {
         let trackKey: String
         let lyrics, lyricsTr, lyricsRoma, lyricsYRC, lyricsBG: String
         let instrumental, resolved: Bool
+        let resegmentsByWidth: Bool
         let variant: ChineseVariant
         let romanizationScripts: RomanizationScripts
         let isCantonese: Bool
@@ -3492,6 +3546,7 @@ public final class LocalPlaybackSource: ObservableObject {
             lyricsBG: found?.lyricsBG ?? "",
             instrumental: found?.instrumental ?? false,
             resolved: found?.resolved ?? false,
+            resegmentsByWidth: resegmentsLyricsByWidth,
             variant: chineseVariant,
             romanizationScripts: romanizationScripts,
             isCantonese: found?.isCantonese ?? false,
@@ -3524,8 +3579,10 @@ public final class LocalPlaybackSource: ObservableObject {
             trackArtist: snapshot.artist ?? "",
             romanizationScripts: romanizationScripts,
             songIsCantonese: found?.isCantonese ?? false,
-            songIsHokkien: found?.isHokkien ?? false
+            songIsHokkien: found?.isHokkien ?? false,
+            resegmentsByWidth: resegmentsLyricsByWidth
         )
+        updateMenuBarWidestRow()
         // 以前按带 BOM 的正文算过指纹、存下的校正值,先挪到新 key 上(见 LyricsOffsetStore.adoptLegacyKey)。
         LyricsOffsetStore.shared.adoptLegacyKey(
             artist: snapshot.artist ?? "", title: snapshot.title ?? "",

@@ -88,7 +88,7 @@ private final class PanelPlayback: ObservableObject {
             // (`menuBarLyricsKaraoke`,是它唯一的闸——此前还叠着一颗全局开关):关着时把行
             // 压成整行(`SyncedLyricLine.lineLevel`),`lyricContent` 的判定链自然落到 `.plain`。
             // 状态栏项自己在 `MenuBarStatusItem.karaokeFillPath` 里判这颗开关,不经这里。
-            Publishers.CombineLatest(p.$compactLine, s.$menuBarLyricsKaraoke)
+            Publishers.CombineLatest(p.$menuBarLyrics.map(\.compactLine), s.$menuBarLyricsKaraoke)
                 .map { line, karaoke in karaoke ? line : line?.lineLevel }
                 .removeDuplicates()
                 .sink { [weak self] in self?.compactLine = $0 },

@@ -265,6 +265,160 @@ func runSyncEngineTests() {
         expectEqual(bg.tickQuery(atMs: 2250).overlappingIndices, [], "重叠: 背景人声唱完就熄")
     }
 
+    // ---- 单行展示面按宽度重新断句:长句拆开、短句合并,各展示面按自己的宽度,歌词窗口不变 ----
+    do {
+        // 量宽:每个字符 10pt,期望值可以手算。
+        let measure: (String) -> CGFloat = { CGFloat($0.count) * 10 }
+        func budget(_ width: CGFloat) -> LineLayoutBudget {
+            LineLayoutBudget(key: width, maxWidth: width, measure: measure)
+        }
+        // 《Wanna Be Startin' Somethin'》1:10 那一段:整句后面跟一句很短的「Yeah yeah」,最后一句是长句。
+        let yrc = "[69920,1900](69920,1900,0)You got to be startin' somethin'\n"
+            + "[71860,1400](71860,1400,0)It's too high to get over\n"
+            + "[73260,600](73260,600,0)Yeah yeah\n"
+            + "[73890,1300](73890,1300,0)Too low to get under\n"
+            + "[75160,600](75160,600,0)Yeah yeah\n"
+            + "[75780,3000](75780,1000,0)You're stuck, (76780,1000,0)in the middle (77780,1000,0)of it all\n"
+            + "[80000,2000](80000,2000,0)end\n"
+        let engine = LyricsSyncEngine()
+        engine.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc, resegmentsByWidth: true)
+        engine.setLayoutBudget(budget(400), for: .overlay)
+        engine.setLayoutBudget(budget(300), for: .menuBar)
+
+        expectEqual(engine.surfaceTick(.overlay, atMs: 70500).line?.plainText, "You got to be startin' somethin'",
+                    "按宽度断句: 两句完整的句子不往一起粘")
+        expectEqual(engine.surfaceTick(.overlay, atMs: 72000).line?.plainText, "It's too high to get over Yeah yeah",
+                    "按宽度断句: 很短的一句接在前一句后面")
+        expectEqual(engine.surfaceTick(.overlay, atMs: 73500).line, engine.surfaceTick(.overlay, atMs: 72000).line,
+                    "按宽度断句: 唱到合成句的后半截还是同一句")
+        expectEqual(engine.surfaceTick(.menuBar, atMs: 72000).line?.plainText, "It's too high to get over",
+                    "按宽度断句: 窄的展示面放不下就不合并")
+        let long = engine.surfaceTick(.overlay, atMs: 76000)
+        expectEqual(long.line?.plainText, "You're stuck, in the middle of it all", "按宽度断句: 放得下的长句不拆")
+        let narrowFirst = engine.surfaceTick(.menuBar, atMs: 76000)
+        expectEqual(narrowFirst.line?.plainText, "You're stuck,", "按宽度断句: 放不下的长句拆开,优先断在标点后面")
+        expectEqual(narrowFirst.nextText, "in the middle of it all", "按宽度断句: 拆开的后半句是下一段")
+        expectEqual(engine.surfaceTick(.menuBar, atMs: 77000).line?.words?.first?.startMs, 76780,
+                    "按宽度断句: 后半句按它自己的词时间开始")
+        expectEqual(engine.tickQuery(atMs: 76000).line?.plainText, "You're stuck, in the middle of it all",
+                    "按宽度断句: 逐行结果不受影响")
+        expectEqual(engine.allLines(idPrefix: "s").count, 7, "按宽度断句: 歌词窗口仍然一句一行")
+        expectEqual(engine.surfaceTick(.notch, atMs: 72000).line?.plainText, "It's too high to get over",
+                    "按宽度断句: 还没报宽度的展示面一句一句换")
+
+        let off = LyricsSyncEngine()
+        off.load(lyrics: "", lyricsTr: "", lyricsRoma: "", lyricsYRC: yrc)
+        off.setLayoutBudget(budget(300), for: .menuBar)
+        expectEqual(off.surfaceTick(.menuBar, atMs: 76000).line?.plainText, "You're stuck, in the middle of it all",
+                    "按宽度断句: 开关关着时不拆也不合并")
+
+        // 只有逐行时间的歌:放不下也拆,每段几点开唱按它前面文字的宽度估。
+        let lrcEngine = LyricsSyncEngine()
+        lrcEngine.load(lyrics: "[00:10.00]It's a very long line that does not fit\n[00:14.00]ok\n[00:20.00]end\n",
+                       lyricsTr: "", lyricsRoma: "", lyricsYRC: "", resegmentsByWidth: true)
+        lrcEngine.setLayoutBudget(budget(150), for: .overlay)
+        let lrcFirst = lrcEngine.surfaceTick(.overlay, atMs: 10100)
+        expectEqual(lrcFirst.line?.plainText, "It's a very", "按宽度断句: 逐行歌词的长句也拆")
+        expectEqual(lrcFirst.line?.words == nil, true, "按宽度断句: 估出来的时间不拿去填色")
+        expectEqual(lrcFirst.nextText, "long line that", "按宽度断句: 逐行长句拆出来的下一段")
+        let lrcSecond = lrcEngine.surfaceTick(.overlay, atMs: 12400)
+        expectEqual(lrcSecond.line?.plainText, "long line that", "按宽度断句: 估时到点换到后一段")
+        expectEqual(lrcEngine.surfaceTick(.overlay, atMs: 11000).line?.plainText, "It's a very",
+                    "按宽度断句: 估时之前还是前一段")
+
+        // 译文 / 罗马音 / 下一句也要放得下:主行放得下、译文放不下时照样拆,译文按段摊开。
+        let trEngine = LyricsSyncEngine()
+        trEngine.load(lyrics: "", lyricsTr: "[00:01.00]这一句的译文特别特别长长长长\n",
+                      lyricsRoma: "",
+                      lyricsYRC: "[1000,2000](1000,1000,0)short (2000,1000,0)line\n[5000,1000](5000,1000,0)x\n",
+                      resegmentsByWidth: true)
+        trEngine.setLayoutBudget(LineLayoutBudget(
+            key: "tr", main: .init(maxWidth: 100, measure: measure),
+            translation: .init(maxWidth: 100, measure: measure)), for: .overlay)
+        let trFirst = trEngine.surfaceTick(.overlay, atMs: 1100)
+        expectEqual(trFirst.line?.plainText, "short", "按宽度断句: 译文放不下时主行也跟着拆")
+        expectEqual(trFirst.line?.translation, "这一句的译文特", "按宽度断句: 译文切成放得下的几截")
+        expectEqual(trEngine.surfaceTick(.overlay, atMs: 2100).line?.translation, "别特别长长长长",
+                    "按宽度断句: 后一段显示译文的后一截")
+
+        // 一个词比整行还宽:按字硬切,时间按字数平分。
+        let wideEngine = LyricsSyncEngine()
+        wideEngine.load(lyrics: "", lyricsTr: "", lyricsRoma: "",
+                        lyricsYRC: "[1000,2000](1000,2000,0)Supercalifragilistic\n[4000,500](4000,500,0)x\n",
+                        resegmentsByWidth: true)
+        wideEngine.setLayoutBudget(budget(100), for: .menuBar)
+        let wideFirst = wideEngine.surfaceTick(.menuBar, atMs: 1000).line?.plainText ?? ""
+        expectEqual(wideFirst.count <= 10 && !wideFirst.isEmpty, true, "按宽度断句: 比整行还宽的词按字切开")
+
+        // 对唱行让出演唱者标记的宽:同一句,居中放得下,带声部就拆。
+        let duetWords = [SyncedLyricWord(text: "abcdef ", startMs: 1000, durationMs: 1000),
+                         SyncedLyricWord(text: "ghij", startMs: 2000, durationMs: 1000)]
+        func duetLine(_ side: LyricDuet.Side?) -> [LyricsSegmenter.Line] {
+            [LyricsSegmenter.Line(startMs: 1000, nextStartMs: 5000, text: "abcdef ghij", words: duetWords,
+                                  side: side, sungEndMs: 3000, mergeable: true, gapAfter: false),
+             LyricsSegmenter.Line(startMs: 5000, text: "x", words: [SyncedLyricWord(text: "x", startMs: 5000, durationMs: 500)],
+                                  side: side, sungEndMs: 5500, mergeable: true, gapAfter: false)]
+        }
+        let sidedBudget = LineLayoutBudget(key: "duet", main: .init(maxWidth: 115, measure: measure), sidedInset: 20)
+        expectEqual(LyricsSegmenter.segments(duetLine(nil), budget: sidedBudget).count, 2,
+                    "按宽度断句: 不带声部的行按整行宽")
+        expectEqual(LyricsSegmenter.segments(duetLine(.leading), budget: sidedBudget).count, 3,
+                    "按宽度断句: 对唱行让出演唱者标记,放不下就拆")
+        expectEqual(LyricsSegmenter.segments(duetLine(.center), budget: sidedBudget).count, 2,
+                    "按宽度断句: 合唱行居中、不画标记")
+
+        // 主行一个字切不开、译文放不下:主行整句一段,译文截断到放得下。
+        let oneChar = LyricsSyncEngine()
+        oneChar.load(lyrics: "[00:01.00]5\n[00:05.00]end\n", lyricsTr: "[00:01.00]这是一句特别特别长的译文\n",
+                     lyricsRoma: "", lyricsYRC: "", resegmentsByWidth: true)
+        oneChar.setLayoutBudget(LineLayoutBudget(
+            key: "one", main: .init(maxWidth: 60, measure: measure),
+            translation: .init(maxWidth: 60, measure: measure)), for: .overlay)
+        let oneLine = oneChar.surfaceTick(.overlay, atMs: 1500).line
+        expectEqual(oneLine?.plainText, "5", "按宽度断句: 切不开的主行整句一段")
+        expectEqual(oneLine?.translation, "这是一句特…", "按宽度断句: 放不下的译文截断")
+        expectEqual(oneChar.widestRow(.overlay), 60, "按宽度断句: 整首最宽一行按主行与各行量")
+        expectEqual(LyricsSyncEngine().widestRow(.menuBar), nil, "按宽度断句: 没报宽度时不给整首最宽")
+
+        // 保证:随机宽度下,每一段的主行、译文、下一句都放得下。
+        let fuzzYRC = (0..<30).map { k -> String in
+            let start = 1000 + k * 1500
+            let words = (0..<(1 + k % 7)).map { w in "(\(start + w * 100),100,0)w\(k)x\(w) " }.joined()
+            return "[\(start),1500]" + words
+        }.joined(separator: "\n") + "\n"
+        let fuzzTr = (0..<30).map { k -> String in
+            let start = 1000 + k * 1500
+            let ms = start % 1000, sec = (start / 1000) % 60, min = start / 60000
+            return String(format: "[%02d:%02d.%02d]", min, sec, ms / 10) + String(repeating: "译", count: 3 + k % 9)
+        }.joined(separator: "\n") + "\n"
+        var fuzzFailures = 0
+        for width in stride(from: CGFloat(40), through: 200, by: 7) {
+            let e = LyricsSyncEngine()
+            e.load(lyrics: "", lyricsTr: fuzzTr, lyricsRoma: "", lyricsYRC: fuzzYRC, resegmentsByWidth: true)
+            e.setLayoutBudget(LineLayoutBudget(
+                key: width, main: .init(maxWidth: width, measure: measure),
+                preview: .init(maxWidth: width, measure: measure),
+                translation: .init(maxWidth: width, measure: measure)), for: .notch)
+            for ms in stride(from: 1000, to: 47000, by: 50) {
+                let t = e.surfaceTick(.notch, atMs: ms)
+                let main = t.line?.plainText ?? ""
+                if measure(main) > width + 0.5 { fuzzFailures += 1 }
+                if let tr = t.line?.translation, measure(tr) > width + 0.5 { fuzzFailures += 1 }
+                if let next = t.nextText, measure(next) > width + 0.5 { fuzzFailures += 1 }
+            }
+        }
+        expectEqual(fuzzFailures, 0, "按宽度断句: 随机宽度下每一行都放得下")
+        if let dir = ProcessInfo.processInfo.environment["LYRIMUSE_RESEGMENT_BENCH"] {
+            resegmentBenchmark(bodiesDir: dir, stride: Int(ProcessInfo.processInfo.environment["LYRIMUSE_RESEGMENT_BENCH_STRIDE"] ?? "") ?? 30)
+        }
+        if let dir = ProcessInfo.processInfo.environment["LYRIMUSE_RESEGMENT_LIBRARY"] {
+            expectEqual(resegmentLibraryFailures(bodiesDir: dir), 0, "按宽度断句: 全库每一段每一行都放得下")
+        }
+
+        expectEqual(LyricsSegmenter.displayWidth("Your peacock 你好"), 4, "按宽度断句: 字数按拉丁词和汉字计")
+        expectEqual(LyricsSegmenter.cutPenalty(after: "你", before: "，"), nil, "按宽度断句: 标点不放到下一段开头")
+    }
+
     // ---- LyricsSyncEngine: 单曲歌词时间轴微调(offsetMs) ----
 
     do {

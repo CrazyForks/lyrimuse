@@ -122,7 +122,9 @@ final class MenuBarStatusItem: NSObject {
         // 还没开唱,karaokeFillPath 那道 `line.plainText == text` 守卫会不给路径(正确:
         // 没唱就不该有填色);等真的开唱时 currentLine 才变,那一下要重画一次把填色挂上。
         // 两个事件在短间隙里相差不到一秒,文本相同 → 槽宽相同 → 不触发状态项重建。
-        coordinator.$compactLine
+        // 菜单栏这一面的「要显示的那一句 / 当前句 / 下一句」都取它自己那一份(按这一面的宽度断句,见
+        // LocalPlaybackSource.menuBarLyrics),别混用逐行的 compactLine / currentLine / nextLineText。
+        coordinator.$menuBarLyrics.map(\.compactLine)
             // 同一句内部会因为逐字之外的原因被重新赋值(译文/罗马音中途补上),去重掉 ——
             // 不去重的话滚动会被反复打回开头。 去重键是「首词时间戳#纯文本」,不能只看
             // 纯文本:副歌里相邻两行**同词不同时**,只看文本第二行
@@ -139,7 +141,7 @@ final class MenuBarStatusItem: NSObject {
             .store(in: &cancellables)
         // 见上面那段:开唱那一刻要重画一次,好把逐字填色路径挂上。只关心"有没有词可染",
         // 所以去重键只取首词时间戳。
-        coordinator.$currentLine
+        coordinator.$menuBarLyrics.map(\.line)
             // 键里多了纯文本和译文 / 罗马音:副行开着时菜单栏显示的就是 currentLine(见
             // refresh 头那段),换句、译文中途补上都要重画;单行模式下这些多出来的事件到 present() 都是
             // 同参数空操作,滚动不会被打回开头(scrollUnchanged 不看副行文字)。
@@ -232,7 +234,9 @@ final class MenuBarStatusItem: NSObject {
         // 必须走 refresh()。下一句文本只在副行选「下一句」时有用,其余档位到 present() 是同参数空操作。
         settings.$menuBarSecondaryLine.dropFirst().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &cancellables)
-        coordinator.$nextLineText.dropFirst().removeDuplicates().receive(on: RunLoop.main)
+        coordinator.$menuBarLyrics.map(\.nextText).dropFirst().removeDuplicates().receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &cancellables)
+        coordinator.$menuBarWidestRow.dropFirst().removeDuplicates().receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.scheduleRefresh() }.store(in: &cancellables)
         // 两个自定义颜色:refreshColors 管图层渲染那条路(只换位图,不打断滚动/填色动画),
         // refresh 管自适应模式 button.title 那条退化路(颜色进的是 attributedTitle,
@@ -388,7 +392,7 @@ final class MenuBarStatusItem: NSObject {
     private func displayedLineIsCurrent(_ current: SyncedLyricLine) -> Bool {
         let coordinator = PlaybackCoordinator.shared
         let displayed = AppSettings.shared.menuBarSecondaryLine.displayedLine(
-            compactLine: coordinator.compactLine, currentLine: coordinator.currentLine)
+            compactLine: coordinator.menuBarLyrics.compactLine, currentLine: coordinator.menuBarLyrics.line)
         return displayed?.words?.first?.startMs == current.words?.first?.startMs
     }
 
@@ -397,7 +401,7 @@ final class MenuBarStatusItem: NSObject {
     /// 读到不同代的数据 —— 对不上宁可不染,染错位置比不染难看得多)。
     private func karaokeFillPath(for text: String) -> [MenuBarMarquee.KaraokeFillPoint]? {
         guard AppSettings.shared.menuBarLyricsKaraoke else { return nil }
-        guard let line = PlaybackCoordinator.shared.currentLine,
+        guard let line = PlaybackCoordinator.shared.menuBarLyrics.line,
               let words = line.words, !words.isEmpty,
               line.plainText == text, displayedLineIsCurrent(line) else { return nil }
         let path = MenuBarMarquee.karaokeFillPath(
@@ -409,7 +413,7 @@ final class MenuBarStatusItem: NSObject {
     /// 文本没跟逐字数据代际错位),但**不看**卡拉OK开关:染色是"画什么",跟唱是"滚到哪",
     /// 不染色也要跟着唱到的位置滚。两条路径的差别见 MenuBarMarquee.followReadingPath 头注。
     private func followReadingPath(for text: String) -> [MenuBarMarquee.KaraokeFillPoint]? {
-        guard let line = PlaybackCoordinator.shared.currentLine,
+        guard let line = PlaybackCoordinator.shared.menuBarLyrics.line,
               let words = line.words, !words.isEmpty,
               line.plainText == text, displayedLineIsCurrent(line) else { return nil }
         let path = MenuBarMarquee.followReadingPath(
@@ -1199,13 +1203,13 @@ final class MenuBarStatusItem: NSObject {
         // 副行「下一句」却还是同一句。配速(currentLineDwellSeconds)与提前量(恒 0)随之切成 currentLine
         // 那套 —— 跟设置页预览(它一直镜像 currentLine)同一口径。
         let secondaryKind = settings.menuBarSecondaryLine
-        let line = secondaryKind.displayedLine(compactLine: coordinator.compactLine, currentLine: coordinator.currentLine)
+        let line = secondaryKind.displayedLine(compactLine: coordinator.menuBarLyrics.compactLine, currentLine: coordinator.menuBarLyrics.line)
         // 前奏/间奏占位给的是三点那个**记号串**,不是音符 —— 记号串在 scrollingLabel 那边
         // 会被换成三颗 CALayer 圆点(跟悬浮歌词/灵动岛/歌词窗口同一条 GapDotsCurve)。
         // 别顺手把下面 MenuBarSlotPolicy 那个「♪ 歌名」兜底也换掉:那说的是"这首歌没词",
         // 跟"有词、只是此刻在间奏"是两件事。
         let lyricText = line?.plainText
-            ?? (coordinator.compactShowsPlaceholder ? MenuBarMarqueeRenderer.gapDotsToken : "")
+            ?? (coordinator.menuBarLyrics.compactPlaceholder ? MenuBarMarqueeRenderer.gapDotsToken : "")
         // 压根没有可显示的行(整首没歌词 / 还在搜)时按开关用歌名占槽,不塌回图标 ——
         // 判据与三条边界(暂停不占宽 / 广告不显示 / 没歌名不兜底)都在 Core 的 MenuBarSlotPolicy.displayText,
         // 这里只消费。nil = 照旧收回图标。歌词旁那枚图标开着时兜底文字不带 ♪ 前缀(理由见那个函数)。
@@ -1221,14 +1225,14 @@ final class MenuBarStatusItem: NSObject {
         let twoRows = secondaryKind.showsSecondaryRow && !titleFallbackActive
         // 兜底文字不是歌词句,没有"这一句会显示多久"可言:配速走固定速度那条既有退路。
         let dwell: Double? = titleFallbackActive ? nil
-            : (twoRows ? coordinator.currentLineDwellSeconds : coordinator.compactDwellSeconds)
+            : (twoRows ? coordinator.menuBarLyrics.lineDwellSeconds : coordinator.menuBarLyrics.compactDwellSeconds)
         // 提前量窗口里这一句已经显示、但还没开唱(所以也还没染色)——滚动得等它走完才准起步,
         // 否则表现就是"还没染色就已经在滚"。双排取的是正在唱的那一句,出现即开唱,恒 0。
-        let leadIn = twoRows ? 0 : coordinator.compactLeadInSeconds
+        let leadIn = twoRows ? 0 : coordinator.menuBarLyrics.compactLeadInSeconds
         rowState = RowState(
             kind: twoRows ? secondaryKind : .off,
             secondaryText: twoRows
-                ? secondaryKind.secondaryText(currentLine: line, nextLineText: coordinator.nextLineText) : nil,
+                ? secondaryKind.secondaryText(currentLine: line, nextLineText: coordinator.menuBarLyrics.nextText) : nil,
             mainFont: MenuBarMarqueeRenderer.mainFont(for: text, twoRows: twoRows))
         let lyricsActive = display != nil
         // 占位态(「♪ 歌名」兜底 / 间奏 ♪)按**即将到来的那一句**定宽。
@@ -1285,11 +1289,14 @@ final class MenuBarStatusItem: NSObject {
             let naturalW = MenuBarSlotPolicy.naturalWidth(
                 mainWidth: mainW, secondaryWidth: secondaryW, twoRows: rowState.twoRows,
                 secondaryKind: secondaryKind, maxWidth: settings.menuBarLyricsWidth)
+            // 按宽度重新断句开着时,槽宽按整首最宽的一行(含副行)定、一首之内不变:槽宽每变一次都要等静默窗才
+            // 重建,等的时候新的一句画在旧槽里就会滚(见 present 头注)。断句已保证每一行不超过「最大宽度」。
+            let songW = coordinator.menuBarWidestRow.map { max(naturalW, min(settings.menuBarLyricsWidth, $0)) } ?? naturalW
             // 占位态给槽宽兜个底:让它现在就有即将到来那一句要的宽度,那一句出现时几何
             // 已经到位、不必再改一次。判据是 Core 的纯函数(有 selftest),这里只喂数 ——
             // "下一句"怎么量在 `upcomingLineSlotWidth`,"该不该用它"在 `MenuBarSlotPolicy.slotWidth`。
             let textW = MenuBarSlotPolicy.slotWidth(
-                naturalWidth: naturalW, upcomingWidth: upcomingW,
+                naturalWidth: songW, upcomingWidth: upcomingW,
                 isPlaceholder: placeholderNow, maxWidth: settings.menuBarLyricsWidth)
             // 同一首歌内只涨不缩(用户要「不能跳来跳去」)。判据、代价与
             // "为什么是换歌而不是换行重置"都在 MenuBarSlotFloor 的声明处。
@@ -1381,7 +1388,7 @@ final class MenuBarStatusItem: NSObject {
     /// 按占位文字自己的宽度走(等解析完成,槽会在占位期间加宽一次,那一次看不到文字变化)。
     private func upcomingLineSlotWidth(isPlaceholder: Bool) -> CGFloat {
         guard isPlaceholder,
-              let next = PlaybackCoordinator.shared.nextLineText?
+              let next = PlaybackCoordinator.shared.menuBarLyrics.nextText?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !next.isEmpty
         else { return 0 }
@@ -1405,13 +1412,13 @@ final class MenuBarStatusItem: NSObject {
         // 字体也读同一份 rowState —— 过渡渲染画的是同一句。
         let coordinator = PlaybackCoordinator.shared
         let dwell: Double? = titleFallbackActive ? nil
-            : (rowState.twoRows ? coordinator.currentLineDwellSeconds : coordinator.compactDwellSeconds)
+            : (rowState.twoRows ? coordinator.menuBarLyrics.lineDwellSeconds : coordinator.menuBarLyrics.compactDwellSeconds)
         switch MenuBarMarqueeRenderer.presentation(
             for: text, windowWidth: usable,
             dwellSeconds: dwell,
             // 过渡渲染画的是同一句,提前量口径也必须同一份 —— 这里给 0 的话,几何推迟期间
             // (自适应模式下逐句都有,最多 3s)那一句又会在开唱前先滚起来。双排取正在唱的那一句,恒 0。
-            leadInSeconds: rowState.twoRows ? 0 : coordinator.compactLeadInSeconds,
+            leadInSeconds: rowState.twoRows ? 0 : coordinator.menuBarLyrics.compactLeadInSeconds,
             widthMode: .fixed, font: rowState.mainFont
         ) {
         case .text(let visible):

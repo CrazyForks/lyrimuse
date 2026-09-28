@@ -1188,7 +1188,7 @@ func runMenuBarTests() {
                     "菜单栏三点(契约): 记号串仍是三个 U+2022(上面抄的那份还成立)")
         expectEqual(rendererSrc.contains("static let placeholderGlyph = \"♪\""), true,
                     "菜单栏三点(契约): 「♪ 歌名」兜底那个音符**没有**被一起换掉 —— 它说的是「这首歌没词」,不是间奏")
-        expectEqual(statusSrc.contains("coordinator.compactShowsPlaceholder ? MenuBarMarqueeRenderer.gapDotsToken"), true,
+        expectEqual(statusSrc.contains("coordinator.menuBarLyrics.compactPlaceholder ? MenuBarMarqueeRenderer.gapDotsToken"), true,
                     "菜单栏三点(契约): 前奏/间奏占位喂的是三点记号串,不是音符")
         expectEqual(statusSrc.contains("PlaybackCoordinator.shared.rawGapWindow"), true,
                     "菜单栏三点(契约): 点亮进度走**不设门槛**的 rawGapWindow —— 门槛版会让短前奏/短间奏拿不到窗口")

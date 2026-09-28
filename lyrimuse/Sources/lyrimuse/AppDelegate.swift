@@ -223,6 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // LyrimuseCore 里,够不到 AppSettings),启动时不推一次的话它会一直用默认值,
         // 用户的选择要等到下次在设置页里改动才生效。
         LocalPlaybackSource.shared.romanizationScripts = settings.romanizationScripts
+        LocalPlaybackSource.shared.resegmentsLyricsByWidth = settings.resegmentLyricsByWidth
+        LineLayoutBudgets.shared.start()
         // 「显示翻译」也得让 Core 知道 —— 它**不是**给歌词装载用的(译文转不转由
         // chineseVariant 决定,跟这个开关无关),而是给「简繁转换」那一项的显隐判据用:
         // 译文没在屏幕上时,把一首日文歌的中文机翻转成繁体是一次看不见的改动,那一项就不该

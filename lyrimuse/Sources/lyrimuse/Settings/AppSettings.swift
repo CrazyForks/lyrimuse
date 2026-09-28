@@ -193,6 +193,7 @@ final class AppSettings: ObservableObject {
         static let hasSeenChineseLyrics = "np:hasSeenChineseLyrics"
         static let hasShownMenuBarPositionHint = "np:hasShownMenuBarPositionHint"
         static let showRomanization = "np:showRomanization"
+        static let resegmentLyricsByWidth = "np:resegmentLyricsByWidth"
         static let romanizationScripts = "np:romanizationScripts"
         static let showTranslation = "np:showTranslation"
         static let launchAtLoginEnabled = "np:launchAtLoginEnabled"
@@ -592,6 +593,11 @@ final class AppSettings: ObservableObject {
     }
     @Published var showRomanization: Bool {
         didSet { defaults.set(showRomanization, forKey: Keys.showRomanization) }
+    }
+    /// 悬浮歌词 / 灵动岛 / 菜单栏按各自的宽度重新断句(LocalPlaybackSource.resegmentsLyricsByWidth)。
+    /// 歌词窗口不受影响。
+    @Published var resegmentLyricsByWidth: Bool {
+        didSet { defaults.set(resegmentLyricsByWidth, forKey: Keys.resegmentLyricsByWidth) }
     }
 
     /// 要给哪几种文字标罗马音(日文/韩文/中文各自可开关)。存 OptionSet 的 rawValue。
@@ -1604,6 +1610,8 @@ final class AppSettings: ObservableObject {
     /// `NSFont`。必须跟 `notchMainFont` 在**同一次** `recomputeNotchFonts()` 里由同一组入参派生 ——
     /// 各算各的迟早会漂,而漂了不会报错,只会让滚动偏移逐词错位。
     @Published private(set) var notchMainNSFont: NSFont = .systemFont(ofSize: 13, weight: .semibold)
+    /// 副行那份字体的 AppKit 孪生,按宽度断句量副行宽用。同上,跟 `notchSecondaryFont` 同一次派生。
+    @Published private(set) var notchSecondaryNSFont: NSFont = .systemFont(ofSize: 11, weight: .medium)
 
     // 四行的字重从**用户选的那一档**推导,不再各自硬编码(加「字重」设置)。
     // 默认档位 `.bold` 推出来的正好是改动前那四个硬编码值(bold / medium / regular / medium),
@@ -1648,6 +1656,8 @@ final class AppSettings: ObservableObject {
         notchMainDetailFont = .overlayFont(familyName: family, size: size, weight: lighter)
         notchSecondaryFont = .overlayFont(
             familyName: family, size: NotchLyricRowMetrics.secondaryFontSize, weight: lighter)
+        notchSecondaryNSFont = .overlayFont(
+            familyName: family, size: NotchLyricRowMetrics.secondaryFontSize, weight: lighter)
     }
 
     private init() {
@@ -1671,6 +1681,7 @@ final class AppSettings: ObservableObject {
         hasSeenChineseLyrics = defaults.bool(forKey: Keys.hasSeenChineseLyrics)
         hasShownMenuBarPositionHint = defaults.bool(forKey: Keys.hasShownMenuBarPositionHint)
         showRomanization = (defaults.object(forKey: Keys.showRomanization) as? Bool) ?? true
+        resegmentLyricsByWidth = (defaults.object(forKey: Keys.resegmentLyricsByWidth) as? Bool) ?? false
         // 没存过时按界面语言取默认值,以 `RomanizationScripts.defaultScripts(chineseUI:)` 为准,
         // 别在注释或文案里另抄一份具体开了哪几项。L10n.current 直接读 np:appLanguage 那个键,
         // 不依赖 self.appLanguage(它在下面才赋值)。

@@ -1881,6 +1881,18 @@ private struct LyricsSettingsTab: View {
                 .help(L10n.t("日语、韩语标成罗马字，普通话标成拼音，粤语标成粤拼"))
             }
             CardDivider()
+            // 跟繁简 / 罗马音同样双写:AppSettings 持久化,LocalPlaybackSource 让当前这首立刻重新加载。
+            SettingsRow(
+                icon: "rectangle.compress.vertical",
+                title: L10n.t("按宽度重新断句"),
+                help: L10n.t("悬浮歌词、灵动岛和菜单栏各按自己的宽度断句：放不下的长句拆开，连续几句很短的合成一句，每一行都不换行、不滚动；歌词窗口仍然一句一行")
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.resegmentLyricsByWidth },
+                    set: { settings.resegmentLyricsByWidth = $0; local.resegmentsLyricsByWidth = $0 }
+                ))
+            }
+            CardDivider()
             // 时间轴偏移。跟菜单栏「歌词时间轴」那个单曲微调是两档:这里校的是设备侧的固定延迟
             // (跟哪首歌无关,换首歌照样偏),那里校的是某一份歌词自己的时间轴不准。两者相加才是
             // 实际生效的值,见 LyricsOffsetStore.globalOffsetMs。

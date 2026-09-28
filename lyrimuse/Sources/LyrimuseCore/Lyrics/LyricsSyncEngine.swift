@@ -185,6 +185,26 @@ public final class LyricsSyncEngine {
     private var keptOverlapLineTimes: Set<Int> = []
     /// 跟 wordLines 逐下标对应:这一行跟下一行真重叠时唱到哪一刻,不重叠是 nil(见 overlapHoldEnds)。
     private var overlapHoldEndMs: [Int?] = []
+    /// 单行展示面按宽度重新断句(见 surfaceTick):每个展示面的宽度预算与断句进度。
+    /// 没开重新断句、或那个面还没报宽度时,它的断句就是一行一段。歌词窗口不受影响。
+    private var resegmentsByWidth = false
+    private var layoutBudgets: [LyricsSurface: LineLayoutBudget] = [:]
+    private var surfaceBreaks: [LyricsSurface: SurfaceBreaks] = [:]
+
+    /// 一个展示面的断句:从头一组一组往后断,只断到播放位置后面两段(断好的不会因为后面的行变),
+    /// 不在加载时整首断完 —— 逐词读音要给每一句分词,整首一起做会在换歌时卡一下。
+    private struct SurfaceBreaks {
+        /// 已套缓存的预算;nil = 一行一段。
+        var budget: LineLayoutBudget?
+        var segments: [LyricsSegmenter.Segment] = []
+        var starts: [Int] = []
+        /// 下一组从第几行开始断;等于总行数就是断完了。
+        var nextLine = 0
+        /// 给断句用的第 k 行(按需构造)。
+        var lines: [Int: LyricsSegmenter.Line] = [:]
+        /// 第 k 段显示的那一句。
+        var displayed: [Int: SyncedLyricLine] = [:]
+    }
     /// 行级歌词里只有时间戳、没有文字的那些行的时间(升序,见 LRCParser.parseEndMarks)。逐字模式不用。
     private var baseEndMarks: [Int] = []
     private var usingWords = false
@@ -1474,6 +1494,7 @@ public final class LyricsSyncEngine {
         let romanizationScripts: RomanizationScripts
         let songIsCantonese: Bool
         let songIsHokkien: Bool
+        let resegmentsByWidth: Bool
     }
     private var loadedFingerprint: LoadFingerprint?
 
@@ -1491,17 +1512,18 @@ public final class LyricsSyncEngine {
         lyrics: String, lyricsTr: String, lyricsRoma: String, lyricsYRC: String, lyricsBG: String = "",
         trackTitle: String = "", trackArtist: String = "",
         romanizationScripts: RomanizationScripts = .default, songIsCantonese: Bool = false,
-        songIsHokkien: Bool = false
+        songIsHokkien: Bool = false, resegmentsByWidth: Bool = false
     ) -> Bool {
         let fingerprint = LoadFingerprint(
             lyrics: lyrics, lyricsTr: lyricsTr, lyricsRoma: lyricsRoma, lyricsYRC: lyricsYRC, lyricsBG: lyricsBG,
             trackTitle: trackTitle, trackArtist: trackArtist,
             romanizationScripts: romanizationScripts, songIsCantonese: songIsCantonese,
-            songIsHokkien: songIsHokkien)
+            songIsHokkien: songIsHokkien, resegmentsByWidth: resegmentsByWidth)
         if fingerprint == loadedFingerprint { return false }
         loadedFingerprint = fingerprint
         self.romanizationScripts = romanizationScripts
         self.songIsHokkien = songIsHokkien
+        self.resegmentsByWidth = resegmentsByWidth
         // 逐字时间轴先过一遍合法性归一化(LyricTimelineNormalizer):字起点早于行首 /
         // 落在下一行开始之后的小偏差夹回来,乱序或偏差太大的行退化成均匀扫过。放在署名过滤之前——
         // 归一化要看相邻行的时间戳,得在完整的行列表上做。每次加载只记一行汇总日志。
@@ -1715,6 +1737,7 @@ public final class LyricsSyncEngine {
         cachedLeadIdx = Int.min
         cachedLeadLine = nil
         lastScanIdx = Int.min
+        for surface in LyricsSurface.allCases { rebuildSegments(for: surface) }
         return true
     }
 
@@ -2002,7 +2025,8 @@ public final class LyricsSyncEngine {
         // 时间轴 —— 逐词罗马音那一组从一开始就显示成已唱满(对抗审查抓出的
         // 预存在 bug,非本轮引入;segmentsCache/romanizerFallbackCache 只存文本派生物、
         // 与时间无关,仍按纯文本共享)。
-        let key = "\(words[0].startMs)|\(line)"
+        // 词数也进 key:按宽度断句会把同一句按字重新分组,词的粒度不同,分出来的组也不同。
+        let key = "\(words[0].startMs)|\(words.count)|\(line)"
         if let cached = wordGroupCache[key] { return cached }
         // 逐词读音受同一道按语言开关的管辖 —— 关掉某种语言的罗马音之后,逐字歌词下面
         // 也不该再标读音。哪种语言能真的标出来(日文分词 / 中文粤语一字一音节)由
@@ -2639,6 +2663,306 @@ public final class LyricsSyncEngine {
     public func windowLineWords(at index: Int) -> [SyncedLyricWord]? {
         guard usingWords, wordLines.indices.contains(index) else { return nil }
         return windowWords(at: index)
+    }
+
+    // ---- 单行展示面按宽度重新断句(悬浮歌词 / 灵动岛 / 菜单栏,见 08 章决策 25) ----
+
+    /// 一个展示面此刻要显示的内容。三个面各按自己的断句算,同一刻未必是同一句。字段语义跟 TickResolution
+    /// 的同名项一致,只是按这个面的段而不是按歌词行算。
+    public struct SurfaceLyrics: Equatable {
+        public var line: SyncedLyricLine?
+        /// 当前这一段的显示窗口(开始时刻 + 显示多久),按时长配速的滚动用。
+        public var lineWindow: LyricDisplayWindow?
+        public var compactLine: SyncedLyricLine?
+        public var compactPlaceholder = false
+        public var compactDwellMs: Int?
+        public var compactLeadInMs: Int?
+        public var nextText: String?
+        public var nextSide: LyricDuet.Side?
+        public var nextRomanization: String?
+        public var nextTranslation: String?
+        public var nextWordGroups: [SyncedLyricWordGroup]?
+
+        public init() {}
+        public static let empty = SurfaceLyrics()
+
+        /// 当前这一段会显示多久(秒);算不出来是 nil(调用方拿它做除数)。
+        public var lineDwellSeconds: Double? { lineWindow?.dwellMs.map { Double($0) / 1000 } }
+        /// 「要显示的那一句」会显示多久(秒),口径同 PlaybackCoordinator.compactDwellSeconds。
+        public var compactDwellSeconds: Double? {
+            if let ms = compactDwellMs, ms > 50 { return Double(ms) / 1000 }
+            return lineDwellSeconds
+        }
+        /// 「要显示的那一句」出现之后、开唱之前的提前量(秒)。
+        public var compactLeadInSeconds: Double {
+            guard let ms = compactLeadInMs, ms > 0 else { return 0 }
+            return Double(ms) / 1000
+        }
+    }
+
+    /// 设一个展示面的宽度预算;预算的 key 没变就什么都不做。返回断句是否要重来(要的话调用方立刻重发一拍)。
+    @discardableResult
+    public func setLayoutBudget(_ budget: LineLayoutBudget?, for surface: LyricsSurface) -> Bool {
+        if budget?.key == layoutBudgets[surface]?.key, (budget == nil) == (layoutBudgets[surface] == nil) { return false }
+        layoutBudgets[surface] = budget
+        rebuildSegments(for: surface)
+        return true
+    }
+
+    private var displayLineCount: Int { usingWords ? wordLines.count : baseLines.count }
+
+    private func displayLineText(_ i: Int) -> String {
+        usingWords ? wordLines[i].words.map(\.text).joined() : baseLines[i].text
+    }
+
+    private func displayLineSide(_ i: Int) -> LyricDuet.Side? {
+        usingWords ? (wordSides.indices.contains(i) ? wordSides[i] : nil)
+                   : (baseSides.indices.contains(i) ? baseSides[i] : nil)
+    }
+
+    /// 第 i 行给单行展示面用的逐字词:跟下一行真重叠、归一化照原样保留了越界词的行,先照规则 3 压回去
+    /// (同 buildLine)。不压末字。
+    private func singleLineWords(_ i: Int) -> [SyncedLyricWord] {
+        var ln = wordLines[i]
+        if i + 1 < wordLines.count, keptOverlapLineTimes.contains(ln.timeMs) {
+            ln = LyricTimelineNormalizer.singleLineForm(ln, nextStart: wordLines[i + 1].timeMs)
+        }
+        return ln.words.map { SyncedLyricWord(text: $0.text, startMs: $0.startMs, durationMs: $0.durationMs) }
+    }
+
+    private func rebuildSegments(for surface: LyricsSurface) {
+        let n = displayLineCount
+        var breaks = SurfaceBreaks()
+        if resegmentsByWidth, let budget = layoutBudgets[surface], budget.main.maxWidth > 0, n > 0 {
+            breaks.budget = budget.memoized()
+        } else {
+            breaks.segments = LyricsSegmenter.identity(lineCount: n)
+            breaks.starts = breaks.segments.map(segmentStartMs)
+            breaks.nextLine = n
+        }
+        surfaceBreaks[surface] = breaks
+    }
+
+    /// 给断句用的第 i 行,按需构造、按展示面缓存。
+    private func segmenterLine(_ surface: LyricsSurface, _ i: Int, budget: LineLayoutBudget) -> LyricsSegmenter.Line? {
+        guard i >= 0, i < displayLineCount else { return nil }
+        if let cached = surfaceBreaks[surface]?.lines[i] { return cached }
+        func holds(_ k: Int) -> Bool { overlapHoldEndMs.indices.contains(k) && overlapHoldEndMs[k] != nil }
+        let start = gapLineStartMs(at: i) ?? 0
+        // 译文 / 罗马音按行自己的时间查,同 buildLine / buildPartLine:按起点查可能对到别的行。
+        let lookupMs = usingWords ? wordLines[i].timeMs : baseLines[i].timeMs
+        let text = displayLineText(i)
+        let words = usingWords ? singleLineWords(i) : nil
+        let line = LyricsSegmenter.Line(
+            startMs: start,
+            nextStartMs: gapLineStartMs(at: i + 1),
+            text: text,
+            words: words,
+            groups: budget.wordRomanization != nil ? words.flatMap { wordGroups(for: $0, line: text) } : nil,
+            groupsFor: budget.wordRomanization != nil && usingWords
+                ? { [unowned self] ws, t in wordGroups(for: ws, line: t) } : nil,
+            translation: budget.translation != nil ? translationText(timeMs: lookupMs, plainText: text) : nil,
+            romanization: budget.romanization != nil ? romanizationText(timeMs: lookupMs, plainText: text) : nil,
+            side: displayLineSide(i),
+            sungEndMs: gapLineEndMs(at: i),
+            mergeable: !holds(i),
+            gapAfter: gapWindow(after: i) != nil)
+        surfaceBreaks[surface]?.lines[i] = line
+        return line
+    }
+
+    /// 往后断,直到播放位置后面至少还有两段(当前段的下一段、再下一段的起点都要用);`posMs` 为 nil 断完整首。
+    private func extendSegments(_ surface: LyricsSurface, coveringMs posMs: Int?) {
+        guard let budget = surfaceBreaks[surface]?.budget else { return }
+        let n = displayLineCount
+        while let b = surfaceBreaks[surface], b.nextLine < n {
+            if let posMs, b.starts.count >= 2, b.starts[b.starts.count - 2] > posMs { return }
+            let segs = LyricsSegmenter.step(from: b.nextLine, line: { [unowned self] k in
+                segmenterLine(surface, k, budget: budget)
+            }, budget: budget)
+            guard let last = segs.last else { return }
+            surfaceBreaks[surface]?.segments += segs
+            surfaceBreaks[surface]?.starts += segs.map(segmentStartMs)
+            surfaceBreaks[surface]?.nextLine = last.lastLine + 1
+        }
+    }
+
+    private func segmentStartMs(_ seg: LyricsSegmenter.Segment) -> Int {
+        seg.part?.startMs ?? gapLineStartMs(at: seg.firstLine) ?? 0
+    }
+
+    /// 一段唱完的时刻:逐字句拆开的前几段取它最后一个词的结束,行级句拆开的前几段不知道(nil),
+    /// 其余同 gapLineEndMs(整行 / 合成句的末行)。
+    private func segmentSungEndMs(_ surface: LyricsSurface, _ k: Int) -> Int? {
+        guard let segs = surfaceBreaks[surface]?.segments, segs.indices.contains(k) else { return nil }
+        let seg = segs[k]
+        if let part = seg.part, part.index + 1 < part.count {
+            guard !part.estimated, let w = part.words.last else { return nil }
+            return w.startMs + w.durationMs
+        }
+        return gapLineEndMs(at: seg.lastLine)
+    }
+
+    private func segmentStart(_ surface: LyricsSurface, _ k: Int) -> Int? {
+        guard let starts = surfaceBreaks[surface]?.starts, starts.indices.contains(k) else { return nil }
+        return starts[k]
+    }
+
+    /// 第 k 段要显示的那一句(按展示面缓存)。
+    private func segmentLine(_ surface: LyricsSurface, _ k: Int) -> SyncedLyricLine? {
+        guard let segs = surfaceBreaks[surface]?.segments, segs.indices.contains(k) else { return nil }
+        if let cached = surfaceBreaks[surface]?.displayed[k] { return cached }
+        let seg = segs[k]
+        let line: SyncedLyricLine?
+        if let part = seg.part {
+            line = buildPartLine(seg.firstLine, part, nextStartMs: segmentStart(surface, k + 1))
+        } else if seg.lastLine > seg.firstLine {
+            line = buildMergedLine(seg.firstLine, seg.lastLine)
+        } else {
+            line = buildLine(seg.firstLine)
+        }
+        surfaceBreaks[surface]?.displayed[k] = line
+        return line
+    }
+
+    /// 一个展示面断好的全部段,按顺序。全库回放核对「每一行都放得下」用。
+    public func surfaceLines(_ surface: LyricsSurface) -> [SyncedLyricLine] {
+        extendSegments(surface, coveringMs: nil)
+        return (surfaceBreaks[surface]?.segments ?? []).indices.compactMap { segmentLine(surface, $0) }
+    }
+
+    /// 一个展示面整首里最宽的一行:每一段的主行,和这个面显示的下一句 / 译文 / 罗马音那一行,按它的预算量,
+    /// 取最宽的。没开重新断句、那个面没报宽度、没有歌词时为 nil。菜单栏自适应宽度拿它给整首定一个槽宽。
+    public func widestRow(_ surface: LyricsSurface) -> CGFloat? {
+        guard let budget = surfaceBreaks[surface]?.budget else { return nil }
+        var widest: CGFloat?
+        for line in surfaceLines(surface) {
+            let text = line.plainText ?? ""
+            var w = budget.main.measure(text)
+            if let row = budget.preview { w = max(w, row.measure(text)) }
+            if let row = budget.translation, let tr = line.translation { w = max(w, row.measure(tr)) }
+            if let row = budget.romanization, let ro = line.romanization { w = max(w, row.measure(ro)) }
+            widest = max(widest ?? 0, w)
+        }
+        return widest
+    }
+
+    /// 一个展示面此刻该显示什么,规则跟 tickQuery 的单行几项相同,只是按这个面的段算。
+    public func surfaceTick(_ surface: LyricsSurface, atMs rawPosMs: Int, trackEndMs: Int? = nil) -> SurfaceLyrics {
+        let posMs = rawPosMs + effectiveOffsetMs
+        extendSegments(surface, coveringMs: posMs)
+        guard let starts = surfaceBreaks[surface]?.starts, !starts.isEmpty else { return .empty }
+        var lo = 0, hi = starts.count - 1, k = -1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if starts[mid] <= posMs { k = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        var out = SurfaceLyrics()
+        out.line = k >= 0 ? segmentLine(surface, k) : nil
+        out.lineWindow = LyricDisplayWindow.of(index: k >= 0 ? k : nil, starts: starts, trackDurationMs: trackEndMs)
+        switch CompactLyricLead.resolve(activeIdx: k, posMs: posMs,
+                                        lineEndMs: segmentSungEndMs(surface, k),
+                                        nextStartMs: segmentStart(surface, k + 1)) {
+        case .line(let i):
+            out.compactLine = i >= 0 ? segmentLine(surface, i) : nil
+            out.compactDwellMs = segmentStart(surface, i).flatMap { start in
+                CompactLyricLead.displayDurationMs(
+                    prevLineEndMs: segmentSungEndMs(surface, i - 1), startMs: start,
+                    lineEndMs: segmentSungEndMs(surface, i), nextStartMs: segmentStart(surface, i + 1),
+                    fallbackEndMs: trackEndMs)
+            }
+            out.compactLeadInMs = segmentStart(surface, i).map { start in
+                CompactLyricLead.leadInMs(prevLineEndMs: segmentSungEndMs(surface, i - 1), startMs: start)
+            }
+        case .placeholder:
+            out.compactPlaceholder = true
+        }
+        if let next = segmentLine(surface, k + 1) {
+            out.nextText = next.plainText
+            out.nextSide = next.side
+            out.nextRomanization = next.romanization
+            out.nextTranslation = next.translation
+            out.nextWordGroups = next.wordGroups
+        }
+        return out
+    }
+
+    /// 第 i 行拆开后的一段:词取这一段的(逐字句末字按下一段起点压;行级句只取文字),逐词读音按段内的组重建;
+    /// 译文 / 罗马音取这一段自己的那截,整句那一行放得下时每段都带整句的;背景人声挂在它开口时所在的那一段,
+    /// 都不在就挂最后一段。
+    private func buildPartLine(_ i: Int, _ part: LyricsSegmenter.Part, nextStartMs: Int?) -> SyncedLyricLine {
+        let timeMs = usingWords ? wordLines[i].timeMs : baseLines[i].timeMs
+        let full = displayLineText(i)
+        let text = part.text
+        let romanization = part.romanization ?? romanizationText(timeMs: timeMs, plainText: full)
+        let translation = part.translation ?? translationText(timeMs: timeMs, plainText: full)
+        guard !part.estimated else {
+            return SyncedLyricLine(
+                romanization: romanization, translation: translation, mainText: text,
+                words: nil, wordGroups: nil, side: displayLineSide(i), plainText: text)
+        }
+        let words = KaraokeFill.tailClamped(part.words, nextLineStartMs: nextStartMs)
+        var groups: [SyncedLyricWordGroup]?
+        if let sizes = part.groupSizes, sizes.reduce(0, +) == words.count {
+            var offset = 0
+            groups = sizes.enumerated().map { k, size in
+                defer { offset += size }
+                return SyncedLyricWordGroup(id: k, words: Array(words[offset..<(offset + size)]),
+                                            romanization: part.groupRomanizations?[k])
+            }
+        } else {
+            groups = wordGroups(for: words, line: text)
+        }
+        var partBackground: [SyncedLyricWord]?
+        if let background = backgroundWords(forLineAt: timeMs), let bgStart = background.first?.startMs {
+            let partEnd = part.index + 1 < part.count ? (nextStartMs ?? Int.max) : Int.max
+            if (part.index == 0 || bgStart >= part.startMs) && bgStart < partEnd { partBackground = background }
+        }
+        return SyncedLyricLine(
+            romanization: romanization, translation: translation,
+            mainText: nil, words: words, wordGroups: groups,
+            side: displayLineSide(i), plainText: text, backgroundWords: partBackground)
+    }
+
+    /// 第 f…l 行合成的一句:逐字词首尾相接(句与句之间补一个空格),末字按下一段的起点压;译文 / 罗马音
+    /// 各自用空格连起来;背景人声接在一起。
+    private func buildMergedLine(_ f: Int, _ l: Int) -> SyncedLyricLine {
+        let nextStart = gapLineStartMs(at: l + 1)
+        func joinedSecondary(_ pick: (Int, String) -> String?) -> String? {
+            let parts = (f...l).compactMap { k -> String? in
+                let t = usingWords ? wordLines[k].timeMs : baseLines[k].timeMs
+                guard let v = pick(t, displayLineText(k)), !v.isEmpty else { return nil }
+                return v
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " ")
+        }
+        let romanization = joinedSecondary { romanizationText(timeMs: $0, plainText: $1) }
+        let translation = joinedSecondary { translationText(timeMs: $0, plainText: $1) }
+        if usingWords {
+            var words: [SyncedLyricWord] = []
+            var background: [SyncedLyricWord] = []
+            for k in f...l {
+                var ws = wordLines[k].words.map {
+                    SyncedLyricWord(text: $0.text, startMs: $0.startMs, durationMs: $0.durationMs)
+                }
+                if k < l, let tail = ws.last, tail.text.last?.isWhitespace != true {
+                    ws[ws.count - 1] = SyncedLyricWord(text: tail.text + " ", startMs: tail.startMs, durationMs: tail.durationMs)
+                }
+                words += ws
+                background += backgroundWords(forLineAt: wordLines[k].timeMs) ?? []
+            }
+            words = KaraokeFill.tailClamped(words, nextLineStartMs: nextStart)
+            let joined = words.map(\.text).joined()
+            return SyncedLyricLine(
+                romanization: romanization, translation: translation, mainText: nil,
+                words: words, wordGroups: wordGroups(for: words, line: joined),
+                side: displayLineSide(f), plainText: joined,
+                backgroundWords: background.isEmpty ? nil : background)
+        }
+        let text = (f...l).map { baseLines[$0].text }.joined(separator: " ")
+        return SyncedLyricLine(
+            romanization: romanization, translation: translation, mainText: text,
+            words: nil, wordGroups: nil, side: displayLineSide(f), plainText: text)
     }
 
     /// 行头在 timeMs 这一句的背景人声行;没有是 nil。gapLineEndMs 每个 tick 都问,这里不分配。

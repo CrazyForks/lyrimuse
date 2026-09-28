@@ -37382,6 +37382,52 @@
         }
       }
     },
+    "按宽度重新断句" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Re-break Lines to Fit"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按宽度重新断句"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按寬度重新斷句"
+          }
+        }
+      }
+    },
+    "悬浮歌词、灵动岛和菜单栏各按自己的宽度断句：放不下的长句拆开，连续几句很短的合成一句，每一行都不换行、不滚动；歌词窗口仍然一句一行" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desktop Floating Lyrics, the Notch and the Menu Bar each re-break lyrics to their own width: lines that don't fit are split up and several very short lines in a row are joined into one, so every line fits without wrapping or scrolling; the Lyrics Window still shows one line at a time"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "悬浮歌词、灵动岛和菜单栏各按自己的宽度断句：放不下的长句拆开，连续几句很短的合成一句，每一行都不换行、不滚动；歌词窗口仍然一句一行"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浮動歌詞、動態島和選單列各按自己的寬度斷句：放不下的長句拆開，連續幾句很短的合成一句，每一行都不換行、不捲動；歌詞視窗仍然一句一行"
+          }
+        }
+      }
+    },
     "点这里到设置里重新连接" : {
       "extractionState" : "manual",
       "localizations" : {

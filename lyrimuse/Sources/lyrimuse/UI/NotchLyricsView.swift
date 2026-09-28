@@ -219,14 +219,17 @@ private final class NotchPlayback: ObservableObject {
             p.$album.removeDuplicates().sink { [weak self] in self?.album = $0 },
             p.$displayAlbum.removeDuplicates().sink { [weak self] in self?.displayAlbum = $0 },
             p.$isPlayingNow.removeDuplicates().sink { [weak self] in self?.isPlayingNow = $0 },
-            p.$currentLine.removeDuplicates().sink { [weak self] in self?.currentLine = $0 },
+            // 当前句、要显示的那一句、下一句都取灵动岛自己那一份(按这一面的宽度断句,见
+            // LocalPlaybackSource.notchLyrics),别混用逐行的 currentLine / compactLine / nextLine*。
+            p.$notchLyrics.map(\.line).removeDuplicates().sink { [weak self] in self?.currentLine = $0 },
             // 主行画哪一句(见 displayLine 的注释):副行关着取 compactLine(唱完就切),副行开着取
             // currentLine(跟悬浮歌词同一套语义)。「卡拉OK效果」关着时再把**要画的那一行**压成整行
             // (`SyncedLyricLine.lineLevel`):歌词行的逐字填色按 `displayLine?.words` 走,
             // 压成整行之后自然落到 `.plain` 那一档,渲染分支不用改。`currentLine` **不**压 —— 它只给
             // 均衡器条子当"此刻在唱哪个字"的节拍,那是跟着人声动的律动、不是染色,关掉卡拉OK填色不该
             // 让条子一起哑掉。
-            Publishers.CombineLatest4(p.$compactLine, p.$currentLine, s.$notchLyricsKaraoke, s.$notchSecondaryLine)
+            Publishers.CombineLatest4(p.$notchLyrics.map(\.compactLine), p.$notchLyrics.map(\.line),
+                                      s.$notchLyricsKaraoke, s.$notchSecondaryLine)
                 .map { compact, current, karaoke, secondary -> SyncedLyricLine? in
                     // 挑哪一句在 Core(`LyricSecondaryLine.displayedLine`),菜单栏读的是同一份。
                     let line = secondary.displayedLine(compactLine: compact, currentLine: current)
@@ -235,7 +238,7 @@ private final class NotchPlayback: ObservableObject {
                 .removeDuplicates()
                 .sink { [weak self] in self?.displayLine = $0 },
             // 副行文本:按四选一取下一句 / 当前句译文 / 当前句罗马音,空白算没有。
-            Publishers.CombineLatest3(p.$currentLine, p.$nextLineText, s.$notchSecondaryLine)
+            Publishers.CombineLatest3(p.$notchLyrics.map(\.line), p.$notchLyrics.map(\.nextText), s.$notchSecondaryLine)
                 .map { current, next, secondary -> String? in
                     // 取值规则在 Core(`LyricSecondaryLine.secondaryText`),菜单栏副行读的是同一份。
                     secondary.secondaryText(currentLine: current, nextLineText: next)
@@ -243,8 +246,8 @@ private final class NotchPlayback: ObservableObject {
                 .removeDuplicates()
                 .sink { [weak self] in self?.secondaryText = $0 },
             s.$notchSecondaryLine.removeDuplicates().sink { [weak self] in self?.secondaryLine = $0 },
-            p.$nextLineText.removeDuplicates().sink { [weak self] in self?.nextLineText = $0 },
-            p.$nextLineSide.removeDuplicates().sink { [weak self] in self?.nextLineSide = $0 },
+            p.$notchLyrics.map(\.nextText).removeDuplicates().sink { [weak self] in self?.nextLineText = $0 },
+            p.$notchLyrics.map(\.nextSide).removeDuplicates().sink { [weak self] in self?.nextLineSide = $0 },
             Publishers.CombineLatest(p.$playbackMode, p.$playbackModePlayer)
                 .map { mode, player in player == .appleMusic ? mode : nil }
                 .removeDuplicates()
@@ -773,6 +776,9 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
     /// 子视图(`NotchIdleEarIconHost` / `NotchIdlePanelHost`)各自订阅 —— 同 NotchTransientCenter 那条纪律,
     /// 提示挂上 / 撤掉只失效那一块。默认是惰性替身(编辑台预览永远看不到提示),真窗口传 `.shared`。
     var prompt: NotchUnknownPlayerPrompt = .inert
+    /// 把歌词行的宽度报给按宽度断句(LineLayoutWidthReporter)。只有真窗口传 true:编辑台里跑的也是这个视图,
+    /// 它的宽度跟真窗口不一样,报上去会把真窗口的断句覆盖掉。
+    var reportsLineLayout = false
     // 不整对象订阅 PlaybackCoordinator/AppSettings —— 见 NotchPlayback 的注释。
     // NotchTransientCenter 也不在这里订阅:banner 只被歌词行消费,订阅下沉到
     // NotchTransientHost 子视图,横幅出现/消失只失效那一行,不打醒整卡。
@@ -1638,13 +1644,14 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
             }
             // 用户关掉「显示歌词」时稳态没有歌词行——但展开时哪怕关着也要照常画,见 showsLyricRow
             // 的注释(回归护栏:漏了展开这一档的表现是"展开后有下一句预览、却看不到正在播放的当前行")。
+            // 按宽度断句只认一份歌词行的宽:稳态那份(更窄)在就报它,不在(「显示歌词」关着)才报展开那份。
             if controller.showsLyrics {
-                lyricRow
+                lyricRow(reportsWidth: reportsLineLayout)
                     .frame(width: controller.steadyCardWidth, height: NotchMetrics.compactRowHeight)
                     .padding(.top, top)
                     .modifier(NotchCardLayerActive(active: !expanded, staggered: staggered))
             }
-            lyricRow
+            lyricRow(reportsWidth: reportsLineLayout && !controller.showsLyrics)
                 .frame(width: controller.expandedCardWidth, height: NotchMetrics.compactRowHeight)
                 .padding(.top, top + headerHeight)
                 .modifier(NotchCardLayerActive(active: expanded, staggered: staggered))
@@ -1657,15 +1664,15 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
         }
     }
 
-    private var lyricRow: some View {
+    private func lyricRow(reportsWidth: Bool) -> some View {
         // NotchTransientCenter 的订阅下沉在 NotchTransientHost 子视图里 —— 横幅出现/
         // 消失(音量连调时每档一次)只失效歌词行,不再打醒整卡 body。
         NotchTransientHost(tint: accentOrWhite) {
-            lyricRowContent
+            lyricRowContent(reportsWidth: reportsWidth)
         }
     }
 
-    private var lyricRowContent: some View {
+    private func lyricRowContent(reportsWidth: Bool) -> some View {
         HStack(spacing: NotchMetrics.artworkLyricSpacing) {
             // 封面贴左还是贴右可配(`notchLyricRowShowsArtwork` /
             // `notchLyricRowArtworkPosition`,见 NotchPlayback 的注释)——之前
@@ -1697,6 +1704,9 @@ struct NotchLyricsView<Chrome: NotchChromeSource>: View {
             // 写一次 maxWidth: .infinity 把"歌词吃掉剩余宽度"这个意图钉死,不依赖
             // GeometryReader 在 stack 里的隐式伸缩行为。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                if reportsWidth { LineLayoutWidthReporter() }
+            }
             if playback.lyricRowArtworkPosition == .right { lyricRowArtwork }
         }
         .padding(.horizontal, 16)

@@ -2,6 +2,14 @@ import SwiftUI
 import Combine
 import LyrimuseCore
 
+/// 悬浮歌词卡片的尺寸常量。放在非泛型类型上,卡片外的代码(LineLayoutBudgets)也能引用。
+enum OverlayMetrics {
+    /// lyricsCard 的水平内边距。算可用宽度要减掉它。
+    static let cardHorizontalPadding: CGFloat = 20
+    /// 对唱行文字前(后)那截演唱者标记的宽:dot(6) + 间距(7) + 竖线(2) + 间距(7)。
+    static let speakerIndicatorWidth: CGFloat = 6 + 7 + 2 + 7
+}
+
 /// 悬浮歌词的**窄订阅代理**(性能审计落地,照「歌词管理」LiveRowPlayback 的
 /// 既有模式):PlaybackCoordinator 有 30+ 个 @Published、AppSettings 有 40+ 个,而
 /// ObservableObject 的 objectWillChange 不分字段 —— 悬浮窗原来整对象订阅这两个单例,
@@ -17,8 +25,7 @@ import LyrimuseCore
 /// 重锚/校准这类事件多打醒一次整个 body(同 LiveRowPlayback 对 anchor 的处理)。
 @MainActor
 private final class OverlayPlayback: ObservableObject {
-    /// lyricsCard 的水平内边距。算可用宽度要减掉它,所以提成常量、别在两处各写一遍 20。
-    static let cardHorizontalPadding: CGFloat = 20
+    static let cardHorizontalPadding = OverlayMetrics.cardHorizontalPadding
 
     // ---- 来自 PlaybackCoordinator ----
     @Published private(set) var currentLine: SyncedLyricLine?
@@ -148,22 +155,23 @@ private final class OverlayPlayback: ObservableObject {
             // 逐字填色、逐词罗马音标注都在下游按 `line.words` / `line.wordGroups` 走,压成整行之后
             // 它们自然走"这首歌没有逐字数据"那条路,渲染分支一处不用改。开关翻面也会重新发一次
             // 当前行,所以正在显示的那句当场变(不用等换行)。歌词窗口不经这里、始终逐字。
-            Publishers.CombineLatest(p.$currentLine, s.$overlayLyricsKaraoke)
+            // 这一面自己的那一份(按悬浮歌词的宽度断句,见 LocalPlaybackSource.overlayLyrics):当前句、下一句预览、
+            // 当前句的显示窗口都从这里取,别混用逐行的 currentLine / nextLine*。
+            Publishers.CombineLatest(p.$overlayLyrics.map(\.line), s.$overlayLyricsKaraoke)
                 .map { line, karaoke in karaoke ? line : line?.lineLevel }
                 .removeDuplicates()
                 .sink { [weak self] in self?.currentLine = $0 },
-            p.$nextLineText.removeDuplicates().sink { [weak self] in self?.nextLineText = $0 },
-            p.$nextLineSide.removeDuplicates().sink { [weak self] in self?.nextLineSide = $0 },
-            p.$nextLineRomanization.removeDuplicates().sink { [weak self] in self?.nextLineRomanization = $0 },
-            p.$nextLineTranslation.removeDuplicates().sink { [weak self] in self?.nextLineTranslation = $0 },
-            Publishers.CombineLatest3(p.$currentLineIndex, p.$allLines, p.$currentDurationMs)
-                .map { index, lines, duration -> OverlayScrollingLyricRow.PacedWindow? in
-                    LyricDisplayWindow.of(index: index, starts: lines.lazy.map(\.timeMs), trackDurationMs: duration)
-                        .map { .init(startMs: $0.startMs, dwellMs: $0.dwellMs) }
+            p.$overlayLyrics.map(\.nextText).removeDuplicates().sink { [weak self] in self?.nextLineText = $0 },
+            p.$overlayLyrics.map(\.nextSide).removeDuplicates().sink { [weak self] in self?.nextLineSide = $0 },
+            p.$overlayLyrics.map(\.nextRomanization).removeDuplicates().sink { [weak self] in self?.nextLineRomanization = $0 },
+            p.$overlayLyrics.map(\.nextTranslation).removeDuplicates().sink { [weak self] in self?.nextLineTranslation = $0 },
+            p.$overlayLyrics
+                .map { lyrics -> OverlayScrollingLyricRow.PacedWindow? in
+                    lyrics.lineWindow.map { .init(startMs: $0.startMs, dwellMs: $0.dwellMs) }
                 }
                 .removeDuplicates()
                 .sink { [weak self] in self?.currentLineWindow = $0 },
-            Publishers.CombineLatest(p.$nextLineWordGroups, s.$overlayLyricsKaraoke)
+            Publishers.CombineLatest(p.$overlayLyrics.map(\.nextWordGroups), s.$overlayLyricsKaraoke)
                 .map { groups, karaoke in karaoke ? groups : nil }
                 .removeDuplicates()
                 .sink { [weak self] in self?.nextLineWordGroups = $0 },
@@ -369,7 +377,7 @@ private enum OverlaySpeakerIndicator {
     /// dot(6) + 间距(7) + 竖线(2) + 间距(7) = 22pt —— `withSpeakerIndicator` 摆在文字
     /// 前面那一截的固定宽度,`speakerIndicatorInset(side:)` 要拿同一份值给罗马音/译文
     /// 补留白,两处必须**完全**一致(否则又是一次没对齐)。
-    static let width: CGFloat = 6 + 7 + 2 + 7
+    static let width = OverlayMetrics.speakerIndicatorWidth
 }
 
 /// 控制排横向落点用的声部快照 —— 指针压在按钮上的那段时间里冻住不动。

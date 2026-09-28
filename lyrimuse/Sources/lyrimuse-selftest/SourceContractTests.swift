@@ -1177,7 +1177,7 @@ func runSourceContractTests() {
             }
             expectEqual(code.contains("resolved(duetSide: displayLine?.side)"), true, "灵动岛对齐: 主行按当前句声部解析「自动」")
             expectEqual(code.contains("resolved(duetSide: nextLineSide)"), true, "灵动岛对齐: 展开态「下一句」按下一句声部解析「自动」")
-            expectEqual(code.contains("p.$nextLineSide"), true, "灵动岛对齐: NotchPlayback 要镜像 nextLineSide")
+            expectEqual(code.contains("p.$notchLyrics.map(\\.nextSide)"), true, "灵动岛对齐: NotchPlayback 要镜像 nextLineSide")
         } else {
             expectEqual(true, false, "灵动岛对齐: 读不到 UI/NotchLyricsView.swift(路径挪了?)")
         }
@@ -1304,7 +1304,7 @@ func runSourceContractTests() {
             try? String(contentsOfFile: appSources.appendingPathComponent(rel).path, encoding: .utf8)
         }
         if let item = read("MenuBar/MenuBarStatusItem.swift") {
-            expectEqual(item.contains("secondaryKind.displayedLine(compactLine: coordinator.compactLine, currentLine: coordinator.currentLine)"), true,
+            expectEqual(item.contains("secondaryKind.displayedLine(compactLine: coordinator.menuBarLyrics.compactLine, currentLine: coordinator.menuBarLyrics.line)"), true,
                         "菜单栏双排: 取句规则走 Core 的 LyricSecondaryLine.displayedLine(跟灵动岛同一份)")
             expectEqual(item.contains("fillPath != nil || icon != nil || rowState.twoRows"), true,
                         "菜单栏双排: 自适应装得下的句子双排时也走图层渲染")
