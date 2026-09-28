@@ -82,6 +82,17 @@ extension Set where Element == PlaybackPlayer {
         return all.filter { contains($0) }
     }
 
+    /// 这个配置下,Lyrimuse 要读**哪几个播放器的界面** —— 也就是「辅助功能」那一行要替哪几家说话。
+    /// 设置页那张卡和引导页那一步列的就是这个列表,顺序固定(`allCases`)。
+    ///
+    /// 判据同 `playersNeedingAutomation`:播放器本身要不要(`needsAccessibilityPermission`,源头
+    /// shared/players.json)+ 含 `auto` 时按超集全部都算。同样**不**在这里按「装没装」过滤。
+    public var playersNeedingAccessibility: [PlaybackPlayer] {
+        let all = PlaybackPlayer.allCases.filter(\.needsAccessibilityPermission)
+        guard !contains(.auto) else { return all }
+        return all.filter { contains($0) }
+    }
+
     /// 在选中集合里点一下 `player` 之后的集合。选中的取消、没选中的勾上,但**不能取消到空集**:
     /// 选中集合永远至少留一个,跟 `PlaybackPlayerPreference.selected` / collector
     /// `resolvePlayers` 的非空保证对称。「自动识别」跟具体播放器不互斥,可以一起勾。

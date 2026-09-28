@@ -26,6 +26,7 @@
 "%@ · 供自行排查；反馈问题请用上方的「导出诊断」，信息更完整" = "%@ · For your own troubleshooting. To report a problem, use Export Diagnostics above; it includes more";
 "%@ · 登录将在 %@ 过期，建议重新连接" = "%@ · Sign-in expires on %@; reconnecting is recommended";
 "%@ · 纯文本，可直接编辑；外观与快捷键另存于 App 偏好设置，不在此处" = "%@ · Plain text you can edit directly. Appearance and shortcuts are stored in the app’s preferences, not here";
+"%@ 不向系统报告播放进度，Lyrimuse 读它界面上的播放时间来校准进度（只读，不点任何按钮）。不授权也能用，自动连播时进度可能差一两秒。" = "%@ doesn't report its playback position to the system, so Lyrimuse reads the time shown in its window to keep lyrics in sync (read-only; it never clicks anything). It works without this too, but during autoplay the position can be off by a second or two.";
 "%@ 个文件导入失败，其余已导入" = "%@ file(s) failed to import; the rest were imported";
 "%@ 分钟" = "%@ min";
 "%@ 分钟前更新" = "Updated %@ min ago";
@@ -508,6 +509,7 @@
 "在浅色或杂乱的桌面背景上把字撑出来" = "Keeps text readable on light or busy desktop backgrounds";
 "在浏览器里手动开启" = "Enable in Browser";
 "在系统设置的「完全磁盘访问权限」里打开 Lyrimuse（列表里没有就点「+」把它加进去），再回到这里点「重启歌词引擎」——授权对已经在运行的歌词引擎不生效。" = "Turn on Lyrimuse under Full Disk Access in System Settings (if it isn’t listed, click “+” to add it), then come back and hit Restart Lyrics Engine — access doesn’t reach a lyrics engine that’s already running.";
+"在系统设置的「辅助功能」里打开 Lyrimuse。之前授权过、这里仍显示没有授权的话，把 Lyrimuse 那一项取消再勾上。" = "Turn on Lyrimuse under Accessibility in System Settings. If you granted it before and it still shows as not granted, uncheck Lyrimuse there and check it again.";
 "在菜单栏里" = "In the menu bar";
 "在设置中查看 Last.fm" = "View Last.fm in Settings";
 "在访达中显示" = "Show in Finder";
@@ -807,6 +809,7 @@
 "接近平分，但内容印证不完整" = "Nearly tied, but not fully corroborated";
 "推荐开启，获取更多功能：播放进度更准，还能在歌词上直接控制播放" = "Recommended for more features: more accurate progress, and playback controls right on the lyrics";
 "推荐开启，获取更多功能：直接用本机已有的歌词，还能提前准备下一首" = "Recommended for more features: use lyrics already on this Mac and get the next song ready ahead of time";
+"推荐开启，获取更多功能：自动连播时播放进度更准" = "Recommended for more features: more accurate playback position during autoplay";
 "推送地址" = "Push URL";
 "推送提醒" = "Push Alerts";
 "描边颜色" = "Stroke Color";
@@ -1494,6 +1497,8 @@
 "软件更新" = "Software Update";
 "较上周 %@" = "%@ vs last week";
 "较粗" = "Semibold";
+"辅助功能权限" = "Accessibility";
+"辅助功能让%@的播放进度更准，只读它界面上的播放时间" = "Accessibility keeps %@'s playback position accurate; it only reads the time shown in its window";
 "过去三年的今天和那几周都没有收听记录" = "No listening on this day, or the week around it, in the past three years";
 "过去三年的今天都没有收听记录" = "No listens on this day in the past three years";
 "运行中" = "Running";

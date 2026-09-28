@@ -100,6 +100,15 @@ public enum PlaybackPlayer: String, CaseIterable, Identifiable, Codable, Hashabl
         }
     }
 
+    /// Lyrimuse 要不要「辅助功能」权限来读这个播放器的界面(读的是 App,不是 collector)。
+    /// = 本仓真的在读它的辅助功能树。消费点见 `Set<PlaybackPlayer>.playersNeedingAccessibility`。
+    public var needsAccessibilityPermission: Bool {
+        switch self {
+        case .amazonMusic: return true
+        default: return false
+        }
+    }
+
     /// 开播那个 `elapsed == 0` 的锚点会不会被这个播放器原样重发一次。
     /// 只有**实测见过**的播放器为 true:真起播点是连发里的哪一个,各家相反
     /// (汽水音乐/网易云是第一个,Apple Music 是最后一个),判反 = 整首歌恒定偏移。

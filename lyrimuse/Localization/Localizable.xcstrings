@@ -37611,6 +37611,91 @@
           }
         }
       }
+    },
+    "辅助功能权限" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accessibility"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輔助使用權限"
+          }
+        }
+      }
+    },
+    "在系统设置的「辅助功能」里打开 Lyrimuse。之前授权过、这里仍显示没有授权的话，把 Lyrimuse 那一项取消再勾上。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn on Lyrimuse under Accessibility in System Settings. If you granted it before and it still shows as not granted, uncheck Lyrimuse there and check it again."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在系統設定的「輔助使用」裡開啟 Lyrimuse。之前授權過、這裡仍顯示沒有授權的話，把 Lyrimuse 那一項取消再勾選。"
+          }
+        }
+      }
+    },
+    "%@ 不向系统报告播放进度，Lyrimuse 读它界面上的播放时间来校准进度（只读，不点任何按钮）。不授权也能用，自动连播时进度可能差一两秒。" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ doesn't report its playback position to the system, so Lyrimuse reads the time shown in its window to keep lyrics in sync (read-only; it never clicks anything). It works without this too, but during autoplay the position can be off by a second or two."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不向系統回報播放進度，Lyrimuse 讀取它介面上的播放時間來校準進度（只讀取，不按任何按鈕）。不授權也能用，自動連播時進度可能差一兩秒。"
+          }
+        }
+      }
+    },
+    "辅助功能让%@的播放进度更准，只读它界面上的播放时间" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accessibility keeps %@'s playback position accurate; it only reads the time shown in its window"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輔助使用讓%@的播放進度更準，只讀取它介面上的播放時間"
+          }
+        }
+      }
+    },
+    "推荐开启，获取更多功能：自动连播时播放进度更准" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recommended for more features: more accurate playback position during autoplay"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推薦開啟，取得更多功能：自動連播時播放進度更準"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

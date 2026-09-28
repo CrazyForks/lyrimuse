@@ -471,6 +471,19 @@ func runPlayerIdentityTests() {
                     "完全磁盘访问判据: 要授权的每家都有 nativeLyricSource,且就是 collector 状态文件里的来源名")
     }
 
+    // `Set<PlaybackPlayer>.playersNeedingAccessibility` 决定设置页那张卡、引导页那一行、体检清单那一项
+    // 出不出现。每家要不要来自生成字段(shared/players.json),含 auto 时按超集算。
+    do {
+        typealias P = Set<PlaybackPlayer>
+        expectEqual(PlaybackPlayer.allCases.filter(\.needsAccessibilityPermission), [.amazonMusic],
+                    "辅助功能判据: 要读界面的就 Amazon Music 一家(改 shared/players.json 的 needsAccessibilityPermission)")
+        expectEqual(P([.auto]).playersNeedingAccessibility, [.amazonMusic], "辅助功能判据: 纯 auto 按超集算")
+        expectEqual(P([.amazonMusic, .spotify]).playersNeedingAccessibility, [.amazonMusic],
+                    "辅助功能判据: 多选里只挑出要授权的那一家")
+        expectEqual(P([.appleMusic, .spotify, .kkbox]).playersNeedingAccessibility, [],
+                    "辅助功能判据: 没勾 Amazon Music 时不出现")
+    }
+
     // ---- 播放器网格点一下(设置页与引导页共用 FeatureSettingsStore.togglePlayer)----
     do {
         print("\n== 播放器勾选切换 ==")

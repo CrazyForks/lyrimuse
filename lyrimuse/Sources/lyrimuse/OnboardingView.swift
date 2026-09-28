@@ -25,6 +25,8 @@ struct OnboardingView: View {
     @ObservedObject private var automation = PlayerAutomationPermissions.shared
     // 「完全磁盘访问」同理,跟设置页「播放器」那张卡共用一个模型。
     @ObservedObject private var fullDiskAccess = FullDiskAccessPermission.shared
+    // 「辅助功能」同理。
+    @ObservedObject private var accessibility = AccessibilityPermission.shared
     // collector 常驻服务是否真的在跑——这一步是"软强制"的必经步骤:锁住下一步按钮,
     // 但仍然可以直接关掉整个引导窗口跳过,不禁用/隐藏关闭按钮。
     @State private var collectorRunning = false
@@ -101,19 +103,21 @@ struct OnboardingView: View {
         automation.visiblePlayers(for: features.players)
     }
 
-    /// 「让它跑起来」那一页上已经授权了几项(自动化权限每家一项、完全磁盘访问一项)。
+    /// 「让它跑起来」那一页上已经授权了几项(自动化权限每家一项、完全磁盘访问一项、辅助功能一项)。
     /// 只在那一页计数,其余页恒 0 —— 供「授权完把窗口带回前台」用。
     private var grantedPermissionCount: Int {
         guard currentStep == .background else { return 0 }
         let automationGranted = automationTargets.filter { automation.status($0) == .authorized }.count
         let fdaTargets = fullDiskAccessTargets
         let fdaGranted = !fdaTargets.isEmpty && fullDiskAccess.grant(fdaTargets) == .granted
-        return automationGranted + (fdaGranted ? 1 : 0)
+        let axGranted = !accessibilityTargets.isEmpty && accessibility.trusted
+        return automationGranted + (fdaGranted ? 1 : 0) + (axGranted ? 1 : 0)
     }
 
     /// 那一页要的权限是不是都给了(不用再轮询)。
     private var allPermissionsGranted: Bool {
         grantedPermissionCount == automationTargets.count + (fullDiskAccessTargets.isEmpty ? 0 : 1)
+            + (accessibilityTargets.isEmpty ? 0 : 1)
     }
 
     /// 收尾页实时状态要的那几个属性,合成一个去重后的发布者。不整个订阅协调器(理由见 `isPlayingNow`)。
@@ -134,6 +138,11 @@ struct OnboardingView: View {
     /// 这一轮要替哪几家要「完全磁盘访问」—— 跟设置页那张卡同一份列表(选中 ∩ 需要 ∩ 装了)。
     private var fullDiskAccessTargets: [PlaybackPlayer] {
         fullDiskAccess.visiblePlayers(for: features.players)
+    }
+
+    /// 这一轮要替哪几家要「辅助功能」—— 跟设置页那张卡同一份列表(选中 ∩ 需要 ∩ 装了)。
+    private var accessibilityTargets: [PlaybackPlayer] {
+        accessibility.visiblePlayers(for: features.players)
     }
 
     // 这份列表本身不 @State,是纯粹从 features.players / wantsBrowserYouTubeMusic 派生出来
@@ -268,6 +277,7 @@ struct OnboardingView: View {
         .onChange(of: step) { _, _ in
             guard currentStep == .done || currentStep == .background else { return }
             automation.refresh(automationTargets)
+            accessibility.refresh()
             let arrivedAt = currentStep
             Task {
                 await refreshCollectorRunning()
@@ -298,10 +308,13 @@ struct OnboardingView: View {
                 Task { await refreshCollectorRunning() }
             }
             switch currentStep {
-            case .done: fullDiskAccess.refresh()
+            case .done:
+                fullDiskAccess.refresh()
+                accessibility.refresh()
             // 用户可能去系统设置里手动开,窗口不在前台时收不到「切回来」那次刷新。
             case .background where !allPermissionsGranted:
                 if !fullDiskAccessTargets.isEmpty { fullDiskAccess.refresh() }
+                if !accessibilityTargets.isEmpty { accessibility.refresh() }
                 if !automationTargets.isEmpty { automation.refresh(automationTargets) }
             default: break
             }
@@ -330,6 +343,7 @@ struct OnboardingView: View {
         // 留着转圈/超时提示,就是状态文字说已授权、下面却还在等,两处互相矛盾。
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             automation.refresh(automationTargets, clearRequestUI: true)
+            accessibility.refresh()
             Task { await refreshCollectorRunning() }
         }
         .onReceive(PlaybackCoordinator.shared.$isPlayingNow.removeDuplicates()) { playing in
@@ -602,7 +616,7 @@ struct OnboardingView: View {
     }
 
     /// 「让它跑起来」这一页:一张卡片里的一组状态行 —— 歌词引擎(必装,走到这一页自动开始装),
-    /// 以及按需出现的每家播放器自动化权限、完全磁盘访问。每行只写名称和状态,需要处理时才出现
+    /// 以及按需出现的每家播放器自动化权限、完全磁盘访问、辅助功能。每行只写名称和状态,需要处理时才出现
     /// 按钮;两项权限各有什么用收在卡片下面。开机启动是偏好不是要核对的状态,放在欢迎页。
     ///
     /// 歌词引擎和开机启动**不是同一件事**:collector 是独立的 launchd job(KeepAlive,装上
@@ -610,9 +624,10 @@ struct OnboardingView: View {
     /// 这条区别不写进界面文案。
     ///
     /// 自动化权限走到这一页时多半已经有结果了:选播放器那一下就请求过(`requestOnSelect`),
-    /// 这里是核对 + 补救。两项权限都是推荐项,不在 `nextIsLocked` 里。
+    /// 这里是核对 + 补救。几项权限都是推荐项,不在 `nextIsLocked` 里。
     private var backgroundStep: some View {
         let fdaTargets = fullDiskAccessTargets
+        let axTargets = accessibilityTargets
         return VStack(alignment: .leading, spacing: 14) {
             Text(L10n.t("让它跑起来"))
                 .font(.title2.bold())
@@ -653,9 +668,13 @@ struct OnboardingView: View {
                     setupDivider
                     fullDiskAccessRow(fdaTargets)
                 }
+                if !axTargets.isEmpty {
+                    setupDivider
+                    accessibilityRow
+                }
             }
             .onboardingCard()
-            if let note = permissionBenefitNote(fdaTargets) {
+            if let note = permissionBenefitNote(fdaTargets, axTargets) {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -734,10 +753,31 @@ struct OnboardingView: View {
         }
     }
 
+    /// 辅助功能那一行。没授权时行尾「请求权限」(弹过一次之后是「打开系统设置」),下面一句怎么补救;
+    /// 授权后只剩状态。动作本体在 `AccessibilityPermission`。
+    @ViewBuilder
+    private var accessibilityRow: some View {
+        setupRow(icon: accessibility.iconName, tint: accessibility.iconColor,
+                 title: L10n.t("辅助功能权限"), subtitle: accessibility.caption) {
+            if !accessibility.trusted {
+                Button(accessibility.actionTitle) { accessibility.handleAction() }
+                    .controlSize(.small)
+            }
+        }
+        if !accessibility.trusted, accessibility.prompted {
+            Text(L10n.t("在系统设置的「辅助功能」里打开 Lyrimuse。之前授权过、这里仍显示没有授权的话，把 Lyrimuse 那一项取消再勾上。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, Self.setupRowIndent)
+                .padding(.bottom, 10)
+        }
+    }
+
     /// 卡片下面那几句:只讲这一轮真的出现了的权限各有什么用。完全磁盘访问那句按 collector 实际读的
     /// 路径写(只读这几家在 ~/Library/Containers 下的歌词缓存与播放队列,localcachefs.go 头注);
     /// 别写「不上传」:开了网页中继时当前歌词会推到用户自己的服务器。
-    private func permissionBenefitNote(_ fdaTargets: [PlaybackPlayer]) -> String? {
+    private func permissionBenefitNote(_ fdaTargets: [PlaybackPlayer], _ axTargets: [PlaybackPlayer]) -> String? {
         var lines: [String] = []
         if !automationTargets.isEmpty {
             lines.append(L10n.t("自动化权限让播放进度更准，还能在歌词上直接控制播放"))
@@ -745,6 +785,10 @@ struct OnboardingView: View {
         if !fdaTargets.isEmpty {
             lines.append(String(format: L10n.t("完全磁盘访问让%@直接用本机已有的歌词，只读它们自己的歌词缓存和播放队列"),
                                 fullDiskAccess.playerNames(fdaTargets)))
+        }
+        if !axTargets.isEmpty {
+            lines.append(String(format: L10n.t("辅助功能让%@的播放进度更准，只读它界面上的播放时间"),
+                                accessibility.playerNames(axTargets)))
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
@@ -1031,6 +1075,7 @@ struct OnboardingView: View {
     private var readinessItems: [OnboardingFlow.ReadinessItem] {
         let targets = automationTargets
         let fdaTargets = fullDiskAccessTargets
+        let axTargets = accessibilityTargets
         return OnboardingFlow.readinessItems(.init(
             collectorRunning: collectorRunning,
             automationTargets: targets,
@@ -1038,7 +1083,8 @@ struct OnboardingView: View {
             fullDiskAccessGranted: fdaTargets.isEmpty ? nil : fullDiskAccess.grant(fdaTargets) == .granted,
             browserPaired: wantsBrowserYouTubeMusic
                 ? BrowserPairing.hasAnyPair(platformID: Self.youTubeMusicPlatformID) : nil,
-            displayModeEnabled: !noDisplayModeEnabled))
+            displayModeEnabled: !noDisplayModeEnabled,
+            accessibilityGranted: axTargets.isEmpty ? nil : accessibility.trusted))
     }
 
     private func readinessTitle(_ kind: OnboardingFlow.ReadinessKind) -> String {
@@ -1046,6 +1092,7 @@ struct OnboardingView: View {
         case .collector: return L10n.t("歌词引擎")
         case .automation(let player): return String(format: L10n.t("%@ 自动化权限"), player.displayName)
         case .fullDiskAccess: return L10n.t("完全磁盘访问权限")
+        case .accessibility: return L10n.t("辅助功能权限")
         case .browser: return L10n.t("YouTube Music 的浏览器")
         case .displayMode: return L10n.t("歌词显示方式")
         }
@@ -1370,6 +1417,8 @@ struct OnboardingView: View {
         switch kind {
         case .fullDiskAccess:
             return L10n.t("推荐开启，获取更多功能：直接用本机已有的歌词，还能提前准备下一首")
+        case .accessibility:
+            return L10n.t("推荐开启，获取更多功能：自动连播时播放进度更准")
         default:
             return L10n.t("推荐开启，获取更多功能：播放进度更准，还能在歌词上直接控制播放")
         }

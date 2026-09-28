@@ -57,6 +57,9 @@ CI 跑 `--check` 保证生成物没被手改、也没忘记重新生成。
 - needsFullDiskAccess  collector 读它的客户端文件要不要「完全磁盘访问」;auto 为 null
                 = 那些文件在 `~/Library/Containers/` 下(App 带沙盒)。collector 侧
                 TestPlayersNeedFullDiskAccessMatchesClientPaths 按真实路径对账,填错会红
+- needsAccessibilityPermission  Lyrimuse 要不要「辅助功能」权限来读它的界面;auto 为 null
+                = 本仓真的在读它的辅助功能树(Amazon Music:读界面上的播放时间校准进度)。只生成 Swift 侧:
+                读界面的是 App,collector 不碰
 - tint          {"rgb": [r,g,b]} / {"source": "…"}(复用歌词来源配色) / {"secondary": true}
 - fallbackSymbol      没装这个 App、也没有随包图标时的 SF Symbol
 - bundledIcon   随包打包的品牌图资源名;没有就 null
@@ -302,6 +305,14 @@ def render_core_swift(spec, players):
                "    public var needsFullDiskAccess: Bool {\n        switch self {\n")
     for p in concrete:
         if p.get("needsFullDiskAccess"):
+            out.append("        case .%s: return true\n" % p["swiftCase"])
+    out.append("        default: return false\n        }\n    }\n")
+
+    out.append("\n    /// Lyrimuse 要不要「辅助功能」权限来读这个播放器的界面(读的是 App,不是 collector)。\n"
+               "    /// = 本仓真的在读它的辅助功能树。消费点见 `Set<PlaybackPlayer>.playersNeedingAccessibility`。\n"
+               "    public var needsAccessibilityPermission: Bool {\n        switch self {\n")
+    for p in concrete:
+        if p.get("needsAccessibilityPermission"):
             out.append("        case .%s: return true\n" % p["swiftCase"])
     out.append("        default: return false\n        }\n    }\n")
 

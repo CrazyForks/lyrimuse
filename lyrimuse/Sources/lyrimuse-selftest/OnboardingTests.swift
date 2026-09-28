@@ -213,6 +213,15 @@ private func checkOnboardingFlow() {
         expectEqual(granted.map(\.kind), [.collector, .fullDiskAccess, .browser, .displayMode],
                     "体检清单: 走过且已就绪的照样列出(全绿时页面不显示清单,但判定要算进去)")
         expectEqual(granted.allSatisfy(\.ok), true, "体检清单: 都就绪时全绿")
+        let withAX = F.readinessItems(.init(collectorRunning: true, automationTargets: [], authorized: [],
+                                            fullDiskAccessGranted: false, browserPaired: nil, displayModeEnabled: true,
+                                            accessibilityGranted: false))
+        expectEqual(withAX.map(\.kind), [.collector, .fullDiskAccess, .accessibility, .displayMode],
+                    "体检清单: 勾了 Amazon Music 时多一行辅助功能,排在完全磁盘访问后面(跟那一页同序)")
+        expectEqual(withAX.first { $0.kind == .accessibility }.map { [$0.target == .background, $0.isOptional] }, [true, true],
+                    "体检清单: 辅助功能跳回「让它跑起来」,是推荐项")
+        expectEqual(F.requiredReady(withAX), true, "体检清单: 只有辅助功能没开时仍是「一切就绪」")
+        expectEqual(Set(withAX.map(\.id)).count, withAX.count, "体检清单: 加上辅助功能后 id 仍不重复")
 
         // 清单里每一条「去处理」都必须能跳到本轮真的存在的那一页,否则按钮点了没反应。
         var unreachable: [String] = []

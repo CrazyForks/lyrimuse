@@ -3913,6 +3913,8 @@ private struct PlayerSettingsTab: View {
     @ObservedObject private var automation = PlayerAutomationPermissions.shared
     // 「完全磁盘访问」同理,引导页那一步用的是同一个实例。
     @ObservedObject private var fullDiskAccess = FullDiskAccessPermission.shared
+    // 「辅助功能」同理(替要读界面的播放器要,目前是 Amazon Music)。
+    @ObservedObject private var accessibility = AccessibilityPermission.shared
     // collector 常驻服务是否真的在跑——跟自动化权限同样的道理,只在 .onAppear
     // 和每次操作后重新查一次,不是 @Published:这个状态由 launchd 管,App 自己不会主动
     // 收到"进程挂了"这类通知,只能被动查。
@@ -3952,6 +3954,7 @@ private struct PlayerSettingsTab: View {
             companionCard
             permissionCard
             fullDiskAccessCard
+            accessibilityCard
             collectorCard
         }
         .id(L10n.current)
@@ -5203,6 +5206,39 @@ private struct PlayerSettingsTab: View {
             // 状态文件由 collector 写,不会推通知过来;按 mtime 读很便宜,跟这一页的主轮询同频。
             .settingsPolling(every: 2) {
                 fullDiskAccess.refresh()
+            }
+        }
+    }
+
+    /// 「辅助功能」—— 勾了要读界面的播放器(Amazon Music)且装了才出现。列表来自
+    /// `Set<PlaybackPlayer>.playersNeedingAccessibility`(含 auto 时按超集算)再按装没装过滤,见 `AccessibilityPermission`。
+    /// 一行,行标题是这项权限本身;替哪几家要写在「?」里。
+    @ViewBuilder
+    private var accessibilityCard: some View {
+        let targets = accessibility.visiblePlayers(for: stores.players)
+        if !targets.isEmpty {
+            SettingsCard {
+                // 行标题是这张卡在设置搜索里的唯一锚点,改它要同步改 `SettingsSearchCatalog`。
+                SettingsRow(
+                    icon: accessibility.iconName,
+                    iconTint: accessibility.iconColor,
+                    title: L10n.t("辅助功能权限"),
+                    subtitle: accessibility.caption,
+                    help: AccessibilityPermissionGuide.reason(targets)
+                ) {
+                    EmptyView()
+                }
+                if !accessibility.trusted {
+                    CardDivider()
+                    SettingsNote {
+                        AccessibilityPermissionGuide(players: targets)
+                    }
+                }
+            }
+            .onAppear { accessibility.refresh() }
+            // 系统不推送授权变化,用户去系统设置勾完回来这里要跟着变。
+            .settingsPolling(every: 2) {
+                accessibility.refresh()
             }
         }
     }

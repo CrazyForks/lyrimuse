@@ -124,6 +124,7 @@ public enum OnboardingFlow {
         case collector
         case automation(PlaybackPlayer)
         case fullDiskAccess
+        case accessibility
         case browser
         case displayMode
     }
@@ -139,6 +140,7 @@ public enum OnboardingFlow {
             case .collector: return "collector"
             case .automation(let player): return "automation-\(player.rawValue)"
             case .fullDiskAccess: return "full-disk-access"
+            case .accessibility: return "accessibility"
             case .browser: return "browser"
             case .displayMode: return "display"
             }
@@ -150,11 +152,11 @@ public enum OnboardingFlow {
             self.target = target
         }
 
-        /// 推荐项(自动化权限、完全磁盘访问):没开也不算没做完 —— 收尾页标题照样是「一切就绪」,
+        /// 推荐项(自动化权限、完全磁盘访问、辅助功能):没开也不算没做完 —— 收尾页标题照样是「一切就绪」,
         /// 这一行改成「推荐开启」的提示。其余几项没好就是真没做完(没有它们屏幕上就没有歌词)。
         public var isOptional: Bool {
             switch kind {
-            case .automation, .fullDiskAccess: return true
+            case .automation, .fullDiskAccess, .accessibility: return true
             case .collector, .browser, .displayMode: return false
             }
         }
@@ -173,17 +175,20 @@ public enum OnboardingFlow {
         /// 其中已授权的。
         public var authorized: Set<PlaybackPlayer>
         public var fullDiskAccessGranted: Bool?
+        /// 辅助功能授权了没有;本轮没有要读界面的播放器为 nil。
+        public var accessibilityGranted: Bool?
         public var browserPaired: Bool?
         /// 至少开着一种歌词显示方式。
         public var displayModeEnabled: Bool
 
         public init(collectorRunning: Bool, automationTargets: [PlaybackPlayer],
                     authorized: Set<PlaybackPlayer>, fullDiskAccessGranted: Bool?,
-                    browserPaired: Bool?, displayModeEnabled: Bool) {
+                    browserPaired: Bool?, displayModeEnabled: Bool, accessibilityGranted: Bool? = nil) {
             self.collectorRunning = collectorRunning
             self.automationTargets = automationTargets
             self.authorized = authorized
             self.fullDiskAccessGranted = fullDiskAccessGranted
+            self.accessibilityGranted = accessibilityGranted
             self.browserPaired = browserPaired
             self.displayModeEnabled = displayModeEnabled
         }
@@ -199,6 +204,9 @@ public enum OnboardingFlow {
         }
         if let granted = input.fullDiskAccessGranted {
             items.append(ReadinessItem(kind: .fullDiskAccess, ok: granted, target: .background))
+        }
+        if let granted = input.accessibilityGranted {
+            items.append(ReadinessItem(kind: .accessibility, ok: granted, target: .background))
         }
         if let paired = input.browserPaired {
             items.append(ReadinessItem(kind: .browser, ok: paired, target: .browserPairing))
