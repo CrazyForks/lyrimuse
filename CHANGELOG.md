@@ -143,7 +143,7 @@ Fixed / 修复
 Not sure which one? Check your chip under **About This Mac**.
 不确定该下哪个？打开「关于本机」看芯片是 Apple M… 还是 Intel Core…
 
-241 commits since v1.8.0.
+243 commits since v1.8.0.
 
 **Full Changelog**: https://github.com/Yudaotor/lyrimuse/compare/v1.8.0...v1.9.0
 
