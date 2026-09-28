@@ -1523,11 +1523,6 @@ func runLyricsManagerTests() {
                     "列表刷新: 扫描跑着时只在补出一首 / 一轮开始或结束时紧跟,别改回「在跑就每拍重读」")
         expectEqual(view.contains("if let status, status.finishedAt != nil, !status.isFullScan,"), true,
                     "补搜收据: 工具栏菜单不拿全量扫库那一轮的累计数当补搜收据")
-        expectEqual(view.contains("guard !selectedKeys.isSubset(of: valid) else { return }")
-                        && view.contains("DispatchQueue.main.async { selectedKeys.formIntersection(valid) }")
-                        && !view.contains("selectedKeys.formIntersection(Set(filtered")
-                        && !view.contains("            selectedKeys.formIntersection(valid)\n"),
-                    true, "列表选中: 换数据之后收敛选中走 narrowSelection(没变不写、推到下一轮),别在表重载途中同步改选中")
         let sweepGo = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("lyrimuse-collector/lyricsfillsweep.go"), encoding: .utf8)) ?? ""

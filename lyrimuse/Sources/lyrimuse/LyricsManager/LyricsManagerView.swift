@@ -1451,7 +1451,7 @@ struct LyricsManagerView: View {
                     // 筛选条件一变就把选中项收敛到当前可见集合。用 formIntersection 而不是
                     // 无条件清空:用户只是微调搜索词时保住已有选择更符合预期。
                     .onChange(of: filterToken) { _, _ in
-                        narrowSelection(to: Set(filtered.map(\.key)))
+                        selectedKeys.formIntersection(Set(filtered.map(\.key)))
                     }
                     // 删除确认弹窗挂在 List 上——不能挂在 detailView 里(多选时右侧渲染的是批量
                     // 面板、detailView 根本不在视图树里,置 isPresented 会静默无效),也故意不跟
@@ -1900,15 +1900,6 @@ struct LyricsManagerView: View {
         }
     }
 
-    /// 把选中收敛到 valid 里。只在真有选中项被收掉时才写,而且推到下一轮主循环:这两个调用点都紧跟着
-    /// 列表数据换了一批,List 背后的 NSTableView 此刻正按新数据重载行,在它重载途中改选中,AppKit 报
-    /// "reentrant operation in its NSTableView delegate"(系统注明以后会变成断言)。集合没变也照写一次
-    /// @State 的话,同样会把选中推给正在重载的表。
-    private func narrowSelection(to valid: Set<String>) {
-        guard !selectedKeys.isSubset(of: valid) else { return }
-        DispatchQueue.main.async { selectedKeys.formIntersection(valid) }
-    }
-
     private func refreshWithFeedback() {
         Task {
             await store.reload()
@@ -1919,7 +1910,7 @@ struct LyricsManagerView: View {
             // 还在的话别把它的选中收掉。
             var valid = Set(store.summaries.map(\.key))
             if let placeholder = placeholderSummary { valid.insert(placeholder.key) }
-            narrowSelection(to: valid)
+            selectedKeys.formIntersection(valid)
             withAnimation { showRefreshedFeedback = true }
             try? await Task.sleep(for: .seconds(1))
             withAnimation { showRefreshedFeedback = false }
