@@ -26,9 +26,11 @@ import (
 //
 // 三条约束跟 recheck-cover/recheck-instrumental 完全一致:dry-run 默认、-apply 才真写且
 // 要求常驻实例已停;只处理指定的 key,不做启动时全量扫;人工修正过的(ManualLyrics)一律
-// 跳过。字段写法直接照抄 rescoreLyrics 的那一套(decision/rescore 计数/来源名单都一起补),
-// 只是把"要不要更新歌词族字段"这道闸从"正文变了"放宽成"正文/译文/罗马音有任意一个变了,
-// 或者多出了缓存里原本没有的逐字"(gainsWordTiming)。
+// 跳过。字段写法跟 rescoreLyrics 同一套(decision/rescore 计数/来源名单都一起补,语种、台语 / 粤语的
+// 罗马音规则、锁外先算好的罗马音兜底也照做),只是把"要不要更新歌词族字段"这道闸从"正文变了"放宽成
+// "正文/译文/罗马音有任意一个变了,或者多出了缓存里原本没有的逐字"(gainsWordTiming),见 planResync。
+// 刻意**不**做跨专辑对齐(adoptCrossAlbumSiblingLyrics):这条命令就是要把指定的这条按这一轮重新解析,
+// 对齐回兄弟那份等于白跑。
 func runResyncLyricsCLI(args []string) {
 	fs := flag.NewFlagSet("resync-lyrics", flag.ExitOnError)
 	apply := fs.Bool("apply", false, "真正写回缓存;不加就是预演,只打印计划")
@@ -125,23 +127,24 @@ func runResyncLyrics(keys []string, apply bool) int {
 			failed++
 			continue
 		}
-		// 跟 rescoreLyrics 的差别就在这一行:那边只看 Lyrics 变没变,这里三项任意一项
-		// 变了都算数——修的正是"正文没变、译文/罗马音其实有新内容"这类自动路径漏掉的情况。
-		lyricsSame := picked.Lyrics == e.Lyrics
-		trSame := picked.LyricsTr == e.LyricsTr
-		romaSame := picked.LyricsRoma == e.LyricsRoma
-		yrcGained := gainsWordTiming(e, picked)
-		if lyricsSame && trSame && romaSame && !yrcGained {
+		plan := planResync(e, picked)
+		if !plan.changed() {
 			fmt.Println("   没变化:重新解析结果跟缓存里一样")
 			unchanged++
 			continue
 		}
 		fmt.Printf("   %s(%d) -> %s(%d)  歌词%s 译文%s 罗马音%s 逐字%s\n",
 			e.LyricsSource, e.LyricsScore, picked.Source, picked.Score,
-			changedMark(!lyricsSame), changedMark(!trSame), changedMark(!romaSame), changedMark(yrcGained))
+			changedMark(!plan.lyricsSame), changedMark(!plan.trSame), changedMark(!plan.romaSame), changedMark(plan.yrcGained))
 		changed++
 		if !apply {
 			continue
+		}
+		// 罗马音兜底在上锁之前算好(可能起 lyrics-romanize 子进程),同 rescoreLyrics。
+		songLanguage := entrySongLanguage(picked.Lyrics, scored)
+		var preparedRoma string
+		if !plan.lyricsSame && picked.LyricsRoma == "" {
+			preparedRoma = generatedRomaFor(picked.Lyrics, "", songLanguage)
 		}
 		enrichMu.Lock()
 		cur, still := enrichCache[key]
@@ -166,21 +169,10 @@ func runResyncLyrics(keys []string, apply bool) int {
 			cur.LyricsSourcesResponded = responded
 		}
 		cur.LyricsDecision = buildLyricsDecision(
-			lyricsDecisionPathRescore, artist, title, album, duration, scored, picked,
-			!lyricsSame || !trSame || !romaSame || yrcGained)
+			lyricsDecisionPathRescore, artist, title, album, duration, scored, picked, plan.changed())
 		traceLyricsDecision(key, cur.LyricsDecision)
 		cur.LyricsDecisionApplied = cur.LyricsDecision
-		cur.Lyrics = picked.Lyrics
-		cur.LyricsTr, cur.LyricsRoma, cur.LyricsYRC = picked.LyricsTr, picked.LyricsRoma, picked.LyricsYRC
-		cur.LyricsBG, cur.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
-		if !trSame {
-			// 译文换人了(哪怕正文没变),描述译文的两个字段必须跟着换——不然旧的
-			// "machine" 标记会让新换上来的源自带译文被误标成机翻,见 rescoreLyrics 同款注释。
-			cur.LyricsTrLang, cur.LyricsTrSource = picked.LyricsTrLang, ""
-		}
-		cur.LyricsSource = picked.Source
-		cur.LyricsScore = picked.Score
-		cur.LyricsScoringVersion = lyricsScoringVersion
+		cur = applyResync(cur, picked, plan, songLanguage, preparedRoma)
 		cur.ResolvedDurationSecs = duration
 		enrichCache[key] = cur
 		enrichDirty = true
@@ -200,6 +192,60 @@ func runResyncLyrics(keys []string, apply bool) int {
 		return 1
 	}
 	return 0
+}
+
+// resyncPlan 是 resync-lyrics 对一条的比较结论。
+//
+// 候选里的罗马音、译文只来自歌词源,缓存里却可能是本地生成的(helper / 粤拼 / backfill-roma 的罗马音,机翻的
+// 译文)。正文没变、源没给这两样时,本地那份仍然对得上:不算「变了」,也不清掉(keepLocalRoma / keepMachineTr)。
+// 原来逐字比,这类条目每次都被报成改动,-apply 之后罗马音和机翻就没了。逐字同理:正文没变、这一轮的冠军没带
+// 逐字时留着缓存里那份(keepYRC)。
+type resyncPlan struct {
+	lyricsSame, trSame, romaSame, yrcGained bool
+	keepMachineTr, keepLocalRoma, keepYRC   bool
+}
+
+func (p resyncPlan) changed() bool {
+	return !p.lyricsSame || !p.trSame || !p.romaSame || p.yrcGained
+}
+
+func planResync(e enrichEntry, picked *scoredLyricCandidateResult) resyncPlan {
+	p := resyncPlan{lyricsSame: picked.Lyrics == e.Lyrics, yrcGained: gainsWordTiming(e, picked)}
+	p.keepLocalRoma = p.lyricsSame && picked.LyricsRoma == "" && e.LyricsRoma != ""
+	p.keepMachineTr = p.lyricsSame && picked.LyricsTr == "" && e.LyricsTr != "" && e.LyricsTrSource == lyricsTrSourceMachine
+	p.keepYRC = p.lyricsSame && picked.LyricsYRC == "" && e.LyricsYRC != ""
+	p.trSame = picked.LyricsTr == e.LyricsTr || p.keepMachineTr
+	p.romaSame = picked.LyricsRoma == e.LyricsRoma || p.keepLocalRoma
+	return p
+}
+
+// applyResync 把冠军写进这一条,口径同 rescoreLyrics 换词那一支。preparedRoma 是锁外按 generatedRomaFor 算好的
+// 罗马音兜底(正文没换时为空,只补粤拼)。
+func applyResync(cur enrichEntry, picked *scoredLyricCandidateResult, p resyncPlan, songLanguage, preparedRoma string) enrichEntry {
+	cur.Lyrics = picked.Lyrics
+	if !p.keepMachineTr {
+		cur.LyricsTr = picked.LyricsTr
+	}
+	if !p.keepLocalRoma {
+		cur.LyricsRoma = picked.LyricsRoma
+	}
+	if !p.keepYRC {
+		cur.LyricsYRC = picked.LyricsYRC
+		cur.LyricsBG, cur.LyricsBGChecked = picked.LyricsBG, lyricsBGParserVersion
+	}
+	if !p.trSame {
+		// 译文换人了(哪怕正文没变),描述译文的两个字段必须跟着换——不然旧的
+		// "machine" 标记会让新换上来的源自带译文被误标成机翻,见 rescoreLyrics 同款注释。
+		cur.LyricsTrLang, cur.LyricsTrSource = picked.LyricsTrLang, ""
+	}
+	cur.SongLanguage = songLanguage
+	cur.dropHokkienRoma()
+	cur.dropMandarinRomaForCantonese()
+	cur.applyPregeneratedRoma(preparedRoma)
+	cur.LyricsSource = picked.Source
+	cur.LyricsScore = picked.Score
+	cur.LyricsScoringVersion = lyricsScoringVersion
+	return cur
 }
 
 func changedMark(v bool) string {

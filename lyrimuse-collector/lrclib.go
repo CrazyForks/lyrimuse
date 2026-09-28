@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	_ "image/jpeg" // 注册 JPEG 解码器
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
+	"io"
 	"math"
 	"net/http"
 	neturl "net/url"
@@ -97,16 +98,35 @@ func lrclibLyric(ctx context.Context, artist, title, album string, durationSecs 
 // 之后就不再读 resultsCh、也不再调 onUpdate,晚到的结果整轮丢弃。所以三级串行的总预算必须
 // 塞进 20s 里——超出去等于这一源白跑,前两级的收益也一起没了。(第一级从 10s 收到 8s 是为了
 // 给后两级腾时间;lrclib.net 慢,但 8s 仍然远超它的正常响应。)
+//
+// get 层只在拿到**带时间轴、时长也对得上**(sourceDurationFits;本地或它自报的时长未知时不看)的版本时提前收工,
+// 或者它明说这首是纯音乐。只有纯文本、或者时长明显不对的,先记下来当兜底、照常往下走:search 层可能有同名的
+// 带时间轴版本,「带时间戳的一条都挑不出来,才轮到纯文本」(见 lrclibSearch)。search 层也没挑出带时间轴的,
+// 再用这份兜底。
 func resolveLRCLIBLyric(ctx context.Context, artist, title, album string, durationSecs float64) lrclibResult {
-	if r := lrclibGet(ctx, artist, title, album, 8*time.Second); r.lyrics != "" || r.instrumental {
+	var fallback lrclibResult
+	settled := func(r lrclibResult) bool {
+		if r.instrumental || (r.lyrics != "" && !r.plainOnly && sourceDurationFits(durationSecs, r.durationSecs)) {
+			return true
+		}
+		if fallback.lyrics == "" && r.lyrics != "" {
+			fallback = r
+		}
+		return false
+	}
+	if r := lrclibGet(ctx, artist, title, album, 8*time.Second); settled(r) {
 		return r
 	}
 	if album != "" {
-		if r := lrclibGet(ctx, artist, title, "", 5*time.Second); r.lyrics != "" || r.instrumental {
+		if r := lrclibGet(ctx, artist, title, "", 5*time.Second); settled(r) {
 			return r
 		}
 	}
-	return lrclibSearch(ctx, artist, title, album, durationSecs, 5*time.Second)
+	s := lrclibSearch(ctx, artist, title, album, durationSecs, 5*time.Second)
+	if s.instrumental || (s.lyrics != "" && !s.plainOnly) || fallback.lyrics == "" {
+		return s
+	}
+	return fallback
 }
 
 // lrclibRequest 是三级共用的请求执行 + JSON 解码,out 传指针。
@@ -125,7 +145,7 @@ func lrclibRequest(ctx context.Context, url string, timeout time.Duration, out a
 	if resp.StatusCode != http.StatusOK {
 		return false // 404(未收录)或其它错误一律放弃,不重试;下次 enrich 短 TTL 到期自然再试
 	}
-	return json.NewDecoder(resp.Body).Decode(out) == nil
+	return json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(out) == nil
 }
 
 func lrclibGet(ctx context.Context, artist, title, album string, timeout time.Duration) lrclibResult {

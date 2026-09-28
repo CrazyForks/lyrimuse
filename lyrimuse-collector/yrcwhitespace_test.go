@@ -58,3 +58,15 @@ func TestRichsyncToYRCMergesWhitespaceEntries(t *testing.T) {
 		t.Fatalf("richsyncToYRC 归并不对:\n got %q\nwant %q", got, want)
 	}
 }
+
+// 整行都是空白词条时原样保留。
+func TestYRCMergeWhitespaceTokensKeepsAllBlankLine(t *testing.T) {
+	in := "[1000,500](1000,100,0) (1100,100,0) "
+	if got, changed := yrcMergeWhitespaceTokens(in); changed || got != in {
+		t.Fatalf("got %q changed=%v", got, changed)
+	}
+	mixed := "[1000,500](1000,100,0) (1100,100,0)词"
+	if got, changed := yrcMergeWhitespaceTokens(mixed); !changed || got != "[1000,500](1100,100,0) 词" {
+		t.Fatalf("行首空白并给下一个词: %q changed=%v", got, changed)
+	}
+}

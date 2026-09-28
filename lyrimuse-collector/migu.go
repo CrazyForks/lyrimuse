@@ -71,8 +71,10 @@ func miguLyric(ctx context.Context, artist, title, album string, durationSecs fl
 	}
 	miguMu.Unlock()
 
+	ctx, sub := withLyricSubFetch(ctx)
 	r := resolveMiguLyric(ctx, artist, title, album, durationSecs)
-	if r.lyrics != "" {
+	// 译文、逐字哪一趟没问成的不缓存,见 lyricsubfetch.go。
+	if r.lyrics != "" && sub.complete(ctx) {
 		miguMu.Lock()
 		miguCache[key] = r
 		miguMu.Unlock()
@@ -328,7 +330,10 @@ func resolveMiguLyric(ctx context.Context, artist, title, album string, _ float6
 			cover: cover,
 		}
 		if u := strings.TrimSpace(it.TrcURL); u != "" {
-			if tr, err := miguFetchLRC(ctx, u); err == nil && isTimedLRC(tr) {
+			tr, err := miguFetchLRC(ctx, u)
+			if err != nil {
+				noteLyricSubFetchFailure(ctx)
+			} else if isTimedLRC(tr) {
 				r.tr = tr
 			}
 		}

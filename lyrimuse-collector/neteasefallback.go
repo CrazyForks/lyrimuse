@@ -85,7 +85,7 @@ func neteaseFetchBodyAt(ctx context.Context, cli *http.Client, u, cookie string)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes))
 }
 
 // neteaseCloudSearchEndpoint 是搜歌的第三条路径。结果里的字段名跟 search/get 不同

@@ -43,6 +43,9 @@ type kkboxLyricResult struct {
 	durationSecs                 float64
 	// coarse:每一句的时间都是整秒。
 	coarse bool
+	// weakIdentity:歌手不是逐字对上的,是靠「去掉括号别名后沾边 + 时长对得上」认的(见 kkboxLyricMatchLevel)。
+	// 这种不当成播放器本地给的身份,不吃同源加权。
+	weakIdentity bool
 }
 
 type kkboxLyricsBody struct {
@@ -86,17 +89,46 @@ func kkboxLyricsLRC(body []byte) (lrc string, coarse, ok bool) {
 	return b.String(), coarse, true
 }
 
-// kkboxLyricMatch:缓存里的这首是不是播放器报的这首。歌名要对上;歌手对上,或者歌手写法不同(别的播放器报
-// 「五月天」、KKBOX 是「五月天 (Mayday)」)但时长对得上。
+// kkboxLyricMatch:缓存里的这首是不是播放器报的这首,见 kkboxLyricMatchLevel。
 func kkboxLyricMatch(t kkboxTrack, artist, title string, durationSecs float64) bool {
+	return kkboxLyricMatchLevel(t, artist, title, durationSecs) > kkboxMatchNone
+}
+
+const (
+	kkboxMatchNone = iota
+	// kkboxMatchByAlias:歌手写法不同(别的播放器报「五月天」、KKBOX 是「五月天 (Mayday)」),去掉括号别名后
+	// 互相沾边,而且时长对得上。
+	kkboxMatchByAlias
+	// kkboxMatchExact:歌名、歌手都对上。
+	kkboxMatchExact
+)
+
+// kkboxLyricMatchLevel:歌名要对上;歌手逐字对上是 exact。对不上时只认去掉括号别名后互相包含、且时长差在
+// kkboxLyricsDurationTolerance 以内的 —— 原来只看时长,换一首时长差不到两秒的翻唱,原唱那份词就被当成这首的。
+func kkboxLyricMatchLevel(t kkboxTrack, artist, title string, durationSecs float64) int {
 	if loosenEnrichKey(t.Name) != loosenEnrichKey(title) {
+		return kkboxMatchNone
+	}
+	name := kkboxArtistName(t, "")
+	if loosenEnrichKey(name) == loosenEnrichKey(artist) {
+		return kkboxMatchExact
+	}
+	if !kkboxArtistAliasCompatible(name, artist) {
+		return kkboxMatchNone
+	}
+	if durationSecs > 0 && t.DurationMs > 0 && math.Abs(t.DurationMs/1000-durationSecs) <= kkboxLyricsDurationTolerance {
+		return kkboxMatchByAlias
+	}
+	return kkboxMatchNone
+}
+
+// kkboxArtistAliasCompatible:两个歌手名去掉括号别名(半角、全角都算)之后,一个包含另一个。
+func kkboxArtistAliasCompatible(a, b string) bool {
+	na, nb := loosenEnrichKey(stripParens(a)), loosenEnrichKey(stripParens(b))
+	if na == "" || nb == "" {
 		return false
 	}
-	if loosenEnrichKey(kkboxArtistName(t, "")) == loosenEnrichKey(artist) {
-		return true
-	}
-	return durationSecs > 0 && t.DurationMs > 0 &&
-		math.Abs(t.DurationMs/1000-durationSecs) <= kkboxLyricsDurationTolerance
+	return strings.Contains(na, nb) || strings.Contains(nb, na)
 }
 
 // lyricsByTrack:缓存里有歌词的曲目 id → 最新那份歌词。
@@ -120,7 +152,10 @@ func (c kkboxCache) lyricFor(artist, title string, durationSecs float64) (kkboxL
 	if len(lyrics) == 0 {
 		return kkboxLyricResult{}, false
 	}
+	// 先找歌手逐字对上的那条;只有别名 + 时长认出来的,等整份扫完都没有逐字对上的才用(缓存按新到旧排,
+	// 原来第一个命中就返回,不会优先选歌手对上的那条)。
 	tried := map[string]bool{}
+	var weak *kkboxLyricResult
 	for _, e := range c {
 		id, ok := strings.CutPrefix(e.url.Path, "/v2/tracks/")
 		if !ok || id == "" || tried[id] {
@@ -138,27 +173,47 @@ func (c kkboxCache) lyricFor(artist, title string, durationSecs float64) (kkboxL
 		var d struct {
 			Data kkboxTrack `json:"data"`
 		}
-		if json.Unmarshal(body, &d) != nil || !kkboxLyricMatch(d.Data, artist, title, durationSecs) {
+		if json.Unmarshal(body, &d) != nil {
 			continue
 		}
-		lbody, ok := lyr.body()
+		level := kkboxLyricMatchLevel(d.Data, artist, title, durationSecs)
+		if level == kkboxMatchNone || (level == kkboxMatchByAlias && weak != nil) {
+			continue
+		}
+		r, ok := kkboxLyricResultFrom(d.Data, lyr)
 		if !ok {
-			return kkboxLyricResult{}, false
+			continue
 		}
-		lrc, coarse, ok := kkboxLyricsLRC(lbody)
-		if !ok {
-			return kkboxLyricResult{}, false
+		if level == kkboxMatchExact {
+			return r, true
 		}
-		album := ""
-		if d.Data.Album != nil {
-			album = d.Data.Album.Name
-		}
-		return kkboxLyricResult{
-			lyrics: lrc, title: d.Data.Name, artist: kkboxArtistName(d.Data, ""), album: album, cover: d.Data.albumCover(),
-			durationSecs: d.Data.DurationMs / 1000, coarse: coarse,
-		}, true
+		r.weakIdentity = true
+		weak = &r
+	}
+	if weak != nil {
+		return *weak, true
 	}
 	return kkboxLyricResult{}, false
+}
+
+// kkboxLyricResultFrom 把一条单曲详情 + 它的歌词条目装成结果;歌词条目读不出、不是能用的歌词时 ok=false。
+func kkboxLyricResultFrom(t kkboxTrack, lyr kkboxCacheEntry) (kkboxLyricResult, bool) {
+	lbody, ok := lyr.body()
+	if !ok {
+		return kkboxLyricResult{}, false
+	}
+	lrc, coarse, ok := kkboxLyricsLRC(lbody)
+	if !ok {
+		return kkboxLyricResult{}, false
+	}
+	album := ""
+	if t.Album != nil {
+		album = t.Album.Name
+	}
+	return kkboxLyricResult{
+		lyrics: lrc, title: t.Name, artist: kkboxArtistName(t, ""), album: album, cover: t.albumCover(),
+		durationSecs: t.DurationMs / 1000, coarse: coarse,
+	}, true
 }
 
 // kkboxLyric 在 KKBOX 的缓存里找这首的歌词。
@@ -178,7 +233,7 @@ func kkboxLocalLyricsFor(artist, title string, durationSecs float64) (lyricSourc
 	}
 	return lyricSourceResult{
 		source: kkboxLocalLyricsSource, lyr: r.lyrics, matchTitle: r.title, matchArtist: r.artist, matchAlbum: r.album,
-		matchCover: r.cover, srcDur: r.durationSecs, identityFromLocalClient: !r.coarse,
+		matchCover: r.cover, srcDur: r.durationSecs, identityFromLocalClient: !r.coarse && !r.weakIdentity,
 	}, true
 }
 

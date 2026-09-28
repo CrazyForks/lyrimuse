@@ -118,6 +118,11 @@ func lyricSourceDialContext(ctx context.Context, network, addr string) (net.Conn
 			// Eyeballs)—— 这就是改动之前的路径,一个字节都不多。
 			return lyricSourceDial(ctx, network, addr)
 		}
+		// 调用方取消了(这一轮截止到了、用户停了、切歌了):解析没问完,不是系统 DNS 坏了。别记负缓存 ——
+		// 记上的话接下来 60 秒这台主机的请求全都绕去 DoH,而 DoH 端点在国内常常不通。
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if lerr == nil {
 			lerr = &net.DNSError{Err: "no addresses", Name: host, IsNotFound: true}
 		}

@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // 演唱者标签的识别 —— 跟 Swift 侧 LyricDuet.speakers(in:) **同一套口径**,改一边必须改
@@ -120,6 +122,122 @@ var lyricExactCreditLabels = func() map[string]bool {
 	return m
 }()
 
+// lyricKeywordCreditRe 跟 Swift 侧 LyricsSyncEngine.creditLinePattern 逐字同一条:可选的语种前缀 + 角色词
+// (可以用和/与/及/、/&连起来好几个)+ 可选 by + 冒号。改一边必须改另一边。
+var lyricKeywordCreditRe = regexp.MustCompile(`(?i)^(所有|全部|中文|英文|韩文|日文|粤语|中|英|韩|日)?\s*` +
+	`(唱片公司|发行公司|出品公司|专辑|翻译|作词|作曲|编曲|制作人|制作|监制|混音|录音|和声|吉他|贝斯|鼓|键盘|弦乐|乐器|编程|词|曲|编|唱|录|混|监|OP|SP|P\s*-\s*Line|C\s*-\s*Line|℗|©|lyrics|music|composed|produced|arranged|mixed|mastered|written)` +
+	`(\s*(和|与|及|、|/|&|＆)?\s*(唱片公司|发行公司|出品公司|专辑|翻译|作词|作曲|编曲|制作人|制作|监制|混音|录音|和声|吉他|贝斯|鼓|键盘|弦乐|乐器|编程|词|曲|编|唱|录|混|监|OP|SP|lyrics|music|composed|produced|arranged|mixed|mastered|written))*` +
+	`\s*(by\s*)?[:：]`)
+
+// lyricCreditRoleWords 跟 Swift 侧 LyricsSyncEngine.creditRoleWords 同一张表(双字角色词),改一边必须改另一边。
+// 标签**含**其中一个词就是职员表的角色名:「版权方」「总策划」「人声编辑」「封面设计」这种「角色词 + 一两个
+// 尾字」够不着上面那条精确正则。
+var lyricCreditRoleWords = []string{
+	"作词", "作曲", "编曲", "编辑", "编程", "制作", "监制", "混音", "母带", "处理",
+	"录音", "录制", "和声", "吉他", "贝斯", "键盘", "弦乐", "乐器", "工程", "企划",
+	"统筹", "发行", "出品", "演奏", "指挥", "后期", "音效", "版权", "鸣谢", "摄影",
+	"设计", "封面",
+	"演唱", "原唱", "翻唱",
+	"収録", "主題", "片頭", "片尾", "挿入",
+	"收录", "主题", "片头", "插入",
+	"歌手", "歌曲", "歌词",
+	"钢琴", "箱琴", "笛子", "童声", "口琴", "二胡", "琵琶", "古筝", "长笛", "提琴",
+	"唢呐", "手鼓", "打击", "合成", "采样", "编写", "小号", "萨克",
+	"竖琴", "长号", "副唱", "和音", "三和",
+	"著作", "推广",
+	"指导", "总监", "策划", "导演",
+}
+
+// lyricCreditLabelSeparators 同 Swift 侧 creditLabelSeparators:身兼两职的标签里夹着的分隔符。
+const lyricCreditLabelSeparators = "/／、&＆·・和与及,，"
+
+// lyricEnglishRoleNounRe 同 Swift 侧 englishRoleNounPattern:双语标签拉丁尾里的角色名。
+var lyricEnglishRoleNounRe = regexp.MustCompile(`(?i)\b(producers?|composers?|lyricists?|lyrics|arrang(?:er|ement|ed)|` +
+	`engineers?|engineering|studios?|drums?|bass|guitars?|keyboards?|strings|` +
+	`vocals?|chorus|programming|mixing|mixed|mastering|mastered|recording|recorded|` +
+	`assistant|producti?on|publisher|label|orchestra|conductor|percussion|piano|` +
+	`synth(?:esizer)?|sax(?:ophone)?|trumpet|violin|cello|harmonica|` +
+	`photograph(?:y|er)|artwork|design(?:er)?|mv|director)\b`)
+
+// lyricLabelLooksLikeCreditRole 是 Swift 侧 LyricsSyncEngine.labelLooksLikeCreditRole 的移植:只看标签,判它像不像
+// 职员表里的角色名。步骤同那边的 matchesRoleWordCredit:拆「汉字头 + 拉丁尾」的双语标签 → 去掉分隔符取汉字核心
+// (标签混着型号、括号这类标注时只取汉字部分)→ 核心 1~10 个汉字 → 繁简两种写法里含角色词,或者拉丁尾本身是角色名。
+func lyricLabelLooksLikeCreditRole(label string) bool {
+	hanLabel, latinLabel := lyricSplitBilingualLabel(label)
+	core := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(lyricCreditLabelSeparators, r) {
+			return -1
+		}
+		return r
+	}, hanLabel)
+	if core == "" || !lyricAllHan(core) {
+		var hanOnly strings.Builder
+		nonHanOK := true
+		for _, r := range label {
+			switch {
+			case unicode.Is(unicode.Han, r):
+				hanOnly.WriteRune(r)
+			case unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" ./&()'’-：:", r):
+			default:
+				nonHanOK = false
+			}
+		}
+		if nonHanOK && hanOnly.Len() > 0 {
+			core = hanOnly.String()
+		}
+	}
+	if n := utf8.RuneCountInString(core); n < 1 || n > 10 || !lyricAllHan(core) {
+		return false
+	}
+	for _, form := range []string{core, toSimplified(core)} {
+		for _, w := range lyricCreditRoleWords {
+			if strings.Contains(form, w) {
+				return true
+			}
+		}
+	}
+	return latinLabel != "" && lyricEnglishRoleNounRe.MatchString(latinLabel)
+}
+
+// lyricSplitBilingualLabel 同 Swift 侧 splitBilingualLabel:拆不出干净的「汉字头 + 拉丁尾」时原样返回、拉丁尾为空。
+// 标签里有括号、尾巴不以字母开头、尾巴里有数字 / 汉字 / 别的符号、尾巴超过 40 个字符时都算拆不出。
+func lyricSplitBilingualLabel(label string) (han, latin string) {
+	i := 0
+	for i < len(label) {
+		r, size := utf8.DecodeRuneInString(label[i:])
+		if !unicode.Is(unicode.Han, r) && !strings.ContainsRune(lyricCreditLabelSeparators, r) {
+			break
+		}
+		i += size
+	}
+	han = label[:i]
+	tail := strings.TrimSpace(label[i:])
+	if han == "" || tail == "" || utf8.RuneCountInString(tail) > 40 {
+		return label, ""
+	}
+	if strings.ContainsAny(label, "()（）[]【】{}〔〕") {
+		return label, ""
+	}
+	if first, _ := utf8.DecodeRuneInString(tail); !unicode.IsLetter(first) {
+		return label, ""
+	}
+	for _, r := range tail {
+		if unicode.Is(unicode.Han, r) || !(unicode.IsLetter(r) || unicode.IsSpace(r) || strings.ContainsRune("&/.,'()-＆", r)) {
+			return label, ""
+		}
+	}
+	return han, tail
+}
+
+func lyricAllHan(s string) bool {
+	for _, r := range s {
+		if !unicode.Is(unicode.Han, r) {
+			return false
+		}
+	}
+	return s != ""
+}
+
 func lyricPlausibleSpeakerName(label string) bool {
 	rs := []rune(label)
 	if len(rs) == 0 || len(rs) > lyricMaxLabelRunes {
@@ -133,7 +251,11 @@ func lyricPlausibleSpeakerName(label string) bool {
 	// 「周杰伦：」自己就命中,加上去等于把所有中文人名标签全排掉。
 	// 关键词那条天然放过真人名:「曲婉婷：」里「曲」是角色词,但正则要求它后面紧跟冒号或
 	// 另一个角色词,「婉」两者都不是,整条匹配失败。
-	if creditLineRe.MatchString(label + "：") {
+	//
+	// 用的是跟 Swift 那边同一条关键词正则(lyricKeywordCreditRe,对应 LyricsSyncEngine.creditLinePattern),
+	// 不是打分用的 creditLineRe(那条窄得多,只认作词/作曲/编曲/制作人/演唱/混音/录音):两边对「哪些
+	// 标签是说话人」必须一致,不然 App 删掉的署名行在这边被当成说话人豁免,曲末时间和正文共识都被带偏。
+	if lyricKeywordCreditRe.MatchString(label+"：") || lyricLabelLooksLikeCreditRole(label) {
 		return false
 	}
 	if strings.ContainsAny(label, lyricNonNameRunes) {

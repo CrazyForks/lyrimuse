@@ -201,6 +201,8 @@ var (
 	trustedCatalogTried    = map[string]bool{}
 	// trustedSplitResolved:曲库定下来的拆法,按 (播放器, 身份字段) 记。只在拆法不唯一时用得上。
 	trustedSplitResolved = map[string]trustedIdentity{}
+	// trustedCatalogMemoCap:上面两张表最多记多少条。
+	trustedCatalogMemoCap = 4096
 	// trustedBackground:trustedFixedTrack 起的后台 goroutine(曲库核对、撤回)。单测等它们跑完
 	// 再还原包级状态。
 	trustedBackground sync.WaitGroup
@@ -449,6 +451,11 @@ func runTrustedCatalogLookup(bundle, stable string) {
 	defer trustedLyricArtistMu.Unlock()
 	key := bundle + "\n" + stable
 	delete(trustedCatalogInflight, key)
+	// 一首歌一条、只增不删:攒到上限整份清掉,最坏是某首歌下次再问一次曲库。
+	if len(trustedCatalogTried) >= trustedCatalogMemoCap {
+		trustedCatalogTried = map[string]bool{}
+		trustedSplitResolved = map[string]trustedIdentity{}
+	}
 	trustedCatalogTried[key] = true
 	order := trustedTitleOrders[bundle]
 	if order == titleOrderUnknown {

@@ -159,6 +159,10 @@ type kugouLyricArtistState struct {
 	// 署名正确;署名正确要靠 resolved。
 	first    string
 	poisoned bool
+	// structural:poisoned 是**亲眼看到**的 —— 同一首歌里署名换了值,或者换歌时这个播放器早就坐实过。
+	// 本地那份弱证据(kugouLocalContradicts)也会把 poisoned 置上,但只管这一首,不能在下一拍被当成
+	// 结构证据升级成播放器级结论(见 kugouFixedArtist)。
+	structural bool
 	// resolved:从本地 plist 读到的这首歌。一首歌只认一次,hasResolved 为真时它才有效。
 	resolved    kugouLocalTrack
 	hasResolved bool
@@ -182,7 +186,7 @@ func advanceKugouLyricArtist(prev kugouLyricArtistState, bundle, title, artist s
 		// 污染是播放器的属性、不是某一首歌的,所以换歌之后直接从"已判定"起步 —— 不必
 		// 再等它换第二次署名,那十来秒的脏署名同样会推给网页和收听记录。
 		return kugouLyricArtistState{
-			bundle: bundle, title: title, duration: duration, first: artist, poisoned: confirmed,
+			bundle: bundle, title: title, duration: duration, first: artist, poisoned: confirmed, structural: confirmed,
 		}
 	}
 	next := prev
@@ -192,6 +196,7 @@ func advanceKugouLyricArtist(prev kugouLyricArtistState, bundle, title, artist s
 		next.first = artist
 	case artist != "" && artist != next.first:
 		next.poisoned = true
+		next.structural = true
 	}
 	return next
 }
@@ -217,9 +222,9 @@ func kugouFixedArtist(bundle, title, artist string, duration float64) (string, b
 	defer kugouLyricArtistMu.Unlock()
 	next := advanceKugouLyricArtist(kugouLyricArtistValue, bundle, title, artist, duration, kugouArtistPoisonConfirmed)
 	defer func() { kugouLyricArtistValue = next }()
-	// advanceKugouLyricArtist 只在两种情况下置 poisoned:结构证据成立,或者这个播放器
-	// 早就坐实过。所以此刻它为真就意味着**看到过署名在同一首歌里变**。
-	structural := next.poisoned
+	// 结构证据只认 advanceKugouLyricArtist 记下的 structural,不看 poisoned:上一拍靠本地弱证据置上的
+	// poisoned 会随状态带到这一拍,拿它当结构证据的话,第二拍就把一次窄条件判断升级成了播放器级结论。
+	structural := next.structural
 	if !next.poisoned {
 		// 还没看见署名变过。本地那份是唯一能提前分辨的证据,见 kugouLocalContradicts。
 		if next.bundle == "" || !kugouLocalContradicts(&next, title, artist) {

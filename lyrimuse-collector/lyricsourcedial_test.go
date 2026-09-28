@@ -216,3 +216,43 @@ func TestLyricSourceFilesUseLyricHTTPClient(t *testing.T) {
 		t.Fatal("lyricSourceTransport 没有自定义 DialContext")
 	}
 }
+
+// 调用方取消导致的解析失败不记负缓存:下一次正常请求照旧先问系统 DNS,不绕去 DoH。
+func TestLyricSourceDial_CancelledLookupDoesNotPoisonSystemDNS(t *testing.T) {
+	p := &dialProbe{sysErr: context.Canceled, dohIPs: []string{"5.6.7.8"}}
+	installDialProbe(t, p)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := lyricSourceDialContext(ctx, "tcp", "lyrics.example:443"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消的请求应当交回取消错误: %v", err)
+	}
+	if p.dohCalls != 0 {
+		t.Fatalf("取消的请求不该再去问 DoH: %d", p.dohCalls)
+	}
+	if lyricSourceSystemDNSRecentlyFailed("lyrics.example", time.Now()) {
+		t.Fatal("取消不该记成系统 DNS 失败")
+	}
+	p.sysErr, p.sysAddrs = nil, []net.IPAddr{{IP: net.ParseIP("1.2.3.4")}}
+	conn, err := lyricSourceDialContext(context.Background(), "tcp", "lyrics.example:443")
+	if err != nil || conn == nil {
+		t.Fatalf("下一次正常请求应当走系统 DNS: %v", err)
+	}
+	conn.Close()
+	if p.sysCalls != 2 || p.dohCalls != 0 {
+		t.Fatalf("sys=%d doh=%d, want 2/0", p.sysCalls, p.dohCalls)
+	}
+}
+
+// 真正的解析失败(调用方没取消)照旧记负缓存、退 DoH。
+func TestLyricSourceDial_RealLookupFailureStillFallsBack(t *testing.T) {
+	p := &dialProbe{sysErr: &net.DNSError{Err: "server misbehaving", Name: "lyrics.example"}, dohIPs: []string{"5.6.7.8"}}
+	installDialProbe(t, p)
+	conn, err := lyricSourceDialContext(context.Background(), "tcp", "lyrics.example:443")
+	if err != nil || conn == nil {
+		t.Fatalf("应当靠 DoH 连上: %v", err)
+	}
+	conn.Close()
+	if !lyricSourceSystemDNSRecentlyFailed("lyrics.example", time.Now()) || p.dohCalls != 1 {
+		t.Fatalf("真失败应当记负缓存并问 DoH: doh=%d", p.dohCalls)
+	}
+}

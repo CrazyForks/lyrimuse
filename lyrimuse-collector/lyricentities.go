@@ -33,7 +33,8 @@ import (
 //     一个空格,留 NBSP 只会让换行 / 跑马灯 / 指纹归一化多一种空白要认。
 //
 // 只解**一层**:`&amp;apos;` 解成 `&apos;` 就停(正则匹配完 `&amp;` 之后从它后面继续扫,不回头)。
-// 幂等性靠调用方保证——每份文本只在一个门口解一次,见 decodeLyricSourceEntities / migrateLyricEntities。
+// 幂等性靠调用方保证——每份文本只在一个门口解一次,见 decodeLyricSourceEntities / migrateLyricEntities
+// (后者带水位闸,只跑一遍;lyrics/ 文件夹导入改了东西时水位作废、再跑一遍,那是新进来的外来数据)。
 var lyricEntityRe = regexp.MustCompile(`&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});`)
 
 // decodeLyricEntities 把一段歌词文本里的字符实体还原成字符。没有 `&` 的文本零分配直接返回
@@ -49,6 +50,11 @@ func decodeLyricEntities(s string) string {
 		}
 		if u == "\u00a0" {
 			return " "
+		}
+		// 解出替换字符的(`&#0;`、`&#xD800;` 这类非法码位,标准库按 HTML5 换成 U+FFFD):原样留着,不把一个
+		// 看得懂的实体换成一个看不懂的问号框。
+		if strings.ContainsRune(u, '\ufffd') {
+			return m
 		}
 		for _, r := range u {
 			if r < 0x20 || r == 0x7f {
@@ -66,21 +72,25 @@ func decodeLyricEntities(s string) string {
 // 不动 matchTitle / matchArtist / matchAlbum:那是各源搜索接口给的曲目元信息,全库决策存档
 // (lyrics_decision 里每条候选的 title / artist / album)零命中,而且它们参与标题 / 歌手比对,
 // 不该在这里顺手改。
+//
+// 同一个门口顺带统一换行和开头的 BOM(normalizeLyricText):酷狗的歌词几乎全是 CRLF、三分之一开头带 BOM,QQ 偶有
+// CRLF。存量由 migrateLyricLineEndings 统一成同一个样子,两头一致,重评才不会把「只差换行」当成正文变了。
 func decodeLyricSourceResultEntities(r lyricSourceResult) lyricSourceResult {
-	r.lyr = decodeLyricEntities(r.lyr)
-	r.yrc = decodeLyricEntities(r.yrc)
-	r.tr = decodeLyricEntities(r.tr)
-	r.roma = decodeLyricEntities(r.roma)
-	r.bg = decodeLyricEntities(r.bg)
-	r.ne.Lyrics = decodeLyricEntities(r.ne.Lyrics)
-	r.ne.Trans = decodeLyricEntities(r.ne.Trans)
-	r.ne.Roma = decodeLyricEntities(r.ne.Roma)
-	r.ne.YRC = decodeLyricEntities(r.ne.YRC)
-	r.amll.lrc = decodeLyricEntities(r.amll.lrc)
-	r.amll.yrc = decodeLyricEntities(r.amll.yrc)
-	r.amll.tr = decodeLyricEntities(r.amll.tr)
-	r.amll.roma = decodeLyricEntities(r.amll.roma)
-	r.amll.bg = decodeLyricEntities(r.amll.bg)
+	clean := func(s string) string { return decodeLyricEntities(normalizeLyricText(s)) }
+	r.lyr = clean(r.lyr)
+	r.yrc = clean(r.yrc)
+	r.tr = clean(r.tr)
+	r.roma = clean(r.roma)
+	r.bg = clean(r.bg)
+	r.ne.Lyrics = clean(r.ne.Lyrics)
+	r.ne.Trans = clean(r.ne.Trans)
+	r.ne.Roma = clean(r.ne.Roma)
+	r.ne.YRC = clean(r.ne.YRC)
+	r.amll.lrc = clean(r.amll.lrc)
+	r.amll.yrc = clean(r.amll.yrc)
+	r.amll.tr = clean(r.amll.tr)
+	r.amll.roma = clean(r.amll.roma)
+	r.amll.bg = clean(r.amll.bg)
 	return r
 }
 
@@ -109,7 +119,7 @@ func decodeLyricSourceEntities(raw map[string]lyricSourceResult) map[string]lyri
 // 调用时机(main.go):importLyricsFromFiles 之后(lyrics/ 文件夹赢完,改的才是权威内容)、
 // exportLyricsFiles 之前(修完由 export 把干净的正文写回导出文件);也必须在
 // migrateManualPickMarks 之前(那一步按最终正文算指纹)。形态照抄 migrateYRCWhitespaceTokens。
-// 幂等:解过一遍的正文不再含实体,再跑是空操作。
+// 带水位闸,只跑一遍(见 migrationLyricEntities):「幂等」对多层转义不成立,每跑一次就再解一层。
 //
 // 不跳过 manual_lyrics:跟 migrateYRCWhitespaceTokens 同一口径——这是无损的格式规范化(词一个
 // 不变,只是把编码还原),不是自愈路径换内容;用户锁住的正是那份词,`they&apos;re` 显示成
@@ -119,6 +129,9 @@ func decodeLyricSourceEntities(raw map[string]lyricSourceResult) map[string]lyri
 // 已知代价(接受,08 章早有结论):App 侧单曲时间轴校正值的 key 含 lyrics+yrc 的内容指纹,正文
 // 一变旧值就查不到——跟 rescore / 重挂时间轴 / 空白词条清洗改正文时一样,受影响的歌要重调一次。
 func migrateLyricEntities() {
+	if migrationDone(migrationLyricEntities, migrationLyricEntitiesVersion) {
+		return
+	}
 	enrichMu.Lock()
 	fixed := 0
 	for k, e := range enrichCache {
@@ -149,4 +162,5 @@ func migrateLyricEntities() {
 		log.Printf("lyric entity migration: decoded HTML entities in %d entries", fixed)
 		saveEnrichCache()
 	}
+	markMigrationDone(migrationLyricEntities, migrationLyricEntitiesVersion)
 }

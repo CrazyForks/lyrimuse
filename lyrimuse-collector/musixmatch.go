@@ -16,7 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // musixmatchLyric 是歌词第五个候选来源。Musixmatch 是 Spotify 官方合作的歌词供应商，
@@ -52,10 +54,10 @@ import (
 //
 // 顺带一提,当时的表现不只是"少一个源":每首歌它都要把 DNS/TLS 超时白等一遍,
 // healthcheck 探两首歌要 29s;修好之后 7s。
-const (
-	musixmatchAppID   = "mac-ios-v2.0"
-	musixmatchBaseURL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
-)
+const musixmatchAppID = "mac-ios-v2.0"
+
+// musixmatchBaseURL 是变量只为单测能指到本地假服务器;生产路径永远是这个值。
+var musixmatchBaseURL = "https://apic-appmobile.musixmatch.com/ws/1.1/"
 
 type musixmatchResult struct {
 	lrc string
@@ -120,6 +122,27 @@ var (
 	musixmatchLastFailureReason string
 )
 
+// musixmatchAnySuccess:这个进程里数据接口(不含 token.get)答过一次 status_code 200。搜索弹窗据此不把早先记下的
+// 失败原因报成「这一轮没给出候选」的原因(同 neteaseSawSuccessNow)。
+var musixmatchAnySuccess atomic.Bool
+
+func musixmatchSawSuccessNow() bool { return musixmatchAnySuccess.Load() }
+
+// musixmatchHeaderStatus 取应答 message.header.status_code,解不开是 0。
+func musixmatchHeaderStatus(body []byte) int {
+	var out struct {
+		Message struct {
+			Header struct {
+				StatusCode int `json:"status_code"`
+			} `json:"header"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return 0
+	}
+	return out.Message.Header.StatusCode
+}
+
 func musixmatchSetLastFailureReason(reason string) {
 	musixmatchLastFailureMu.Lock()
 	musixmatchLastFailureReason = reason
@@ -172,13 +195,24 @@ func musixmatchLyric(ctx context.Context, artist, title string, durationSecs flo
 	}
 	musixmatchMu.Unlock()
 
-	r := resolveMusixmatchLyric(ctx, artist, title, durationSecs, trLang, isrc)
-	if r.lrc != "" {
+	ctx, sub := withLyricSubFetch(ctx)
+	r := musixmatchResolve(ctx, artist, title, durationSecs, trLang, isrc)
+	// 只缓存完整的结果:逐字 / 译文 / 罗马音哪一个子请求没问成,这份结果就缺了那一块,见 lyricsubfetch.go。
+	if r.lrc != "" && sub.complete(ctx) {
 		musixmatchMu.Lock()
 		musixmatchCache[key] = r
 		musixmatchMu.Unlock()
 	}
 	return r
+}
+
+// musixmatchResolve 可换,只为单测;生产路径永远是 resolveMusixmatchLyric。
+var musixmatchResolve = resolveMusixmatchLyric
+
+// musixmatchSubStatusFailed:子请求应答里的 status_code 是不是「没问成」。200 是拿到了,404 是这首没有这一块,
+// 其余(401 限流 / 验证码、5xx……)都算没问成。
+func musixmatchSubStatusFailed(code int) bool {
+	return code != 200 && code != 404
 }
 
 func resolveMusixmatchLyric(ctx context.Context, artist, title string, durationSecs float64, trLang, isrc string) musixmatchResult {
@@ -463,7 +497,7 @@ func musixmatchLoadTokenFile() string {
 		return ""
 	}
 	var f musixmatchTokenFile
-	if json.Unmarshal(raw, &f) != nil || f.Token == "" {
+	if json.Unmarshal(raw, &f) != nil || f.Token == "" || musixmatchPlaceholderToken(f.Token) {
 		return ""
 	}
 	fetchedAt := time.Unix(f.FetchedAt, 0)
@@ -535,7 +569,7 @@ func musixmatchFetchToken(ctx context.Context, retry int) string {
 		return musixmatchFetchToken(ctx, retry+1)
 	}
 	token := out.Message.Body.UserToken
-	if token == "" {
+	if token == "" || musixmatchPlaceholderToken(token) {
 		return ""
 	}
 	now := time.Now()
@@ -547,6 +581,22 @@ func musixmatchFetchToken(ctx context.Context, retry int) string {
 	musixmatchTokenMu.Unlock()
 	musixmatchSaveTokenFile(token, now, expiry)
 	return token
+}
+
+// musixmatchPlaceholderToken:token.get 答了 200、给的却是占位值 —— 客户端标识被封时这个接口回的是
+// `UpgradeOnlyUpgradeOnly…`(开源同类项目碰到过;本机日志不记 token 内容,查不到有没有拿到过,也没法主动触发),
+// 或者整串都是同一个字符。当成没拿到:不缓存、不写盘、不当「上一个」留着(否则 9 分钟内每个数据请求都被拒,
+// 被拒之后又从磁盘读回同一个占位值)。真 token 不会长这样。
+func musixmatchPlaceholderToken(t string) bool {
+	if strings.Contains(strings.ToLower(t), "upgradeonly") {
+		return true
+	}
+	for i := 1; i < len(t); i++ {
+		if t[i] != t[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // musixmatchHTTPClient 是这个源专用的 HTTP client —— 走 DoH 解析(见 doh.go)。
@@ -582,7 +632,9 @@ func musixmatchDo(ctx context.Context, action string, params neturl.Values) ([]b
 		}
 	}
 	params.Set("app_id", musixmatchAppID)
-	params.Set("t", strconv.FormatInt(time.Now().UnixMilli(), 10))
+	// 防缓存参数取到秒:取毫秒的话同一首歌并发的几个请求 URL 几乎总不一样,同 URL 合并(httpcoalesce.go)
+	// 合并不了,救急并发时白占 musixmatch 仅有的几个在途名额。
+	params.Set("t", strconv.FormatInt(time.Now().Unix(), 10))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, musixmatchBaseURL+action+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -602,6 +654,9 @@ func musixmatchDo(ctx context.Context, action string, params neturl.Values) ([]b
 	body, err := io.ReadAll(resp.Body)
 	if err == nil && usedToken != "" && musixmatchRejectsToken(body) {
 		musixmatchRejectToken(usedToken)
+	}
+	if err == nil && action != "token.get" && musixmatchHeaderStatus(body) == 200 {
+		musixmatchAnySuccess.Store(true)
 	}
 	return body, err
 }
@@ -991,6 +1046,7 @@ func musixmatchRichsync(ctx context.Context, trackID int64) string {
 		"track_id": {strconv.FormatInt(trackID, 10)},
 	})
 	if err != nil {
+		noteLyricSubFetchFailure(ctx)
 		return ""
 	}
 	var out struct {
@@ -1005,7 +1061,14 @@ func musixmatchRichsync(ctx context.Context, trackID int64) string {
 			} `json:"body"`
 		} `json:"message"`
 	}
-	if json.Unmarshal(body, &out) != nil || out.Message.Header.StatusCode != 200 {
+	if json.Unmarshal(body, &out) != nil {
+		noteLyricSubFetchFailure(ctx)
+		return ""
+	}
+	if code := out.Message.Header.StatusCode; code != 200 {
+		if musixmatchSubStatusFailed(code) {
+			noteLyricSubFetchFailure(ctx)
+		}
 		return ""
 	}
 	raw := out.Message.Body.Richsync.RichsyncBody
@@ -1101,16 +1164,29 @@ func musixmatchTranslationLRC(ctx context.Context, trackID int64, originalLRC, l
 		"selected_language":      {lang},
 	})
 	if err != nil {
+		noteLyricSubFetchFailure(ctx)
 		return ""
 	}
 	var out struct {
 		Message struct {
+			Header struct {
+				StatusCode int `json:"status_code"`
+			} `json:"header"`
 			Body struct {
 				TranslationsList []musixmatchTranslationItem `json:"translations_list"`
 			} `json:"body"`
 		} `json:"message"`
 	}
-	if json.Unmarshal(body, &out) != nil || len(out.Message.Body.TranslationsList) == 0 {
+	if json.Unmarshal(body, &out) != nil {
+		noteLyricSubFetchFailure(ctx)
+		return ""
+	}
+	// 老样本里不带 header 的应答(status_code 为 0)照原样当作「问成了」。
+	if code := out.Message.Header.StatusCode; code != 0 && musixmatchSubStatusFailed(code) {
+		noteLyricSubFetchFailure(ctx)
+		return ""
+	}
+	if len(out.Message.Body.TranslationsList) == 0 {
 		return ""
 	}
 	// 原文是中文时它的「中文译文」常常只是繁简转写,见 dropScriptVariantLines。
@@ -1147,21 +1223,43 @@ func buildTranslatedLRC(originalLRC string, items []musixmatchTranslationItem) s
 		if p.text == "" {
 			continue
 		}
-		for _, item := range items {
-			matched := strings.TrimSpace(item.Translation.SubtitleMatchedLine)
-			tr := strings.TrimSpace(item.Translation.Description)
-			if matched == "" || tr == "" {
-				continue
-			}
-			if p.text == matched || strings.Contains(p.text, matched) || strings.Contains(matched, p.text) {
-				b.WriteString(p.ts)
-				b.WriteString(tr)
-				b.WriteByte('\n')
-				break
-			}
+		if tr := musixmatchTranslationFor(p.text, items); tr != "" {
+			b.WriteString(p.ts)
+			b.WriteString(tr)
+			b.WriteByte('\n')
 		}
 	}
 	return b.String()
+}
+
+// musixmatchSubstringMatchMinRatio:子串匹配时短的一方至少要有长的一方多长(按字数)。太短的子串(「Oh」对
+// 「Oh my god」)说明不了是同一句。
+const musixmatchSubstringMatchMinRatio = 0.6
+
+// musixmatchTranslationFor 给原文一行挑译文:先找逐字相等的那条;没有才退到子串匹配,取长度最接近的一条,
+// 且短的一方不短于长的一方的 musixmatchSubstringMatchMinRatio。原来按列表顺序先到先得,「I love you baby」会拿到
+// 排在前面的「I love you」那条的译文,真正逐字相等的那条反而用不上。
+func musixmatchTranslationFor(text string, items []musixmatchTranslationItem) string {
+	best, bestRatio := "", 0.0
+	for _, item := range items {
+		matched := strings.TrimSpace(item.Translation.SubtitleMatchedLine)
+		tr := strings.TrimSpace(item.Translation.Description)
+		if matched == "" || tr == "" {
+			continue
+		}
+		if matched == text {
+			return tr
+		}
+		if !strings.Contains(text, matched) && !strings.Contains(matched, text) {
+			continue
+		}
+		a, b := utf8.RuneCountInString(text), utf8.RuneCountInString(matched)
+		ratio := float64(min(a, b)) / float64(max(a, b))
+		if ratio >= musixmatchSubstringMatchMinRatio && ratio > bestRatio {
+			best, bestRatio = tr, ratio
+		}
+	}
+	return best
 }
 
 // musixmatchLargestCover:封面取最大的一档。800 字段常为空,而图床上同一张图的 _800_800 地址照样能取

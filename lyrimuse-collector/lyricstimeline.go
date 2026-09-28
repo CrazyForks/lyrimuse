@@ -161,6 +161,8 @@ func rehangLRCOnYRC(lrc, yrc string, durationSecs float64, guard bool) (string, 
 	var idxs []int
 	var texts []string
 	var oldMs []int
+	type blankStamp struct{ line, ms int }
+	var blanks []blankStamp
 	for i, line := range lines {
 		stamps := lrcTimestampCaptureRe.FindAllStringSubmatch(line, -1)
 		if len(stamps) == 0 {
@@ -171,6 +173,7 @@ func rehangLRCOnYRC(lrc, yrc string, durationSecs float64, guard bool) (string, 
 		}
 		text := strings.TrimSpace(lrcTimestampRe.ReplaceAllString(line, ""))
 		if text == "" {
+			blanks = append(blanks, blankStamp{line: i, ms: lrcStampMs(stamps[0])})
 			continue
 		}
 		idxs = append(idxs, i)
@@ -214,6 +217,21 @@ func rehangLRCOnYRC(lrc, yrc string, durationSecs float64, guard bool) (string, 
 	for k, i := range idxs {
 		out[i] = formatLRCStamp(heads[k].ms) + texts[k]
 		remap[oldMs[k]] = heads[k].ms
+	}
+	// 空文本的时间戳行(「上一句唱到这儿为止」的结束标记,App 的 LRCParser.parseEndMarks 就这么用)跟着文件里
+	// 它前面那句挪同样的量,再夹在前后两句的新时间之间:原样留着的话,前后的内容行都挪了、它还停在旧时间,
+	// 会夹到别的两句中间去。
+	for _, b := range blanks {
+		k := sort.SearchInts(idxs, b.line) - 1
+		ref := max(k, 0)
+		ms := b.ms + heads[ref].ms - oldMs[ref]
+		if k >= 0 && ms < heads[k].ms {
+			ms = heads[k].ms
+		}
+		if k+1 < len(heads) && ms > heads[k+1].ms {
+			ms = heads[k+1].ms
+		}
+		out[b.line] = formatLRCStamp(max(ms, 0))
 	}
 	newLRC := strings.Join(out, "\n")
 	// 再兜一道:上面按容差判过"时间实质变了",但若原文本来就是这个格式、只是小数位写法

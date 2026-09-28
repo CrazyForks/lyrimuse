@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	neturl "net/url"
@@ -72,8 +73,10 @@ func kuwoLyric(ctx context.Context, artist, title, album string, durationSecs fl
 	}
 	kuwoMu.Unlock()
 
+	ctx, sub := withLyricSubFetch(ctx)
 	r := resolveKuwoLyric(ctx, artist, title, album, durationSecs)
-	if r.lyrics != "" {
+	// 逐字那一趟没问成的不缓存,见 lyricsubfetch.go。
+	if r.lyrics != "" && sub.complete(ctx) {
 		kuwoMu.Lock()
 		kuwoCache[key] = r
 		kuwoMu.Unlock()
@@ -142,7 +145,7 @@ func kuwoSearchAt(ctx context.Context, base, q string) ([]kuwoSearchItem, error)
 	var out struct {
 		Abslist []kuwoSearchItem `json:"abslist"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out.Abslist, nil
@@ -225,7 +228,7 @@ func kuwoFetchLyricAt(ctx context.Context, base, musicID string) ([]kuwoLyricLin
 			LrcList []kuwoLyricLine `json:"lrclist"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out.Data.LrcList, nil

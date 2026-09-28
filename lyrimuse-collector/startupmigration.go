@@ -57,8 +57,9 @@ const (
 
 	// migrationQRCLeftoverTokens:修 qrcToYRC 旧实现漏转的残缺两数字词条(qrcleftovertokens.go)。
 	// 源头已改成按标记位置切分,不会再产生,所以是真正一次性的。
+	// v2:修不动的(还剩两数字词条的)清掉逐字、交给扫库 / 重评重新取,见 qrcleftovertokens.go。
 	migrationQRCLeftoverTokens        = "qrc_leftover_tokens"
-	migrationQRCLeftoverTokensVersion = 1
+	migrationQRCLeftoverTokensVersion = 2
 
 	// migrationYRCWhitespace:纯空白词条归并(yrcwhitespace.go)。
 	// 它是在 qrcToYRC / krcToYRC 两个出口都补上源头归并**之后**才够格加水位闸的 ——
@@ -74,6 +75,15 @@ const (
 	// 改 neteaseCoverQuery 的写法就 +1。
 	migrationNeteaseCoverURLs        = "netease_cover_urls"
 	migrationNeteaseCoverURLsVersion = 1
+	// migrationLyricEntities:存量歌词正文的字符实体解一层(lyricentities.go)。新抓取的在 rank 那道门口解,
+	// 运行期不再产生;没有水位的话每次启动都再解一层,`&amp;amp;apos;` 两次启动就变成 `'`,正文每变一次
+	// App 按内容指纹存的单曲偏移就失效一次。
+	migrationLyricEntities        = "lyric_entities"
+	migrationLyricEntitiesVersion = 1
+	// migrationLyricLineEndings:存量歌词的换行统一成 LF、去掉开头的 BOM(lyriclineendings.go)。新抓取的在 rank
+	// 那道门口统一,运行期不再产生;lyrics/ 文件夹导入进来的外来数据会作废水位、再跑一遍。
+	migrationLyricLineEndings        = "lyric_line_endings"
+	migrationLyricLineEndingsVersion = 1
 )
 
 // loadMigrationState 读水位文件。文件不存在 / 解不出来都当作"一道都没跑过",照常全量跑 ——

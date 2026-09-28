@@ -21,8 +21,8 @@ import (
 // 的 NDJSON 契约(searchcli.go)是先例。要人读,`jq` 一行就够。
 //
 // search-lyrics(「歌词管理」的手动重搜)**不会**写这里:它是用户发起的重跑,不是
-// 决策 —— 结构上也进不来:那条 CLI 路径从不调 loadFeatureFlags,features 是零值,
-// 开关恒为 false(跟 pickLyricCandidate 对 LyricsSources 的既有约定同一个机制)。
+// 决策 —— 结构上也进不来:那条 CLI 路径从不调用 traceLyricsDecision,也不设落盘路径(enrichPath 为空)。
+// 它会读 features(loadFeatureFlags),所以别拿「开关恒为 false」当这条保证的理由。
 //
 // 体量控制:对比审阅 C1 那边的 trace 没有封顶,lyrimuse.log 也没有轮转 —— 这两个先例都别学。
 // 超过 2MB 就把现有文件挪成 .old(只留一代),再开新文件。一行 ~1-2KB,2MB ≈ 一两千次

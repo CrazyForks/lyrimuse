@@ -254,7 +254,7 @@ func qqClientSearchAt(ctx context.Context, base, query string) ([]qqSearchItem, 
 		return nil, fmt.Errorf("client_search_cp status %d", resp.StatusCode)
 	}
 	var out qqClientSearchResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, qqResponseMaxBytes)).Decode(&out); err != nil {
 		return nil, err
 	}
 	// 查无结果时 code 仍是 0(实测),非 0 是服务端拒绝。
@@ -333,7 +333,7 @@ func qqSmartboxAt(ctx context.Context, host, query string) (qqSmartboxData, erro
 		Code int            `json:"code"`
 		Data qqSmartboxData `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, qqResponseMaxBytes)).Decode(&out); err != nil {
 		return qqSmartboxData{}, err
 	}
 	// 查无结果时 code 仍是 0(实测),非 0 是服务端拒绝。
@@ -380,7 +380,9 @@ func qqSearchQueries(artist, title string) []string {
 // 补那条最规范的版本,正式搜索已经有精确同名候选时它给不出新信息,这一次请求可以省掉。
 // 这也顺带保住了原来的降级路径——正式接口哪天再被反爬打死(旧注释就是上一次留下的),
 // 结果为空 → 一定不含精确同名 → 必然补 smartbox,行为退回之前的样子。
-func qqSearchSongs(ctx context.Context, queries []string, title string) []qqSearchItem {
+// degraded:有一个标题变体、或者补的那次 smartbox 没问成 —— 这份结果可能漏了正确的那条(七里香 (Live) 那一版
+// 只出现在去括号那一条查询的结果里),调用方据此不把挑出来的结论当定论缓存。
+func qqSearchSongs(ctx context.Context, queries []string, title string) (_ []qqSearchItem, degraded bool) {
 	var out []qqSearchItem
 	seen := map[string]bool{}
 	appendNew := func(items []qqSearchItem) {
@@ -394,29 +396,39 @@ func qqSearchSongs(ctx context.Context, queries []string, title string) []qqSear
 	}
 	// 各标题变体并发搜,合并仍按 queries 的顺序,去重结果跟逐个搜时一样。
 	perQuery := make([][]qqSearchItem, len(queries))
+	failed := make([]bool, len(queries))
 	var wg sync.WaitGroup
 	for i, q := range queries {
 		wg.Add(1)
 		go func(i int, q string) {
 			defer wg.Done()
-			if items, err := qqClientSearch(ctx, q); err == nil {
-				perQuery[i] = items
+			items, err := qqClientSearch(ctx, q)
+			if err != nil {
+				failed[i] = true
+				return
 			}
+			perQuery[i] = items
 		}(i, q)
 	}
 	wg.Wait()
-	for _, items := range perQuery {
+	for i, items := range perQuery {
 		appendNew(items)
+		degraded = degraded || failed[i]
 	}
 	if qqSearchNeedsSmartboxSupplement(out, title) {
 		for _, q := range queries {
-			if items := qqSmartbox(ctx, q); len(items) > 0 {
+			d, err := qqSmartboxRaw(ctx, q)
+			if err != nil {
+				degraded = true
+				continue
+			}
+			if items := d.Song.ItemList; len(items) > 0 {
 				appendNew(qqSearchItemsFromSmartbox(items))
 				break
 			}
 		}
 	}
-	return out
+	return out, degraded
 }
 
 // qqSearchNeedsSmartboxSupplement 判断要不要再补一次 smartbox:正式搜索的结果里已经
@@ -518,7 +530,7 @@ func qqSingerSuggestionsAt(host, name string) ([]qqSingerSuggestion, bool) {
 			} `json:"singer"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, qqResponseMaxBytes)).Decode(&out); err != nil {
 		return nil, false
 	}
 	if out.Code != 0 {
@@ -651,13 +663,15 @@ func saveQQArtistNameCache() {
 			keep[k] = v
 		}
 	}
-	data, err := json.Marshal(keep)
+	path := qqArtistNamePath
 	qqArtistNameDirty = false
 	qqArtistNameMu.Unlock()
+	mergeMissingFromDisk(path, keep, func(v string) bool { return v != "" })
+	data, err := json.Marshal(keep)
 	if err != nil {
 		return
 	}
-	if err := writeFileAtomic(qqArtistNamePath, data); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save QQ artist name cache", "err", err)
 	}
 }
@@ -797,9 +811,8 @@ func qqSongCatalogMids(ctx context.Context, mid string) (albumMid, singerMid str
 // "The Indispensable Collection" 这个例子)；这边完全没有这层专辑感知,只要 smartbox
 // 搜索结果第一条身份对得上就直接采用它的封面,哪个专辑版本排在前面全凭 QQ 搜索接口
 // 自己的排序,拿到精选集封面纯属运气不好。现在补上跟 resolveQQMusicMatch 同一套
-// album 打分:调用方传了专辑名时,先在前几条候选(封顶 4 条,理由/上限跟
-// resolveQQMusicMatch 一致——降低多打详情接口的次数)里按 albumScore 挑出最贴合的
-// 一条,单独过一遍下面这层身份校验;通不过(或本来就没传专辑名)时,退回到"逐条
+// album 打分:调用方传了专辑名时,先按 qqPickCandidateWithAlbum(跟 resolveQQMusicMatch 同一个挑选函数,
+// 只对要另查专辑名的候选限条数)挑出最贴合的一条,单独过一遍下面这层身份校验;通不过(或本来就没传专辑名)时,退回到"逐条
 // 按 smartbox 原始顺序试、第一条双重校验通过就用"这条兜底路径。
 func qqCoverFallback(ctx context.Context, artist, title, album string) (cover, canonicalArtist string) {
 	if artist == "" || title == "" {
@@ -809,20 +822,18 @@ func qqCoverFallback(ctx context.Context, artist, title, album string) (cover, c
 	// & The Revolution")时,QQ 的 singer 字段可能只单独记了其中一位——不把这个当统一
 	// 歌手名用,避免悄悄丢掉本地已经写全的合作者;封面照常正常解析,不受影响。
 	singleArtist := len(artistCreditParts(artist)) < 2
-	type qqCoverCand struct {
-		mid   string
-		album string // 搜索结果自带的专辑名(client_search_cp 路线才有),空=要另外查
-		exact bool   // name 与 title loose 相等,跟 resolveQQMusicMatch 的 exact 同一含义
-	}
-	var cands []qqCoverCand
-	for _, it := range qqSearchSongs(ctx, qqSearchQueries(artist, title), title) {
+	var cands []qqCand
+	items, _ := qqSearchSongs(ctx, qqSearchQueries(artist, title), title)
+	for _, it := range items {
 		if it.Mid == "" || !lyricTitleAccepted(it.Name, title) ||
 			!artistMatches(it.Singer, artist) {
 			continue
 		}
-		cands = append(cands, qqCoverCand{mid: it.Mid, album: it.Album, exact: normLoose(it.Name) == normLoose(title)})
+		// exact:name 与 title loose 相等,跟 resolveQQMusicMatch 的 exact 同一含义。
+		cands = append(cands, qqCand{mid: it.Mid, title: it.Name, artist: it.Singer, album: it.Album,
+			interval: it.Interval, exact: normLoose(it.Name) == normLoose(title)})
 	}
-	tryCand := func(c qqCoverCand) (string, string, bool) {
+	tryCand := func(c qqCand) (string, string, bool) {
 		cover, singer := qqSongCoverAndSinger(ctx, c.mid)
 		if cover == "" || !artistMatches(singer, artist) {
 			return "", "", false
@@ -833,23 +844,11 @@ func qqCoverFallback(ctx context.Context, artist, title, album string) (cover, c
 		return cover, singer, true
 	}
 	if album != "" {
-		limit := len(cands)
-		if limit > 4 {
-			limit = 4
-		}
-		bestIdx, bestScore, bestExact := -1, 0, false
-		for i := 0; i < limit; i++ {
-			mid := cands[i].mid
-			sc := albumScore(qqCandAlbumName(cands[i].album, func() string { return qqSongAlbum(ctx, mid) }), album)
-			if sc == 0 && !cands[i].exact {
-				continue
-			}
-			if bestIdx == -1 || (cands[i].exact && !bestExact) || (cands[i].exact == bestExact && sc > bestScore) {
-				bestIdx, bestScore, bestExact = i, sc, cands[i].exact
-			}
-		}
-		if bestIdx != -1 {
-			if cover, singer, ok := tryCand(cands[bestIdx]); ok {
+		// 挑选跟 resolveQQMusicMatch 用同一个函数:条数上限只约束要另查一次专辑名的候选(搜索结果自带专辑名
+		// 的全部参与比较),原来前 4 条一刀切,本地专辑那一版排在第 5 条就回落成合辑封面。这里没有本地时长,传 0。
+		best, ok, _ := qqPickCandidateWithAlbum(cands, artist, album, 0, func(mid string) string { return qqSongAlbum(ctx, mid) })
+		if ok {
+			if cover, singer, ok := tryCand(best); ok {
 				return cover, singer
 			}
 		}
@@ -861,6 +860,9 @@ func qqCoverFallback(ctx context.Context, artist, title, album string) (cover, c
 	}
 	return "", ""
 }
+
+// qqResponseMaxBytes QQ 各个 JSON 接口(搜索、联想、musicu、详情)一次应答读多少为止。正常应答几十 KB。
+const qqResponseMaxBytes = 4 << 20
 
 // qqArtistOK reports whether singer counts as an identity match for artist under
 // the given strictness. artist=="" 表示调用方本来就没有可比对的歌手名，视为通过
@@ -1069,10 +1071,12 @@ func qqPickCandidate(cands []qqCand, artist string, durationSecs float64) (qqCan
 // compilations. Leaves url empty (→ caller uses a search link) only when
 // nothing plausibly matches; never a confidently-wrong song.
 func resolveQQMusicMatch(ctx context.Context, artist, title, album string, durationSecs float64) qqMusicMatch {
-	items := qqSearchSongs(ctx, qqSearchQueries(artist, title), title)
+	items, titleDegraded := qqSearchSongs(ctx, qqSearchQueries(artist, title), title)
 	if len(items) == 0 {
 		// 歌手名跨平台不一致时,退一步只按标题再搜(同样要带上去括号的那一版)
-		items = qqSearchSongs(ctx, searchTitleVariants(title), title)
+		var degraded bool
+		items, degraded = qqSearchSongs(ctx, searchTitleVariants(title), title)
+		titleDegraded = titleDegraded || degraded
 	}
 	// strict 档用 artistMatches(要求逗号/&等分隔的每一段都精确相等);strict 一无所获时
 	// 放宽成 looseContains 重试——但绝不完全跳过校验:完全不查歌手会让标题撞上、歌手完全
@@ -1098,7 +1102,7 @@ func resolveQQMusicMatch(ctx context.Context, artist, title, album string, durat
 	if album != "" {
 		best, haveBest, bestScore := qqPickCandidateWithAlbum(cands, artist, album, durationSecs, func(mid string) string { return qqSongAlbum(ctx, mid) })
 		if haveBest && bestScore > 0 {
-			return qqMatchFromCand(best, false)
+			return qqMatchFromCand(best, titleDegraded)
 		}
 		// 歌名维度找到了条目但**专辑证据为零**(smartbox 只回热门录音室版是常态——
 		// 周杰伦《龙拳 (Live)》案:它对 "周杰伦 龙拳" 恒只回八度空间那一条,The One 演唱会的
@@ -1111,7 +1115,7 @@ func resolveQQMusicMatch(ctx context.Context, artist, title, album string, durat
 		// 专辑维度也没有 → 回落到原有行为(标题精确同名但专辑对不上的那条)。专辑路线是
 		// 因网络失败(而非"确定没有")空手而回时,给回落结果打 unreliable,不让它进缓存。
 		if haveBest {
-			return qqMatchFromCand(best, viaAlbumDegraded)
+			return qqMatchFromCand(best, viaAlbumDegraded || titleDegraded)
 		}
 	}
 	// 无专辑 / 补专辑没命中 → 精确同名优先,否则第一条(smartbox 首条通常是规范版)。
@@ -1125,7 +1129,7 @@ func resolveQQMusicMatch(ctx context.Context, artist, title, album string, durat
 	if !ok {
 		return qqMusicMatch{}
 	}
-	return qqMatchFromCand(c, viaAlbumDegraded)
+	return qqMatchFromCand(c, viaAlbumDegraded || titleDegraded)
 }
 
 // ---- 专辑维度检索路线 ----
@@ -1545,6 +1549,17 @@ func resolveQQLyric(ctx context.Context, mid string) qqLyricResult {
 	return qqMusicuLineLyric(ctx, mid)
 }
 
+// qqLyricReplyAnswered:整行歌词接口的应答码是不是「问成了」。两个字段都没带的老形态照旧算问成;
+// 带了的只认 0(有)和 -1901(这首没词)。
+func qqLyricReplyAnswered(code, retcode *int) bool {
+	for _, c := range []*int{code, retcode} {
+		if c != nil && *c != 0 && *c != -1901 {
+			return false
+		}
+	}
+	return true
+}
+
 // resolveQQLyricAt 的 error 非 nil 只表示这次没问成(建请求 / 传输 / 非 200 / 读不出 / 不是 JSON),
 // 接口正常答了都走 nil。
 func resolveQQLyricAt(ctx context.Context, host, mid string) (qqLyricResult, error) {
@@ -1574,9 +1589,18 @@ func resolveQQLyricAt(ctx context.Context, host, mid string) (qqLyricResult, err
 		return qqLyricResult{}, errQQNotReached
 	}
 	var out struct {
-		Lyric string `json:"lyric"`
+		Lyric   string `json:"lyric"`
+		Code    *int   `json:"code"`
+		Retcode *int   `json:"retcode"`
 	}
 	if err := json.Unmarshal([]byte(s[i:j+1]), &out); err != nil {
+		return qqLyricResult{}, errQQNotReached
+	}
+	// 答了、但不是「有」(0)或「这首没词」(-1901,实测):风控 / 参数错这类拒绝同样是 HTTP 200 + 合法 JSON,
+	// 不当成「这首没词」—— 那样既不换主机、不退到 musicu,还被下游算成「QQ 已应答」,现存那份 QQ 歌词的
+	// 基准分跟着变成 0。
+	if !qqLyricReplyAnswered(out.Code, out.Retcode) {
+		reportEndpointRejected(req.URL)
 		return qqLyricResult{}, errQQNotReached
 	}
 	// 顺序要紧:占位判定必须在 isTimedLRC **之前**。QQ 的纯音乐占位只有一行带戳,
@@ -1614,9 +1638,10 @@ type qqSessionInfo struct {
 }
 
 var (
-	qqSessionMu   sync.Mutex
-	qqSessionInit bool
-	qqSessionVal  qqSessionInfo
+	qqSessionMu  sync.Mutex
+	qqSessionVal qqSessionInfo
+	// qqSessionAt:qqSessionVal 是什么时候拿到的;qqSessionFailedAt:上一次没拿到是什么时候(零值 = 没失败过)。
+	qqSessionAt, qqSessionFailedAt time.Time
 )
 
 var qqCommBase = map[string]any{
@@ -1698,7 +1723,7 @@ func qqMusicuPostAt(ctx context.Context, host string, raw []byte) (data json.Raw
 			Data json.RawMessage `json:"data"`
 		} `json:"request"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, qqResponseMaxBytes)).Decode(&out); err != nil {
 		return nil, false, err
 	}
 	if out.Code != 0 || out.Request.Code != 0 {
@@ -1708,20 +1733,31 @@ func qqMusicuPostAt(ctx context.Context, host string, raw []byte) (data json.Raw
 }
 
 // qqEnsureSession 懒加载一个匿名 session,失败就返回零值(调用方据此放弃这次 QRC
-// 尝试)。只真正尝试一次(用 qqSessionInit 卡住,不管成不成功),不做主动刷新/重试——
-// 跟 lrclib/kugou 现有代码同等的"失败就放弃、下次进程重启再试"哲学一致。
+// 尝试)。
+//
+// 只缓存拿到了的:原来第一次调用就把「试过了」钉死,不管成没成 —— 常驻 collector 开机登录时还没联网,
+// 或者第一次取 QRC 时那一轮 20 秒截止已经快到了,GetSession 一失败,这个进程之后所有 QQ 的逐字、
+// 译文、罗马音都是空的,直到重启。现在没拿到就隔 qqSessionRetryAfter 再试;拿到的用满 qqSessionMaxAge
+// 就换一个(sid 会过期,过期之后同样是整个进程取不到)。
+//
+// 请求用自己的超时,不跟调用方 ctx 的取消走(context.WithoutCancel,值照带):调用方那一轮快截止了,
+// 不该把「这个进程拿不到会话」这个结论也带进去。
 func qqEnsureSession(ctx context.Context) qqSessionInfo {
 	qqSessionMu.Lock()
 	defer qqSessionMu.Unlock()
-	if qqSessionInit {
+	now := time.Now()
+	if qqSessionVal.sid != "" && now.Sub(qqSessionAt) < qqSessionMaxAge {
 		return qqSessionVal
 	}
-	qqSessionInit = true
-	data, err := qqMusicuPost(ctx, "GetSession", "music.getSession.session", map[string]any{
-		"caller": 0, "uid": "0", "vkey": 0,
-	}, qqCommBase)
+	if !qqSessionFailedAt.IsZero() && now.Sub(qqSessionFailedAt) < qqSessionRetryAfter {
+		return qqSessionVal // 上一个(可能已过期的)照旧用着,没有就是零值
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqSessionTimeout)
+	defer cancel()
+	data, err := qqSessionFetch(sctx)
 	if err != nil {
-		return qqSessionInfo{}
+		qqSessionFailedAt = now
+		return qqSessionVal
 	}
 	var out struct {
 		Session struct {
@@ -1731,10 +1767,25 @@ func qqEnsureSession(ctx context.Context) qqSessionInfo {
 		} `json:"session"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil || out.Session.SID == "" {
-		return qqSessionInfo{}
+		qqSessionFailedAt = now
+		return qqSessionVal
 	}
 	qqSessionVal = qqSessionInfo{uid: out.Session.UID.String(), sid: out.Session.SID, userip: out.Session.UserIP}
+	qqSessionAt, qqSessionFailedAt = now, time.Time{}
 	return qqSessionVal
+}
+
+const (
+	qqSessionTimeout    = 6 * time.Second
+	qqSessionRetryAfter = 2 * time.Minute
+	qqSessionMaxAge     = 6 * time.Hour
+)
+
+// qqSessionFetch 可换,只为单测;生产路径永远是这一次 GetSession。
+var qqSessionFetch = func(ctx context.Context) ([]byte, error) {
+	return qqMusicuPost(ctx, "GetSession", "music.getSession.session", map[string]any{
+		"caller": 0, "uid": "0", "vkey": 0,
+	}, qqCommBase)
 }
 
 type qqSongMeta struct {
@@ -1820,7 +1871,11 @@ func decryptQRC(hexStr string) string {
 		return ""
 	}
 	defer zr.Close()
-	out, err := io.ReadAll(zr)
+	// 解压后的大小封顶,理由同 decryptKRCBytes。
+	out, err := io.ReadAll(io.LimitReader(zr, krcDecompressedMaxBytes+1))
+	if err == nil && len(out) > krcDecompressedMaxBytes {
+		return ""
+	}
 	if err != nil {
 		return ""
 	}
@@ -1847,13 +1902,21 @@ func decryptQRC(hexStr string) string {
 // 需要引号紧挨着 `/>`,歌词里不会有。
 var qrcContentRegex = regexp.MustCompile(`(?s)LyricContent="(.*)"\s*/>`)
 
-// extractQRCLyricContent 从解密后的 XML 里取出 LyricContent 属性值——用正则而非完整
-// XML 解析,因为外层 Lyric_N 标签名是动态的(N=LyricCount,实测目前只见过 1,但不想依赖
-// 这个假设),只关心这一个属性。XML 属性值里的字面 " 按规范必须转义成 &quot;,所以
-// (.*?) 非贪婪匹配到下一个 " 是安全的;再用 html.UnescapeString 反转义 &lt;/&gt;/
-// &amp; 等 XML 预定义实体,还原成真正的歌词正文。
+// extractQRCLyricContent 从解密后的 XML 里取出第一轨的 LyricContent 属性值——用正则而非完整
+// XML 解析:外层 Lyric_N 标签名是动态的,而且 QQ 不转义正文里的字面双引号(见 qrcContentRegex),标准
+// XML 解析器吃不下。先截到下一个 `<Lyric_` 之前再贪婪匹配:有好几轨(LyricCount>1)时,贪婪匹配会一路吞到
+// 最后一轨的 `"/>`,第二轨被当成正文一起转换。最后用 html.UnescapeString 反转义 &lt;/&gt;/&amp; 等
+// XML 预定义实体,还原成真正的歌词正文。
 func extractQRCLyricContent(xmlText string) string {
-	m := qrcContentRegex.FindStringSubmatch(xmlText)
+	start := strings.Index(xmlText, `LyricContent="`)
+	if start < 0 {
+		return ""
+	}
+	seg := xmlText[start:]
+	if next := strings.Index(seg, "<Lyric_"); next >= 0 {
+		seg = seg[:next]
+	}
+	m := qrcContentRegex.FindStringSubmatch(seg)
 	if m == nil {
 		return ""
 	}

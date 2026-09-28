@@ -368,6 +368,9 @@ func main() {
 	// 紧跟 import:lyrics/ 文件夹赢完之后改的才是权威内容;后面 export 把干净正文写回文件。
 	// 也要排在 migrateManualPickMarks 之前(那一步按最终正文算指纹)。
 	startupStep("migrateLyricEntities", migrateLyricEntities)
+	// 存量歌词的换行统一成 LF、去掉开头的 BOM(见 lyriclineendings.go),同样夹在 import 与 export 之间、
+	// 排在 migrateManualPickMarks 之前。
+	startupStep("migrateLyricLineEndings", migrateLyricLineEndings)
 	// 存量译文里腾讯系塞的版权 / 译者声明行(见 translationnotice.go),同样夹在 import 与 export 之间。
 	startupStep("migrateTranslationNotices", migrateTranslationNotices)
 	// 夹在 import 和 export 之间:见 invalidateStaleTranslations 的注释——前者让

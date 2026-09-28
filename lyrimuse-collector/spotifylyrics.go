@@ -351,27 +351,37 @@ func spotifyColorLyricsLRC(body []byte) (lrc string, recognized, ok bool) {
 	return b.String(), true, true
 }
 
-// spotifyLocalLyricsTrackID:这首在 Spotify 上的曲目 ID。先看换曲时记下的,再看歌词缓存条目里存的。
-// 调用方不持有 enrichMu。
-func spotifyLocalLyricsTrackID(artist, title string) string {
+// spotifyLocalLyricsTrackID:这首在 Spotify 上的曲目 ID,以及这个 ID 是哪张专辑那一条的(idAlbum)。先看换曲时
+// 记下的(就是这一首),再看歌词缓存条目里存的:专辑一致的那条优先,没有就取同名同歌手里 key 最小的那条 ——
+// 按 map 顺序取的话,录音室版和 Live 版各有一条时每次可能拿到不同的 ID。调用方不持有 enrichMu。
+func spotifyLocalLyricsTrackID(artist, title, album string) (id, idAlbum string) {
 	if id := spotifyTrackIDHintFor(artist, title); id != "" {
-		return id
+		return id, album
 	}
+	exact := enrichKey(artist, title, album)
 	prefix := enrichKey(artist, title, "")
 	enrichMu.Lock()
 	defer enrichMu.Unlock()
+	if e, ok := enrichCache[exact]; ok && e.SpotifyTrackID != "" {
+		return e.SpotifyTrackID, album
+	}
+	bestKey := ""
 	for k, e := range enrichCache {
-		if e.SpotifyTrackID != "" && strings.HasPrefix(k, prefix) {
-			return e.SpotifyTrackID
+		if e.SpotifyTrackID != "" && strings.HasPrefix(k, prefix) && (bestKey == "" || k < bestKey) {
+			bestKey, id = k, e.SpotifyTrackID
 		}
 	}
-	return ""
+	if bestKey == "" {
+		return "", ""
+	}
+	_, _, idAlbum = splitEnrichKey(bestKey)
+	return id, idAlbum
 }
 
 // spotifyLocalLyricsFor 给歌词检索用:缓存里有这首的逐行歌词就换成一份跟各歌词源同形的原始应答。
 // 调用方不持有 enrichMu。
-func spotifyLocalLyricsFor(artist, title string) (lyricSourceResult, bool) {
-	id := spotifyLocalLyricsTrackID(artist, title)
+func spotifyLocalLyricsFor(artist, title, album string) (lyricSourceResult, bool) {
+	id, idAlbum := spotifyLocalLyricsTrackID(artist, title, album)
 	if id == "" {
 		return lyricSourceResult{}, false
 	}
@@ -379,7 +389,8 @@ func spotifyLocalLyricsFor(artist, title string) (lyricSourceResult, bool) {
 	if !ok {
 		return lyricSourceResult{}, false
 	}
-	r := lyricSourceResult{source: spotifyLocalLyricsSource, lyr: lrc, matchTitle: title, matchArtist: artist}
+	// 取不到元数据时,专辑填这个 ID 实际所属的那一条的专辑(可能是另一个版本),不拿本地的冒充 —— 版本比对才看得出来。
+	r := lyricSourceResult{source: spotifyLocalLyricsSource, lyr: lrc, matchTitle: title, matchArtist: artist, matchAlbum: idAlbum}
 	if dir := spotifyActiveUserDir(); dir != "" {
 		if m, ok := spotifyResolveMeta(dir, []string{id})[id]; ok {
 			if m.title != "" {
@@ -466,7 +477,7 @@ var (
 // spotifyLocalLyricsAvailable:这首现在在 Spotify 缓存里有没有逐行歌词(给 spotifyLyricsWorthRecheck)。
 // 调用方不持有 enrichMu。
 func spotifyLocalLyricsAvailable(artist, title string) bool {
-	id := spotifyLocalLyricsTrackID(artist, title)
+	id, _ := spotifyLocalLyricsTrackID(artist, title, "")
 	if id == "" {
 		return false
 	}

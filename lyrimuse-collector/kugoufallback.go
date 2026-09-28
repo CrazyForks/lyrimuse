@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -85,7 +86,7 @@ func kugouGetAt(ctx context.Context, u string, v any) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(v)
+	return json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(v)
 }
 
 // kugouSearchSongs 搜一次歌:/api/v3/search/song(几个主机)→ songsearch。ok=false 是两套都没问成。

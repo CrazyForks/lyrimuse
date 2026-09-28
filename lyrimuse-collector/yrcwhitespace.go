@@ -70,7 +70,8 @@ func yrcMergeWhitespaceTokens(yrc string) (string, bool) {
 			toks = append(toks, tok{start, dur, flag, prefix + text})
 			prefix = ""
 		}
-		if !lineChanged {
+		// 整行都是空白词条(没有一个真正的词可以并过去):原样留着,不把它写成只剩行头的一行。
+		if !lineChanged || len(toks) == 0 {
 			continue
 		}
 		var b strings.Builder

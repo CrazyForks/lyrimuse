@@ -9,6 +9,7 @@
     "source_duration_delta_pct": 0.08334774304133685,
     "lyrics_end_secs": 193.29,
     "coverage_pct": 97.04969705903287,
+    "ending_corroborated": false,
     "album_score": 3,
     "live_mismatch": false,
     "cache_agreement": "exact"
@@ -284,6 +285,6 @@
         ]
       }
     ],
-    "winner_fingerprint": "5c21c305c115b564"
+    "winner_fingerprint": "e0b0ca34aa869a9e"
   }
 }

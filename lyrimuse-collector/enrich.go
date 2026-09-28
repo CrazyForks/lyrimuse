@@ -655,7 +655,11 @@ func trackEnrichment(artist, title, album, bundleID string, durationSecs float64
 		wrongDuration := observeWrongDuration(key,
 			durationMismatch(e.ResolvedDurationSecs, durationSecs), durationSecs, time.Now().Unix())
 		// 正在播的是 MV、而这份歌词当初是按视频时长选的:跟 wrongDuration 同一个理由重来一次(见 musicvideolyrics.go)。
-		if musicVideoLyricsStaleLocked(hintKey, e) {
+		// 这一拍放的不是 MV(MV 交给歌词解析的时长是 0):之前记下的视频时长提示不再适用,清掉 —— 留着的话放音频版时
+		// 仍会越过 observeWrongDuration 的去抖直接判时长不符,MV 跟歌曲只差一两秒时本来选对的词也要白重来一次。
+		if durationSecs > 0 {
+			delete(musicVideoDurationHints, hintKey)
+		} else if musicVideoLyricsStaleLocked(hintKey, e) {
 			wrongDuration = true
 		}
 		// 一次只跑一路后台任务(都会重新取锁改同一条记录),下次播放时轮到下一个。
@@ -4581,7 +4585,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 			raw[kkboxLocalLyricsSource] = r
 		}
 		// Spotify 本地歌词同理(Musixmatch 的备用管道,见 spotifylyrics.go),不看当前播放器:按曲目 ID 找得到就放。
-		if r, ok := spotifyLocalLyricsFor(artist, title); ok {
+		if r, ok := spotifyLocalLyricsFor(artist, title, album); ok {
 			raw[spotifyLocalLyricsSource] = r
 		}
 	}

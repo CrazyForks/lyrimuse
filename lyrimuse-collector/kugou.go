@@ -72,11 +72,13 @@ func kugouLyric(ctx context.Context, artist, title, album string, durationSecs f
 
 	// 先问酷狗客户端自己的本地缓存 —— 命中就省掉整条网络链路,而且拿到的是它为用户
 	// 正在听的那一版下的那一份歌词(见 kugoulocal.go)。没命中照常走网络。
+	ctx, sub := withLyricSubFetch(ctx)
 	r, ok := kugouLocalLyric(artist, title, album)
 	if !ok {
 		r = resolveKugouLyric(ctx, artist, title, album, durationSecs)
 	}
-	if r.lrc != "" {
+	// 逐字那一趟没问成的不缓存,见 lyricsubfetch.go。
+	if r.lrc != "" && sub.complete(ctx) {
 		kugouMu.Lock()
 		kugouCache[key] = r
 		kugouMu.Unlock()
@@ -114,12 +116,16 @@ func decryptKRCBytes(raw []byte) string {
 		return ""
 	}
 	defer zr.Close()
-	out, err := io.ReadAll(zr)
-	if err != nil {
+	// 解压后的大小要封顶:这条下载走的是明文 http,中途被塞一个压缩炸弹就能把进程内存吃光。
+	out, err := io.ReadAll(io.LimitReader(zr, krcDecompressedMaxBytes+1))
+	if err != nil || len(out) > krcDecompressedMaxBytes {
 		return ""
 	}
 	return string(out)
 }
+
+// krcDecompressedMaxBytes 一份 KRC 解压后的上限。真实的逐字歌词几十 KB,8 MB 留足了余量。
+const krcDecompressedMaxBytes = 8 << 20
 
 var (
 	krcLineRegex = regexp.MustCompile(`^(\[(\d+),\d+\])(.*)$`)
@@ -398,7 +404,11 @@ func resolveKugouLyric(ctx context.Context, artist, title, album string, duratio
 		Content string `json:"content"`
 	}
 	krcDlURL := fmt.Sprintf("http://lyrics.kugou.com/download?ver=1&client=pc&id=%s&accesskey=%s&fmt=krc&charset=utf8", c.ID, c.AccessKey)
-	if err := kugouGet(ctx, krcDlURL, &krcDl); err == nil && krcDl.Content != "" {
+	err = kugouGet(ctx, krcDlURL, &krcDl)
+	if err != nil {
+		noteLyricSubFetchFailure(ctx)
+	}
+	if err == nil && krcDl.Content != "" {
 		if decrypted := decryptKRC(krcDl.Content); decrypted != "" {
 			// `[language:<base64>]` 那一行先摘出来(它是译文/罗马音两轨的载体,8~12KB 的
 			// base64,原样留在逐字数据里只是一行 App 读不懂的垃圾、还会随 .yrc 导出),剩余

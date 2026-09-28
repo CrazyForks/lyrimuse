@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -122,9 +123,21 @@ var (
 	sodaLastFailure string
 
 	// 搜索结果按"这一首歌的身份"缓存:同一首歌在别名轮/升级重试里会被问到好几次,
-	// 没必要每次都重搜。存的是过完身份闸的 id 名次表,可能是空切片(= 搜过、没有匹配的)。
+	// 没必要每次都重搜。存的是**原始**搜索结果,名次每次按这一次的时长现排(sodaRankCandidates 用时长过滤,
+	// 第一次时长为 0 的话缓存下来的是没过时长那道的名次)。有有效期:搜过、一条都没有的只记 sodaSearchEmptyTTL,
+	// 新上架的歌不用等进程重启才搜得到。
 	sodaSearchMu    sync.Mutex
-	sodaSearchCache = map[string][]string{}
+	sodaSearchCache = map[string]sodaSearchCacheEntry{}
+)
+
+type sodaSearchCacheEntry struct {
+	items []sodaSearchItem
+	at    time.Time
+}
+
+const (
+	sodaSearchTTL      = 24 * time.Hour
+	sodaSearchEmptyTTL = 30 * time.Minute
 )
 
 func sodaSetLastFailureReason(reason string) {
@@ -169,21 +182,28 @@ func sodaLyric(ctx context.Context, artist, title, album string, durationSecs fl
 
 // sodaLyricBySearch 搜索兜底:身份闸淘汰后按名次依次试,拿到带词的那条就收工。
 func sodaLyricBySearch(ctx context.Context, artist, title, album string, durationSecs float64) (sodaResult, bool) {
-	key := artist + "|" + title + "|" + album
+	key := artist + "|" + title
+	now := time.Now()
 	sodaSearchMu.Lock()
-	ids, ok := sodaSearchCache[key]
+	cached, ok := sodaSearchCache[key]
 	sodaSearchMu.Unlock()
-	if !ok {
-		items, err := sodaSearch(ctx, artist, title)
+	ttl := sodaSearchTTL
+	if len(cached.items) == 0 {
+		ttl = sodaSearchEmptyTTL
+	}
+	items := cached.items
+	if !ok || now.Sub(cached.at) >= ttl {
+		var err error
+		items, err = sodaSearch(ctx, artist, title)
 		if err != nil {
 			log.Printf("soda: search for %q - %q failed: %v", artist, title, err)
 			return sodaResult{}, false
 		}
-		ids = sodaRankCandidates(items, artist, title, album, durationSecs)
 		sodaSearchMu.Lock()
-		sodaSearchCache[key] = ids
+		sodaSearchCache[key] = sodaSearchCacheEntry{items: items, at: now}
 		sodaSearchMu.Unlock()
 	}
+	ids := sodaRankCandidates(items, artist, title, album, durationSecs)
 	// 一条都没通过身份闸 = 汽水没有这首歌(或只有对不上的版本),是正常结果,不报故障。
 	var lastNoLyrics bool
 	for i, id := range ids {
@@ -264,7 +284,7 @@ func sodaFetchSeoTrackAt(ctx context.Context, host, trackID string) (res sodaRes
 		return sodaResult{}, false, false, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	var body sodaSeoTrackResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(&body); err != nil {
 		return sodaResult{}, false, false, err
 	}
 	r, noLyrics, broken := sodaParseSeoTrack(body)
@@ -505,7 +525,7 @@ func sodaSearch(ctx context.Context, artist, title string) ([]sodaSearchItem, er
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	var body sodaSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, lyricSourceResponseMaxBytes)).Decode(&body); err != nil {
 		return nil, err
 	}
 	return sodaParseSearch(body), nil

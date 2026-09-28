@@ -223,12 +223,13 @@ func albumTracks(artist, title, album, bundleID string) ([]albumTrack, bool) {
 			return tracks, true
 		}
 	}
-	// 复用解析歌词时那次搜索的结果 —— neteaseLookup 带 30 天缓存,当前这首歌刚解析过,
-	// 这里是缓存命中、零网络;拿到的 AlbumID 是**这首歌自己所属**的那张专辑。缓存命中
-	// 路径不会真的发请求,没有可取消的对象,context.Background() 就够。
-	// durationSecs 传 0:这条路径查的是"这首歌属于哪张专辑"(要 AlbumID),时长锚定档
-	// 用不上也不该用 —— 预取时还没有真实播放时长。
-	ne := neteaseLookup(context.Background(), artist, title, album, 0)
+	// 复用解析歌词时那次搜索的结果 —— 当前这首歌刚按真实时长解析过,neteaseCachedLookup 不看缓存 key 里的时长,
+	// 这里是缓存命中、零网络;拿到的 AlbumID 是**这首歌自己所属**的那张专辑。缓存里没有(还没解析完、网易云这一路
+	// 关着)才真的去查一次,durationSecs 传 0:这条路径查的是"这首歌属于哪张专辑",预取时还没有真实播放时长。
+	ne, cached := neteaseCachedLookup(artist, title, album)
+	if !cached {
+		ne = neteaseLookup(context.Background(), artist, title, album, 0)
+	}
 	if ne.AlbumID <= 0 {
 		return nil, false
 	}
@@ -252,7 +253,7 @@ func albumTracks(artist, title, album, bundleID string) ([]albumTrack, bool) {
 		log.Printf("album prefetch: netease album %q != local %q, skipping", ne.Album, album)
 		return nil, false
 	}
-	tracks, ok := neteaseAlbumTracks(ne.AlbumID)
+	tracks, ok := neteaseAlbumTracks(context.Background(), ne.AlbumID)
 	if ok && bundleID == kkboxBundleID {
 		tracks = kkboxAlbumTrackArtists(tracks, artist)
 	}

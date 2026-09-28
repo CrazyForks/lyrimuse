@@ -47,14 +47,17 @@ func miguFetchMRCYRC(ctx context.Context, url string) string {
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := doHTTPTracked(lyricHTTPClient(6*time.Second), req)
 	if err != nil {
+		noteLyricSubFetchFailure(ctx)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		noteLyricSubFetchFailure(ctx)
 		return ""
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, miguMRCMaxSize))
 	if err != nil {
+		noteLyricSubFetchFailure(ctx)
 		return ""
 	}
 	mrc, err := miguDecryptMRC(string(body))

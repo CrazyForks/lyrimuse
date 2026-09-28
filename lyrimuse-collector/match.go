@@ -8,6 +8,7 @@ import (
 	_ "image/png"  // 网易云取色缩略图有时是 PNG(content-type 却谎报 jpg)
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,26 +16,48 @@ import (
 	"unicode/utf8"
 )
 
-var lrcTimestampRe = regexp.MustCompile(`\[\d{1,2}:\d{2}[.:]\d{1,3}\]`)
-var lrcTimestampCaptureRe = regexp.MustCompile(`\[(\d{1,2}):(\d{2})[.:](\d{1,3})\]`)
+// 小数部分可选:`[mm:ss]` 也是合法的 LRC 时间戳,App 的 LRCParser 同样认。要求小数的话只用这种写法的歌词
+// 整份被判成「没有时间戳」,重挂、平移、曲长端点也都看不到这些行。
+var lrcTimestampRe = regexp.MustCompile(`\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]`)
+var lrcTimestampCaptureRe = regexp.MustCompile(`\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]`)
 
 // isTimedLRC reports whether s is genuinely逐行加了时间戳的 LRC 歌词，而不是网易云/
 // QQ 音乐偶尔返回的"纯文本歌词"——后者可能带 [Verse 1]/[Chorus] 这类段落标签,或者只有
 // 开头一行作词/作曲 credit 信息被打了个孤立时间戳,其余全是无时间戳纯文本,单看"字符串
 // 里有没有方括号"区分不出这两者。要求至少 3 行、且过半的行真的带 [mm:ss.xx] 格式时间戳,
 // 才认为是可用的逐行 LRC。
+//
+// 空行不进分母:「每句之间空一行」的 LRC 一半是空行,算进去就判成没有时间戳。时间戳还要至少有三个
+// 不同的值:整份都挂同一个时间戳(QQ 偶尔回一份全 `[00:00.00]` 的歌词)实际上是纯文本,当成逐行
+// 歌词会一句都对不上,却照样拿行数、专辑、标题的分跟真歌词竞争。
 func isTimedLRC(s string) bool {
 	if s == "" || len(s) >= 20000 {
 		return false
 	}
-	lines := strings.Split(s, "\n")
-	timedLines := 0
-	for _, l := range lines {
-		if lrcTimestampRe.MatchString(l) {
-			timedLines++
+	nonEmpty, timedLines := 0, 0
+	distinct := map[int]bool{}
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		nonEmpty++
+		m := lrcTimestampCaptureRe.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		timedLines++
+		if len(distinct) < 3 {
+			distinct[lrcCaptureMs(m)] = true
 		}
 	}
-	return timedLines >= 3 && timedLines*2 >= len(lines)
+	return timedLines >= 3 && timedLines*2 >= nonEmpty && len(distinct) >= 3
+}
+
+// lrcCaptureMs 把 lrcTimestampCaptureRe 的一个匹配换算成毫秒。
+func lrcCaptureMs(m []string) int {
+	mm, _ := strconv.Atoi(m[1])
+	ss, _ := strconv.Atoi(m[2])
+	return (mm*60+ss)*1000 + lrcFracMs(m[3])
 }
 
 // cjkRatio 是去掉时间戳标签后,歌词正文里中日韩表意文字(\p{Han})占非空白字符的比例。
@@ -172,7 +195,9 @@ const neteaseInstrumentalPlaceholderMarker = "纯音乐"
 // 几行真正在唱的词。去掉时间戳和 credit 行之后,剩余非空行少于 3 行就判定为"只有
 // credit,没有正文"。
 func isCreditOnlyLRC(lrc string) bool {
-	if strings.Contains(lrc, neteaseInstrumentalPlaceholderMarker) {
+	// 按行判占位文案(除了署名行只剩「纯音乐」占位),不在整份文本里找这三个字:真歌词的某一句、或者
+	// `[al:…纯音乐…]` 这种元数据行里出现它们,整份候选就会被判废。
+	if isInstrumentalPlaceholderLyric(lrc) {
 		return true
 	}
 	// 演唱者标签行不算 credit(见 lyricspeaker.go):一首每句都带「男：/女：」
@@ -205,26 +230,33 @@ func isCreditOnlyLRC(lrc string) bool {
 // simevaltimeline_test.go 头注早就记着《Purple Rain》「[08:36.866] 人声 : Prince」同款。
 // 正文共识(lyricConsensusBody)剔署名行、时长端点不剔,两处口径本就该一致。演唱者标签
 // (男：/女：)不算署名,理由见 lyricspeaker.go。
+//
+// 取的是**所有**够格行里**所有**时间戳的最大值,不是最后一行的最后一个:网易云有「一行挂多个时间戳」的
+// 压缩 LRC(重复的副歌只写一次),行内时间戳还可能是倒序的(`[02:40.82][01:15.68]`),最后一个物理行
+// 也不一定是最晚唱的那句。只看最后一行会把曲末算早几十秒,时长项白吃一大截。
 func lastLRCTimestampSecs(lrc string) (float64, bool) {
-	lines := strings.Split(lrc, "\n")
 	speakers := lyricSpeakerLabels(lrc)
-	for i := len(lines) - 1; i >= 0; i-- {
-		matches := lrcTimestampCaptureRe.FindAllStringSubmatch(lines[i], -1)
+	best, found := 0.0, false
+	for _, line := range strings.Split(lrc, "\n") {
+		matches := lrcTimestampCaptureRe.FindAllStringSubmatch(line, -1)
 		if len(matches) == 0 {
 			continue
 		}
-		text := strings.TrimSpace(lrcTimestampRe.ReplaceAllString(lines[i], ""))
+		text := strings.TrimSpace(lrcTimestampRe.ReplaceAllString(line, ""))
 		if text == "" || isRelaxedCreditLine(text, speakers) {
 			continue
 		}
-		m := matches[len(matches)-1]
-		mm, _ := strconv.Atoi(m[1])
-		ss, _ := strconv.Atoi(m[2])
-		frac, _ := strconv.Atoi(m[3])
-		fracSecs := float64(frac) / math.Pow(10, float64(len(m[3])))
-		return float64(mm*60+ss) + fracSecs, true
+		for _, m := range matches {
+			mm, _ := strconv.Atoi(m[1])
+			ss, _ := strconv.Atoi(m[2])
+			frac, _ := strconv.Atoi(m[3])
+			secs := float64(mm*60+ss) + float64(frac)/math.Pow(10, float64(len(m[3])))
+			if !found || secs > best {
+				best, found = secs, true
+			}
+		}
 	}
-	return 0, false
+	return best, found
 }
 
 // lyricCandidate 是某个歌词源解析出的一份候选结果,连同来源标记。
@@ -445,7 +477,7 @@ const lyricOvershootToleranceSecs = 5.0
 // 当前维度、权重与每一版改动的真实案例/全库回放证据,记在
 // docs/features/09-lyrics-resolution.md 的打分维度表与「设计决策与已知坑」决策日志
 // (按版本号可查,如决策 31/33/36/43/44/49/50/58/64/69/82)——这里不重复。
-const lyricsScoringVersion = 24
+const lyricsScoringVersion = 25
 
 // scoreTerm 是打分里的一项。只带**机器可读的类型**和分值,文案交给界面本地化 ——
 // App 有中英两套界面,从这里吐中文字符串会让英文用户看到一串中文。
@@ -1291,8 +1323,12 @@ func firstSlashCredit(s string) (string, bool) {
 // 简体"周杰伦",不折算就判成两个不同的人,一条确认有效的候选被整条拒收)。只转字符形式,
 // 不做 normLoose 那样的标点剥离,防仿冒精度不受影响——"周杰伦-"折算后仍是"周杰伦-",
 // 跟"周杰伦"依旧不相等。
+//
+// 变音也折叠(foldDiacritics,同 normLoose):「Beyoncé」对「Beyonce」、「Elley Duhé」对「Elley Duhe」是同一个人。
+// 折完仍然逐字节比,不碰标点,防仿冒的精度不变。
 func artistMatches(a, b string) bool {
-	na, nb := strings.TrimSpace(strings.ToLower(toSimplified(a))), strings.TrimSpace(strings.ToLower(toSimplified(b)))
+	na := strings.TrimSpace(strings.ToLower(foldDiacritics(toSimplified(a))))
+	nb := strings.TrimSpace(strings.ToLower(foldDiacritics(toSimplified(b))))
 	if na == "" || nb == "" {
 		return false
 	}
@@ -1332,10 +1368,14 @@ func artistMatches(a, b string) bool {
 	// (如"周杰伦-"/"周杰伦、"),跟括号别名是两种形状——括号内容是同一个人的补充说明(外文名/
 	// 罗马字),不是伪装成另一个人的诱饵;这正是括号在 lyricTitleAccepted 里已经被同等信任的
 	// 理由,这里只是把同一份信任延伸到艺人名。
-	if sa := stripParens(na); sa != na && sa != "" && artistMatches(sa, nb) {
+	//
+	// 这一处只认半角括号(stripHalfWidthParens),不跟 stripParens 一起扩到全角:QQ 给韩国艺人的
+	// 署名常写成「Jennie（제니）」,放它进严格档之后,时长未知时专辑名更像的另一版本会顶掉正确的那条
+	// (金标 ko-fallen-angel-qq)。全角括号那次修的是歌名里的版本限定词,艺人这边的口径没动。
+	if sa := stripHalfWidthParens(na); sa != na && sa != "" && artistMatches(sa, nb) {
 		return true
 	}
-	if sb := stripParens(nb); sb != nb && sb != "" && artistMatches(na, sb) {
+	if sb := stripHalfWidthParens(nb); sb != nb && sb != "" && artistMatches(na, sb) {
 		return true
 	}
 	return false
@@ -1427,7 +1467,7 @@ func lyricSourceArtistMatches(candidate, query string) bool {
 	if artistMatches(candidate, query) {
 		return true
 	}
-	pc, pq := artistCreditParts(candidate), artistCreditParts(query)
+	pc, pq := artistCreditParts(foldDiacritics(candidate)), artistCreditParts(foldDiacritics(query))
 	if len(pc) < 2 || len(pq) < 2 {
 		return false
 	}
@@ -1870,7 +1910,9 @@ var albumStop = map[string]bool{
 // 的子串匹配仍然必要,见那边注释。
 func albumTokens(s string) map[string]bool {
 	out := map[string]bool{}
-	s = strings.ToLower(s)
+	// 繁简、变音先折叠,跟 albumScore 前两档用的 normLoose 同一个口径:不折的话「低等動物」对「低等动物」
+	// 在前两档算一回事、到词元档又一个共享词都没有。
+	s = strings.ToLower(foldDiacritics(toSimplified(s)))
 	var cur []rune
 	const (
 		kindNone = iota
@@ -1956,13 +1998,24 @@ func albumScore(candidate, target string) int {
 // carry noisy suffixes like "(with Akon)", "[feat. X]", "(Radio Edit)" that hurt
 // NetEase search recall and exact-name matching; the bare title matches better.
 func stripParens(s string) string {
+	return stripBrackets(s, isOpenBracket, isCloseBracket)
+}
+
+// stripHalfWidthParens 同 stripParens,只认半角括号。用在哪、为什么见 artistMatches 末尾那段。
+func stripHalfWidthParens(s string) string {
+	return stripBrackets(s,
+		func(r rune) bool { return r == '(' || r == '[' || r == '{' },
+		func(r rune) bool { return r == ')' || r == ']' || r == '}' })
+}
+
+func stripBrackets(s string, open, closing func(rune) bool) string {
 	var b strings.Builder
 	depth := 0
 	for _, r := range s {
-		switch r {
-		case '(', '[', '{':
+		switch {
+		case open(r):
 			depth++
-		case ')', ']', '}':
+		case closing(r):
 			if depth > 0 {
 				depth--
 			}
@@ -2173,11 +2226,13 @@ var distinctRecordingVersionTags = []string{
 	"dj mix", "continuous mix",
 }
 
-// wordOnlyVersionTags:distinctRecordingVersionTags 里只能按**整词**匹配、不能按子串匹配的那几个。
-// titleVersionTags 对拉丁词一直用子串(好处是 "remixes"/"remixed" 都能命中 "remix"),但 "edit"
-// 是 "edition" 的前缀,子串匹配会误伤 Deluxe Edition 这一大类专辑名。segmentVersionTags 本来就是
-// 词元级的,这里复用它。
-var wordOnlyVersionTags = map[string]bool{"edit": true}
+// versionTagWordForms:拉丁限定词除了原形还认哪几种词形。titleVersionTags 原来对拉丁词用子串匹配,
+// "remixes"/"remixed" 自然命中 remix;改成按词匹配(见 titleVersionTags)之后在这里显式列出。
+// 别的派生词(Lively、Demolition、Liverpool、Edition)一律不认。
+var versionTagWordForms = map[string][]string{
+	"remix": {"remixes", "remixed"},
+	"demo":  {"demos"},
+}
 
 // versionTagAliases:同一种版本声明的不同写法 → 规范键。
 //
@@ -2257,6 +2312,73 @@ func isContinuousMixSegment(normalized string) bool {
 	return normalized == "mixed"
 }
 
+// versionTagTokens 把一段限定词切成词元:先按 normLoose 的口径折叠(繁简、变音、小写),非字母数字处断开,
+// 数字与字母交界、拉丁与中日韩交界也断开 —— 候选里真有「2011Live」这种粘连写法(同 albumTokens)。
+func versionTagTokens(seg string) []string {
+	const (
+		kindNone = iota
+		kindDigit
+		kindLatin
+		kindCJK
+	)
+	var toks []string
+	var cur []rune
+	prev := kindNone
+	flush := func() {
+		if len(cur) > 0 {
+			toks = append(toks, string(cur))
+			cur = cur[:0]
+		}
+	}
+	for _, r := range foldDiacritics(strings.ToLower(toSimplified(seg))) {
+		k := kindNone
+		switch {
+		case unicode.IsDigit(r):
+			k = kindDigit
+		case unicode.IsLetter(r):
+			if isCJKRune(r) {
+				k = kindCJK
+			} else {
+				k = kindLatin
+			}
+		}
+		if k == kindNone {
+			flush()
+			prev = kindNone
+			continue
+		}
+		if prev != kindNone && k != prev {
+			flush()
+		}
+		cur = append(cur, r)
+		prev = k
+	}
+	flush()
+	return toks
+}
+
+// tokensContainVersionTag:词元序列里有没有连续几个词正好拼成这个拉丁限定词(最后一个词可以是
+// versionTagWordForms 里列的词形)。
+func tokensContainVersionTag(toks []string, tag string) bool {
+	tagToks := strings.Fields(tag)
+	last := len(tagToks) - 1
+	for i := 0; i+len(tagToks) <= len(toks); i++ {
+		match := true
+		for j, tt := range tagToks {
+			w := toks[i+j]
+			if w == tt || (j == last && slices.Contains(versionTagWordForms[tt], w)) {
+				continue
+			}
+			match = false
+			break
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // titleVersionTags 抽出歌名里的版本限定词。**只在"限定词该出现的位置"里找**——括号/方括号
 // 里的段落,以及最后一个 " - " 之后的段落。不能对整个歌名做子串匹配:那样 "Live and Let
 // Die" 会被当成 live 版、"Demolition" 会命中 demo,全是假阳性。
@@ -2267,14 +2389,14 @@ func titleVersionTags(title string) map[string]bool {
 		if n == "" {
 			continue
 		}
-		var wordTags map[string]bool
+		// 拉丁限定词按**词**匹配:normLoose 把空格标点全挤掉之后再找子串,"(Come Alive)"、"(feat. Clive)"
+		// 里凭空冒出 live,"(feat. Demons)" 冒出 demo,"(Deluxe Edition)" 冒出 edit —— 这里是扣 -600 的
+		// 那道闸,误判的代价最大。中文限定词没有词间空格,照旧在 normLoose 之后找子串(同 segmentVersionTags)。
+		toks := versionTagTokens(seg)
 		for _, tag := range distinctRecordingVersionTags {
 			// 集合里放规范键(canonicalVersionTag),不放词表原文:「现场」和 live 是同一个版本声明。
-			if wordOnlyVersionTags[tag] {
-				if wordTags == nil {
-					wordTags = segmentVersionTags(seg)
-				}
-				if wordTags[canonicalVersionTag(tag)] {
+			if isASCIITag(tag) {
+				if tokensContainVersionTag(toks, tag) {
 					out[canonicalVersionTag(tag)] = true
 				}
 				continue
@@ -2294,6 +2416,26 @@ func titleVersionTags(title string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// isOpenBracket / isCloseBracket:歌名里算括号的字符。全角的 （）【】［］｛｝ 也算 —— 中文平台和 Apple 的
+// 中文曲名大量用全角括号写限定词(「憂愁（Live in summer）」),只认半角的话版本限定词、语种声明、标题闸
+// 对它们全部失效:本地全角、候选半角时正确的现场版被判版本不符,反过来现场版冒充录音室版也不扣分。
+// 跟 enrichKeyTrailingBracket 认的是同一批括号。
+func isOpenBracket(r rune) bool {
+	switch r {
+	case '(', '[', '{', '（', '【', '［', '｛':
+		return true
+	}
+	return false
+}
+
+func isCloseBracket(r rune) bool {
+	switch r {
+	case ')', ']', '}', '）', '】', '］', '｝':
+		return true
+	}
+	return false
 }
 
 // titleQualifierSegments 是歌名里「限定词该出现的位置」:每一段括号内容,加上最后一个 " - "
@@ -2316,14 +2458,14 @@ func parentheticalSegments(s string) []string {
 	var cur strings.Builder
 	depth := 0
 	for _, r := range s {
-		switch r {
-		case '(', '[', '{':
+		switch {
+		case isOpenBracket(r):
 			depth++
 			if depth == 1 {
 				cur.Reset()
 				continue
 			}
-		case ')', ']', '}':
+		case isCloseBracket(r):
 			if depth > 0 {
 				depth--
 				if depth == 0 {
@@ -3345,11 +3487,14 @@ func segmentVersionTags(seg string) map[string]bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	joined := strings.Join(toks, "")
+	// 中文限定词的子串匹配先繁简折叠:词表是简体,「(現場)」不折的话认不出,跟 titleVersionTags
+	// (走 normLoose,带繁简)判断不一致。
+	simplifiedJoined := toSimplified(joined)
 	out := map[string]bool{}
 	for _, tag := range distinctRecordingVersionTags {
 		// 同 titleVersionTags:集合里放规范键。
 		if !isASCIITag(tag) {
-			if strings.Contains(joined, tag) {
+			if strings.Contains(simplifiedJoined, tag) {
 				out[canonicalVersionTag(tag)] = true
 			}
 			continue
@@ -3539,8 +3684,16 @@ func bilingualTitleEqual(a, b string) bool {
 	if !containsHan(short) {
 		return false
 	}
-	for _, r := range long[len(short):] {
+	tail := long[len(short):]
+	for _, r := range tail {
 		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	// 尾巴正好是一个版本限定词(「稻香 Live」「稻香 Remix」这种不带括号的写法)时那是另一个版本,
+	// 不是英文别名。
+	for _, tag := range distinctRecordingVersionTags {
+		if isASCIITag(tag) && tail == normLoose(tag) {
 			return false
 		}
 	}
@@ -3586,19 +3739,16 @@ func usableYRC(lyrics, yrc string) string {
 	return yrc
 }
 
-// lastLRCTimestampMs 返回整行歌词里最后一个时间戳(毫秒)。
+// lastLRCTimestampMs 返回整行歌词里最晚的时间戳(毫秒)。行首连着的几个时间戳都看(压缩 LRC 一行挂好几个,
+// 顺序不保证),见 lastLRCTimestampSecs。
 func lastLRCTimestampMs(lyrics string) int {
 	best := 0
 	for _, line := range strings.Split(lyrics, "\n") {
-		m := lrcLineTimeRegex.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		mm, _ := strconv.Atoi(m[1])
-		ss, _ := strconv.Atoi(m[2])
-		ms := (mm*60+ss)*1000 + lrcFracMs(m[3])
-		if ms > best {
-			best = ms
+		head := lrcLeadingTimeTagsRegex.FindString(line)
+		for _, m := range lrcTimestampCaptureRe.FindAllStringSubmatch(head, -1) {
+			if ms := lrcCaptureMs(m); ms > best {
+				best = ms
+			}
 		}
 	}
 	return best
@@ -3622,6 +3772,8 @@ func lastYRCTimestampMs(yrc string) int {
 }
 
 var (
-	lrcLineTimeRegex = regexp.MustCompile(`^\[(\d+):(\d+)[.:](\d+)\]`)
-	yrcLineTimeRegex = regexp.MustCompile(`^\[(\d+),(\d+)\]`)
+	lrcLineTimeRegex = regexp.MustCompile(`^\[(\d+):(\d+)(?:[.:](\d+))?\]`)
+	// lrcLeadingTimeTagsRegex:行首连着的那一串时间戳(中间可以有空白)。
+	lrcLeadingTimeTagsRegex = regexp.MustCompile(`^(?:\s*\[\d+:\d+(?:[.:]\d+)?\])+`)
+	yrcLineTimeRegex        = regexp.MustCompile(`^\[(\d+),(\d+)\]`)
 )

@@ -357,6 +357,38 @@ func neteaseLookup(ctx context.Context, artist, title, album string, durationSec
 	return withholdImpersonatorRiddenIdentity(artist, neteaseLookupAll(ctx, artist, title, album, durationSecs))
 }
 
+// neteaseCachedLookup 只读 neteaseLookupAll 的缓存、不发请求,不看缓存 key 里时长那一段(取还在有效期里的、key 最小的
+// 那条),出口同 neteaseLookup 按艺人扣字段。给专辑预取用:当前这首刚按真实时长解析过,预取却不知道时长 —— 按时长 0
+// 的 key 永远命中不了,原来每换一张专辑就白发一整套网易云请求(网易云最容易被限流),还因为时长锚定档关着,
+// 正常播放时靠锚定档才找到的曲目这里拿不到 AlbumID。
+func neteaseCachedLookup(artist, title, album string) (neteaseInfo, bool) {
+	prefix := artist + "|" + title + "|" + album + "|"
+	now := time.Now().Unix()
+	neteaseMu.Lock()
+	bestKey := ""
+	var best neteaseInfo
+	for k, e := range neteaseCache {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		ttl := int64(neteaseCacheTTL / time.Second)
+		if e.info.Cover == "" {
+			ttl = int64(neteaseCacheTTLNoCover / time.Second)
+		}
+		if now-e.ts >= ttl {
+			continue
+		}
+		if bestKey == "" || k < bestKey {
+			bestKey, best = k, e.info
+		}
+	}
+	neteaseMu.Unlock()
+	if bestKey == "" {
+		return neteaseInfo{}, false
+	}
+	return withholdImpersonatorRiddenIdentity(artist, best), true
+}
+
 // withholdImpersonatorRiddenIdentity 对"版权整体下架、曲库里只剩仿冒号"的艺人
 // (见 isNeteaseImpersonatorRidden)只保留**歌词族**字段,把身份/封面/跳转链接/专辑 id
 // 全部扣下 —— 净效果跟这道防线原来那种"整源跳过"逐条一致(Cover 空 → 不写
@@ -431,10 +463,15 @@ func neteaseLookupAll(ctx context.Context, artist, title, album string, duration
 	}
 	neteaseMu.Unlock()
 
+	ctx, sub := withLyricSubFetch(ctx)
 	info := resolveNeteaseInfo(ctx, artist, title, album, durationSecs)
 	// 只缓存"拿到实质内容"的结果:找到歌但封面+歌词都空(多半被限流)不缓存,以免遮蔽
 	// enrich 的短 TTL 自愈——否则下次重解析命中这份空缓存、永远补不回封面/歌词。
-	if info.SongURL != "" && (info.Cover != "" || info.Lyrics != "") {
+	//
+	// 取词、取逐字哪一趟没问成也不缓存(sub.complete,见 lyricsubfetch.go):封面走的是另一个限流桶,常常照样
+	// 拿得到,于是一份「有封面、没歌词」的结果会按 30 天缓存住,网易云这一路(唯一给译文 / 罗马音的源)
+	// 在这个进程里再也补不回来。
+	if info.SongURL != "" && (info.Cover != "" || info.Lyrics != "") && sub.complete(ctx) {
 		neteaseMu.Lock()
 		neteaseCache[key] = neteaseCacheEntry{info: info, ts: now}
 		neteaseMu.Unlock()
@@ -820,7 +857,7 @@ func resolveNeteaseInfo(ctx context.Context, artist, title, album string, durati
 	// 时长锚定档同一条纪律。
 	if chosen == nil && album != "" && durationSecs > 0 {
 		if albumID, found := neteaseAlbumIDByName(ctx, artist, album); found {
-			if tracks, ok := neteaseAlbumTracks(albumID); ok {
+			if tracks, ok := neteaseAlbumTracks(ctx, albumID); ok {
 				if t, ok := anchorAlbumTrackForLocalTitle(tracks, artist, title, durationSecs); ok {
 					var anchored neSong
 					anchored.ID = t.neteaseSongID
@@ -928,6 +965,7 @@ func resolveNeteaseInfo(ctx context.Context, artist, title, album string, durati
 		// 老歌词接口没问成(或这个桶被拒):退到 v1 接口(另一个桶)取同一套整行 / 译文 / 罗马音。
 		// v1 没有 pureMusic 字段,纯音乐只能靠正文占位判(isInstrumentalPlaceholderLyric)。
 		if err := get(fmt.Sprintf("https://music.163.com/api/song/lyric/v1?id=%d&lv=-1&tv=-1&rv=-1", songID), &r); err != nil {
+			noteLyricSubFetchFailure(ctx)
 			return "", "", "", false, false, false
 		}
 		return stripNeteaseEscapedApostrophes(neteaseV1LyricLines(r.Lrc.Lyric)),
@@ -942,6 +980,7 @@ func resolveNeteaseInfo(ctx context.Context, artist, title, album string, durati
 			} `json:"yrc"`
 		}
 		if err := get(fmt.Sprintf("https://music.163.com/api/song/lyric/v1?id=%d&yv=-1", songID), &r); err != nil {
+			noteLyricSubFetchFailure(ctx)
 			return ""
 		}
 		if y := stripNeteaseEscapedApostrophes(r.Yrc.Lyric); strings.Contains(y, "[") && len(y) < 40000 {
@@ -994,7 +1033,11 @@ func resolveNeteaseInfo(ctx context.Context, artist, title, album string, durati
 // 备用端点 /api/v1/album/{id} 的 shape 不同(曲目在顶层 songs 而不是 album.songs),两种
 // 都吃。网易云是**按端点分桶**限流的(见 resolveNeteaseInfo 里那段注释),主端点被限时
 // 备用桶往往还通。
-func neteaseAlbumTracks(albumID int64) ([]albumTrack, bool) {
+//
+// ctx:调用方的取消 / 截止一路传下去。两个调用方都在有 20 秒截止的搜索轮里(resolveNeteaseInfo 的专辑锚定档、
+// 「搜索候选歌词」弹窗走的 retryTitleFromAlbumDetailed),截止之后它不该再占着网易云全局节流的名额跑满
+// 两个端点 × 几个主机 × 6 秒。专辑预取不需要取消,传 context.Background()。
+func neteaseAlbumTracks(ctx context.Context, albumID int64) ([]albumTrack, bool) {
 	if albumID <= 0 {
 		return nil, false
 	}
@@ -1025,9 +1068,6 @@ func neteaseAlbumTracks(albumID int64) ([]albumTrack, bool) {
 		Songs []neAlbumSong `json:"songs"` // /api/v1/album/{id} 把曲目放在顶层
 	}
 	fetch := func(u string) bool {
-		// 这个函数没有 ctx 参数(调用方目前都不需要取消),context.Background() 只用来
-		// 让 neteaseThrottle 复用同一套等待/退出逻辑——不可取消。
-		//
 		// **更正(实测证伪)**:这里原来写着「这个端点桶如果刚被
 		// neteaseReportBlocked 标记过退避,最长可能等到 neteaseBlockCooldown(30s)——这条
 		// 路径本来就是后台预取/兜底重试(调用方 retryTitleFromAlbumDetailed 等不阻塞任何
@@ -1037,7 +1077,7 @@ func neteaseAlbumTracks(albumID int64) ([]albumTrack, bool) {
 		// 退避现在**不睡了**(见 errNeteaseBucketCooling),这里最长仍然只等
 		// neteaseMinIntervalBetweenCalls 那一档。
 		// Cookie os=pc 见函数注释,少了它会间歇性被 -462 拦掉。按 neteaseHosts 顺序取。
-		body, err := neteaseFetchBody(context.Background(), u, "os=pc", 6*time.Second)
+		body, err := neteaseFetchBody(ctx, u, "os=pc", 6*time.Second)
 		if err != nil {
 			return false
 		}
@@ -1232,7 +1272,7 @@ func retryTitleFromAlbumDetailed(ctx context.Context, artist, album, localTitle 
 	if !found {
 		return "", 0, false, false
 	}
-	tracks, found := neteaseAlbumTracks(albumID)
+	tracks, found := neteaseAlbumTracks(ctx, albumID)
 	if !found {
 		return "", 0, false, false
 	}

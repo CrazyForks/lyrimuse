@@ -81,13 +81,15 @@ func saveArtistAliasCache() {
 			keep[k] = v
 		}
 	}
-	data, err := json.Marshal(keep)
+	path := artistAliasPath
 	artistAliasDirty = false
 	artistAliasMu.Unlock()
+	mergeMissingFromDisk(path, keep, func(v string) bool { return v != "" })
+	data, err := json.Marshal(keep)
 	if err != nil {
 		return
 	}
-	if err := writeFileAtomic(artistAliasPath, data); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save artist alias cache", "err", err)
 	}
 }
@@ -489,13 +491,15 @@ func saveMBPrimaryNameCache() {
 			keep[k] = v
 		}
 	}
-	data, err := json.Marshal(keep)
+	path := mbPrimaryNamePath
 	mbPrimaryNameDirty = false
 	mbPrimaryNameMu.Unlock()
+	mergeMissingFromDisk(path, keep, func(v []string) bool { return len(v) > 0 })
+	data, err := json.Marshal(keep)
 	if err != nil {
 		return
 	}
-	if err := writeFileAtomic(mbPrimaryNamePath, data); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		slog.Error("save musicbrainz primary name cache", "err", err)
 	}
 }

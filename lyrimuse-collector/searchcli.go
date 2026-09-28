@@ -468,7 +468,7 @@ func tracksFoundNoLyrics(results []scoredLyricCandidateResult) []trackFoundNoLyr
 // **原因 ≠ 没给出候选的原因**(补的一道判据):网易云那一条现在还要过
 // `neteaseSawSuccessNow()` —— 这一轮它只要成功答过一次,就不把限流报上去。实测对照见
 // netease.go 里那个函数的头注(同一分钟两次搜索:两次都吃了 405,其中一次照样给出 4 条
-// 候选)。musixmatch/lyricfind 暂时没有等价的"成功过"信号,维持原样。
+// 候选)。musixmatch 同样有了「成功过」信号(musixmatchSawSuccessNow);lyricfind 暂时没有,维持原样。
 //
 // 这几个 xxxLastFailureReasonNow 读的是**进程级**"这次进程生命周期里最近一次识别出的
 // 失败原因",不是专门为"这一轮搜索"重新打点的——但 search-lyrics 本来就是一次性短命进程
@@ -502,7 +502,10 @@ func lyricSourceFailureReasonsWith(results []scoredLyricCandidateResult, transpo
 	if !neteaseSawSuccessNow() {
 		check("netease", neteaseLastFailureReasonNow)
 	}
-	check("musixmatch", musixmatchLastFailureReasonNow)
+	// musixmatch 同理:这一轮数据接口答过 200,早先记下的失败原因就不是这次没给出候选的原因。
+	if !musixmatchSawSuccessNow() {
+		check("musixmatch", musixmatchLastFailureReasonNow)
+	}
 	check("lyricfind", ytmusicLastFailureReasonNow)
 	// deezer:目前只有"换不到匿名 JWT"这一种已实测的失败模式
 	// (见 lyricsourcefailure.go 的 deezer_auth_failed)。

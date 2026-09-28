@@ -53,11 +53,13 @@ func kuwoFetchLrcxYRC(ctx context.Context, musicID string) string {
 		return ""
 	}
 	var yrc string
+	reached := false
 	_ = tryEach(ctx, kuwoLrcxBases, func(base string) error {
 		raw, err := kuwoFetchLrcxAt(ctx, base, musicID)
 		if err != nil {
 			return err
 		}
+		reached = true
 		text, err := kuwoDecodeLrcx(raw)
 		if err != nil {
 			return err
@@ -65,6 +67,10 @@ func kuwoFetchLrcxYRC(ctx context.Context, musicID string) string {
 		yrc = kuwoLrcxToYRC(text)
 		return nil
 	})
+	// 一个主机都没问成:这份结果缺了逐字,不能缓存(见 lyricsubfetch.go)。问成了、解不开的是这首没有 lrcx。
+	if !reached {
+		noteLyricSubFetchFailure(ctx)
+	}
 	return yrc
 }
 
