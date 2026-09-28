@@ -122,6 +122,13 @@ func runLyricsWindowTests() {
         expectEqual(WindowFrameFit.miniSize(saved: CGSize(width: 900, height: 700), defaultSize: size,
                                             minimum: minimum, visible: CGSize(width: 800, height: 600)),
                     CGSize(width: 800, height: 600), "迷你尺寸: 不大于屏幕可见区")
+        let retired = [CGSize(width: 420, height: 180)]
+        expectEqual(WindowFrameFit.miniSize(saved: CGSize(width: 420, height: 180), defaultSize: size,
+                                            minimum: minimum, visible: nil, retiredDefaults: retired), size,
+                    "迷你尺寸: 存的是旧默认(只挪过窗、没拖过大小)→ 换成现在的默认")
+        expectEqual(WindowFrameFit.miniSize(saved: CGSize(width: 420, height: 181), defaultSize: size,
+                                            minimum: minimum, visible: nil, retiredDefaults: retired),
+                    CGSize(width: 420, height: 181), "迷你尺寸: 跟旧默认差一点的是用户拖出来的,照用")
     }
 
     // MARK: - 文字色调

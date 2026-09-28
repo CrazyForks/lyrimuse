@@ -1578,6 +1578,20 @@ func runSourceContractTests() {
                         "迷你歌词: 换句不做动画,新的一句直接替上来")
             expectEqual(lwv.contains("字一抬一抬只显得在晃。\n                rises: false,"), true,
                         "迷你歌词: 逐字填色不上浮(完整布局照旧上浮)")
+            // 迷你默认高度要装下「当前行 + 罗马音 + 译文 + 下一行 + 悬停控制条」;旧默认登记成已退役,
+            // 挪过窗(于是存下了旧默认)的老用户也换到新默认;设置页预览按同一个尺寸画。
+            expectEqual(lwv.contains("static let size = CGSize(width: 420, height: 320)"), true,
+                        "迷你尺寸: 默认 420×320(250 高时悬停控制条被挤出窗口下沿)")
+            expectEqual(lwv.contains("static let retiredSizes = [CGSize(width: 420, height: 250)]"), true,
+                        "迷你尺寸: 旧默认 420×250 登记为已退役")
+            expectEqual(lwv.contains("retiredDefaults: LyricsWindowMiniMetrics.retiredSizes)"), true,
+                        "迷你尺寸: 取尺寸时带上已退役的旧默认")
+            if let stage = read("UI/LyricsWindowPreviewStage.swift") {
+                expectEqual(stage.contains("mini ? LyricsWindowMiniMetrics.size : Self.contentSize"), true,
+                            "迷你尺寸: 设置页预览按真窗口默认尺寸画,不另写一个高度")
+            } else {
+                expectEqual(true, false, "迷你尺寸: 读不到 UI/LyricsWindowPreviewStage.swift(路径挪了?)")
+            }
             // 逐词排版里每个词的 Text 左对齐:继承外层居中 / 靠右时词尾空格不参与对齐,行末那个词前的空格会被吃掉。
             expectEqual(lwv.contains(".font(.system(size: fontSize, weight: .bold))\n        // 每个词自己的 Text 必须左对齐"), true,
                         "逐词歌词: KaraokeLineText 在 WrapLayout 外钉 .multilineTextAlignment(.leading)")

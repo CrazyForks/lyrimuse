@@ -217,13 +217,16 @@ private final class WindowPlayback: ObservableObject {
 /// 也要按同一个尺寸渲染(见 `LyricsWindowPreviewStage`)—— 两边各写一个数,预览就不再是"它真打开
 /// 的样子"了。
 ///
-/// 420×250 按迷你布局自己的几段量:顶部信息组(三行)连上边距约 59、歌词区在这个宽度下字号
+/// 420×320 按迷你布局自己的几段量:顶部信息组(三行)连上边距约 59、歌词区在这个宽度下字号
 /// 31.5(宽度那一支 0.075×宽)、控制条预留约 53(`miniDeckReserve`)、进度条 3,歌词区剩约
-/// 135 —— 当前行单行 + 译文 + 下一行(约 100)宽松放下,当前行折成两行且不开译文(约 111)也放得下。
+/// 205 —— 当前行单行 + 罗马音 + 译文 + 下一行(约 170)放下后离控制条还有约 30,当前行折成两行
+/// 且不开罗马音也放得下。高度按这四行都开着算:只够三行的话,悬停时底部控制条会被挤出窗口下沿。
 /// 宽度的下限是底部控制条:三颗胶囊并排约 330pt,再窄会贴边。再宽一档字号被宽度那一支推大,
 /// 高度得跟着涨,就不"迷你"了。
 enum LyricsWindowMiniMetrics {
-    static let size = CGSize(width: 420, height: 250)
+    static let size = CGSize(width: 420, height: 320)
+    /// 以前版本的默认尺寸(见 `WindowFrameFit.miniSize` 的 retiredDefaults)。改 `size` 时把旧值加进来。
+    static let retiredSizes = [CGSize(width: 420, height: 250)]
 }
 
 // 全屏:macOS 15+ 走**真原生全屏**,老系统用下面那套伪全屏兜底。
@@ -327,7 +330,8 @@ private final class LyricsWindowController: ObservableObject {
     private func miniTargetSize(on screen: NSScreen?) -> CGSize {
         WindowFrameFit.miniSize(
             saved: UserDefaults.standard.string(forKey: Self.miniSizeKey).map(NSSizeFromString),
-            defaultSize: Self.miniSize, minimum: Self.miniMinSize, visible: screen?.visibleFrame.size)
+            defaultSize: Self.miniSize, minimum: Self.miniMinSize, visible: screen?.visibleFrame.size,
+            retiredDefaults: LyricsWindowMiniMetrics.retiredSizes)
     }
 
     /// 背景要不要让窗口本体透出去(自定义背景色带了不透明度时)。

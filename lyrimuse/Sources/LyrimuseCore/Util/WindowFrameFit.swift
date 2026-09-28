@@ -17,10 +17,13 @@ public enum WindowFrameFit {
 
     /// 迷你窗该用的尺寸:用户拖过的尺寸(宽高都 > 0 才算)优先,否则默认;不小于下限;有屏幕时
     /// 不大于可见区。
+    ///
+    /// `retiredDefaults`:以前版本的默认尺寸。挪动迷你窗也会把当时的尺寸存下来,所以存的值等于某个旧默认,
+    /// 多半只是挪过窗、从没拖过大小,按没存过处理,换成现在的默认。
     public static func miniSize(saved: CGSize?, defaultSize: CGSize, minimum: CGSize,
-                                visible: CGSize?) -> CGSize {
+                                visible: CGSize?, retiredDefaults: [CGSize] = []) -> CGSize {
         var size = defaultSize
-        if let saved, saved.width > 0, saved.height > 0 { size = saved }
+        if let saved, saved.width > 0, saved.height > 0, !retiredDefaults.contains(saved) { size = saved }
         size.width = max(size.width, minimum.width)
         size.height = max(size.height, minimum.height)
         if let visible {
