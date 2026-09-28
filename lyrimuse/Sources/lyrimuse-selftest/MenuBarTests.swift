@@ -1456,4 +1456,15 @@ func runMenuBarTests() {
         expectEqual(LyricSecondaryLine.nextLine.secondaryText(currentLine: nil, nextLineText: "next"), "next",
                     "副行取值: 下一句不依赖当前句")
     }
+
+    // ---- 自适应槽位的自然宽(本体与设置页预览共用) ----
+    do {
+        func w(_ kind: LyricSecondaryLine, twoRows: Bool = true) -> CGFloat {
+            MenuBarSlotPolicy.naturalWidth(mainWidth: 80, secondaryWidth: 150, twoRows: twoRows,
+                                           secondaryKind: kind, maxWidth: 120)
+        }
+        expectEqual(w(.nextLine), 80, "槽宽: 副行是下一句时不撑宽")
+        expectEqual(w(.translation), 120, "槽宽: 译文撑宽、封顶最大宽度")
+        expectEqual(w(.translation, twoRows: false), 80, "槽宽: 单行就是主行宽")
+    }
 }

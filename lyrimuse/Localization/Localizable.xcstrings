@@ -27198,19 +27198,19 @@
         }
       }
     },
-    "菜单栏歌词的笔画粗细。字体族继续跟随系统菜单栏，「常规」就是系统菜单栏本来的粗细；中文只变粗不变宽，英文越粗越宽一点" : {
+    "菜单栏歌词的笔画粗细。「常规」就是系统菜单栏本来的粗细；中文只变粗不变宽，英文越粗越宽一点" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "How heavy the menu bar lyrics are drawn. The font family keeps following the system menu bar; Regular is exactly the system default weight. Chinese only gets bolder, Latin text also gets slightly wider."
+            "value" : "How heavy the menu bar lyrics are drawn. Regular is exactly the system default weight. Chinese only gets bolder, Latin text also gets slightly wider."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選單列歌詞的筆畫粗細。字體族繼續跟隨系統選單列，「標準」就是系統選單列本來的粗細；中文只變粗不變寬，英文越粗越寬一點"
+            "value" : "選單列歌詞的筆畫粗細。「標準」就是系統選單列本來的粗細；中文只變粗不變寬，英文越粗越寬一點"
           }
         }
       }
@@ -37453,6 +37453,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "套用主題之前手調的配色，點一下回復"
+          }
+        }
+      }
+    },
+    "—《%1$@》%2$@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "— “%1$@” %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "—《%1$@》%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "—《%1$@》%2$@"
           }
         }
       }

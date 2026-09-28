@@ -179,6 +179,21 @@ public enum MenuBarSlotPolicy {
     /// - 上限夹在 `maxWidth`:下一句超上限时槽就等于最大宽度,而那一句到时候会是 `.fixed`
     ///   (槽宽也是最大宽度)—— 两边同一个数,配合"长度相同不重建"连形态翻转那次都省了。
     /// - `upcomingWidth` 取不到(歌词还没解析出来)时调用方传 0,退化成 naturalWidth。
+    /// 自适应槽位「这一句」自然要多宽(占位兜底之前那一步)。菜单栏本体和设置页预览共用这一个算式,
+    /// 两处各写一份时预览漏了下面那条「下一句不撑宽」,格子跟着下一句忽宽忽窄、真机却不动。
+    ///
+    /// - 单行:就是主行宽。
+    /// - 双排:取两行里宽的那个、上限「最大宽度」—— 但副行是**「下一句」**时不许它撑宽:那一句马上会变成
+    ///   主行、到时候自然撑宽,现在为它占地方等于短句也按下一句的长度占着。译文 / 罗马音是**这一句自己的**
+    ///   内容,不给宽度就永远只看得到半截,照旧 max(主行, 副行)。
+    public static func naturalWidth(
+        mainWidth: CGFloat, secondaryWidth: CGFloat, twoRows: Bool,
+        secondaryKind: LyricSecondaryLine, maxWidth: CGFloat
+    ) -> CGFloat {
+        guard twoRows else { return mainWidth }
+        return min(maxWidth, secondaryKind != .nextLine ? max(mainWidth, secondaryWidth) : mainWidth)
+    }
+
     public static func slotWidth(
         naturalWidth: CGFloat, upcomingWidth: CGFloat,
         isPlaceholder: Bool, maxWidth: CGFloat

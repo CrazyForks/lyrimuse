@@ -107,8 +107,8 @@ struct RecentListensPanel: View {
                 .foregroundStyle(tertiaryTextColor.opacity(stats.baselineFailed ? 0.6 : 1))
                 .help(stats.baselineFailed
                       ? String(format: L10n.t("上次刷新没有成功，显示的是 %@ 的内容"),
-                               updated.formatted(date: .abbreviated, time: .standard))
-                      : updated.formatted(date: .abbreviated, time: .standard))
+                               updated.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: L10n.locale)))
+                      : updated.formatted(Date.FormatStyle(date: .abbreviated, time: .standard, locale: L10n.locale)))
             }
             Button {
                 stats.refreshBaseline(force: true)
@@ -193,6 +193,11 @@ struct RecentListensPanel: View {
         // 纯流媒体曲目查不到)。
         .onTapGesture { onOpenTrack(track.title, track.artist) }
         .help(L10n.t("在 Apple Music 中打开"))
+        // 只挂 onTapGesture 的话键盘和读屏都点不到这一行:并成一个元素、标成按钮,动作跟点击同一个。
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(Text(L10n.t("在 Apple Music 中打开")))
+        .accessibilityAction { onOpenTrack(track.title, track.artist) }
     }
 
     @ViewBuilder private var emptyState: some View {
@@ -285,11 +290,17 @@ enum RelativeDayFormat {
         return f
     }()
 
-    private static let dayFormatter: DateFormatter = {
+    /// 跟 App 界面语言走,理由同 IdleStandbyView.dayFormatter。
+    private static var dayFormatterCache: (id: String, formatter: DateFormatter)?
+    private static var dayFormatter: DateFormatter {
+        let locale = L10n.locale
+        if let cached = dayFormatterCache, cached.id == locale.identifier { return cached.formatter }
         let f = DateFormatter()
+        f.locale = locale
         f.setLocalizedDateFormatFromTemplate("Md")
+        dayFormatterCache = (locale.identifier, f)
         return f
-    }()
+    }
 
     static func dayLabel(_ date: Date) -> String {
         let cal = Calendar.current
@@ -480,6 +491,10 @@ struct PendingListensPanel: View {
         .onHover { hoveredID = $0 ? "r:\(item.uts)" : (hoveredID == "r:\(item.uts)" ? nil : hoveredID) }
         // 跟 RecentListensPanel 同一个语义:music:// 原生跳页,不动播放队列、不算起播。
         .onTapGesture { onOpenTrack(item.title, item.artist) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(Text(L10n.t("在 Apple Music 中打开")))
+        .accessibilityAction { onOpenTrack(item.title, item.artist) }
         .help(L10n.t("在 Apple Music 中打开"))
     }
 

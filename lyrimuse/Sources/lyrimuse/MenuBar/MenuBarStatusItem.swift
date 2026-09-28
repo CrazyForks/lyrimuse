@@ -1280,16 +1280,11 @@ final class MenuBarStatusItem: NSObject {
             let secondaryW = rowState.secondaryText.map {
                 MenuBarMarqueeRenderer.width(of: $0, font: MenuBarMarqueeRenderer.doubleRowSecondaryFont)
             } ?? 0
-            // 副行是**「下一句」**时不许它撑宽槽位(「宽不再被下一句撑大」)。
-            // 那一句马上就会变成主行、到时候自然把槽撑宽;现在就为它占地方,等于当前这一行短的
-            // 时候也按下一行的长度占着,菜单栏上白占一大块。装不下就走尾部渐隐,那条路本来就有。
-            // 译文 / 罗马音**不同**:它们是**这一句自己的**内容,不给宽度就永远只能看到半截,
-            // 所以那两档保持原来的 max(主行, 副行)(定的「译文往往更长」)。
-            let secondaryWidensSlot = secondaryKind != .nextLine
-            let naturalW = rowState.twoRows
-                ? min(settings.menuBarLyricsWidth,
-                      secondaryWidensSlot ? max(mainW, secondaryW) : mainW)
-                : mainW
+            // 副行是「下一句」时不许它撑宽槽位,译文 / 罗马音照旧撑 —— 取舍见 `MenuBarSlotPolicy.naturalWidth`,
+            // 设置页预览调的是同一个函数。装不下就走尾部渐隐,那条路本来就有。
+            let naturalW = MenuBarSlotPolicy.naturalWidth(
+                mainWidth: mainW, secondaryWidth: secondaryW, twoRows: rowState.twoRows,
+                secondaryKind: secondaryKind, maxWidth: settings.menuBarLyricsWidth)
             // 占位态给槽宽兜个底:让它现在就有即将到来那一句要的宽度,那一句出现时几何
             // 已经到位、不必再改一次。判据是 Core 的纯函数(有 selftest),这里只喂数 ——
             // "下一句"怎么量在 `upcomingLineSlotWidth`,"该不该用它"在 `MenuBarSlotPolicy.slotWidth`。

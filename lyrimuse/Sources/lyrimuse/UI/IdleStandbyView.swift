@@ -447,11 +447,18 @@ private struct IdleOverviewCard: View {
         return min(max(0, hx - captionWidth / 2), max(0, chartWidth - captionWidth))
     }
 
-    private static let dayFormatter: DateFormatter = {
+    /// 跟 App 界面语言走(`L10n.locale`),不跟系统:界面是英文、系统是中文时原来会写出「9月16日」。
+    /// 按语言缓存,运行中切了界面语言也会换。
+    private static var dayFormatterCache: (id: String, formatter: DateFormatter)?
+    private static var dayFormatter: DateFormatter {
+        let locale = L10n.locale
+        if let cached = dayFormatterCache, cached.id == locale.identifier { return cached.formatter }
         let f = DateFormatter()
+        f.locale = locale
         f.setLocalizedDateFormatFromTemplate("Md")
+        dayFormatterCache = (locale.identifier, f)
         return f
-    }()
+    }
 }
 
 
@@ -612,7 +619,8 @@ private struct IdleLastTrackHero: View {
                 .id(quoteIndex)
                 .transition(.opacity)
             HStack(spacing: 10) {
-                Text("—《\(lastTitle)》\(lastArtist)")
+                // 书名号是中文标点,走文案(英文界面用引号)。
+                Text(String(format: L10n.t("—《%1$@》%2$@"), lastTitle, lastArtist))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)

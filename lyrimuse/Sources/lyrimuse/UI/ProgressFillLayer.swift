@@ -52,10 +52,7 @@ final class ProgressFillLayerNSView: NSView {
     func update(color: NSColor, fraction next: Double, animated: Bool) {
         if self.color != color {
             self.color = color
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            fill.backgroundColor = color.cgColor
-            CATransaction.commit()
+            applyFillColor()
         }
         guard next != fraction else { return }
         let from = (fill.presentation() ?? fill).transform
@@ -90,6 +87,23 @@ final class ProgressFillLayerNSView: NSView {
         fill.cornerRadius = bounds.height / 2
         fill.transform = CATransform3DMakeTranslation(offsetX(for: fraction), 0, 0)
         CATransaction.commit()
+    }
+
+    /// 按这扇视图当下的外观把颜色解析成 CGColor。`.primary` 这类动态色两个实例判等恒为相等,颜色本身不会再
+    /// 「变」—— 切深浅色时只能靠下面那个外观回调重解一次,不然已播段一直是切换前的颜色(深色底上一条黑条)。
+    private func applyFillColor() {
+        guard let color else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            fill.backgroundColor = color.cgColor
+        }
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyFillColor()
     }
 
     override func viewDidChangeBackingProperties() {

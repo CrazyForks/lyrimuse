@@ -228,8 +228,15 @@ struct AppColorPicker: View {
     /// 最新值 —— 拖方块/拖色相条这两个手势不会跟"敲键盘"抢同一个文本框的焦点,所以这里
     /// 覆盖 hexText 是安全的(真正会跟输入抢的是「敲字符的半途」,那种情况只在 `applyHexText`
     /// 里发生,不会由这个函数触发)。
+    ///
+    /// 换算成 hex 跟现值一样就不写:拖动时每个鼠标事件都会进来,而绑定那头是 AppSettings(一次写 = 一次
+    /// UserDefaults + 整个设置对象广播,订阅它的整页和对应展示面都跟着重算),8 位一档的 hex 让相邻好几个
+    /// 事件落在同一个值上。宽度、字号滑杆早就是「值没变不写」。
     private func commit() {
-        selection.wrappedValue = currentColor
+        let next = currentColor
+        if next.hexStringWithAlpha != selection.wrappedValue.hexStringWithAlpha {
+            selection.wrappedValue = next
+        }
         syncHexText()
     }
 

@@ -175,7 +175,7 @@ struct CachedImage<Placeholder: View>: View {
     }
 
     /// 给 ImageMemoryCache 用的入口(同一份加载逻辑,不另写一遍)。
-    static func loadForPrewarm(_ url: URL, maxPixel: CGFloat?) async -> NSImage? {
+    nonisolated static func loadForPrewarm(_ url: URL, maxPixel: CGFloat?) async -> NSImage? {
         await load(url, maxPixel: maxPixel)
     }
 
@@ -185,7 +185,11 @@ struct CachedImage<Placeholder: View>: View {
     /// maxPixel 非 nil 时用 CGImageSource 缩略图管线在解码期就降采样 —— 只解到目标
     /// 尺寸,不把原图整张解出来再缩(那样峰值内存/CPU 还是原图的);拿不到缩略图
     /// (罕见格式)退回整图解码,行为不变。
-    private static func load(_ url: URL, maxPixel: CGFloat?) async -> NSImage? {
+    ///
+    /// `nonisolated` 不能省:这个类型遵循 `View`,静态方法会被推断成主线程隔离,网络回来之后的解码 /
+    /// 降采样就全落在主线程上(一张 3000² 降到 2048 几十毫秒,换歌、换行动画那一刻正好卡)。标成
+    /// nonisolated 之后解码跑在后台,调用方(ImageMemoryCache)await 完再回主线程写缓存。
+    private nonisolated static func load(_ url: URL, maxPixel: CGFloat?) async -> NSImage? {
         // 这里记的是"这个函数被调用了几次",不是"真的上网发了几次请求"——命中
         // URLCache.shared 时字节从本地缓存出、根本不上网,而 URLSession 的这个便捷 API
         // 不暴露"这次是不是缓存命中"的信号(要拿到得换成带 URLSessionTaskDelegate 的

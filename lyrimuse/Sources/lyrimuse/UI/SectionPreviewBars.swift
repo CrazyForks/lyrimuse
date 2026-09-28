@@ -151,7 +151,10 @@ struct MenuBarPreviewBar<Lane: View>: View {
         let secondaryW = secondaryText.map {
             MenuBarMarqueeRenderer.width(of: $0, font: MenuBarMarqueeRenderer.doubleRowSecondaryFont)
         } ?? 0
-        return min(settings.menuBarLyricsWidth, max(mainW, secondaryW))
+        // 跟本体同一个函数(副行是「下一句」时不撑宽),别再各写一份。
+        return MenuBarSlotPolicy.naturalWidth(
+            mainWidth: mainW, secondaryWidth: secondaryW, twoRows: twoRows,
+            secondaryKind: secondaryKind, maxWidth: settings.menuBarLyricsWidth)
     }
     /// Representable 的 frame 高:双排要给满按钮那 22pt(两行在里面按 MenuBarLyricRows.layout 落位),
     /// 单行照旧一行行高。
@@ -592,9 +595,11 @@ struct MenuBarPreviewBar<Lane: View>: View {
                     secondaryText: secondaryText, secondaryKind: secondaryKind)
                     .frame(width: w + reservedIconWidth, height: rowsHeight)
             } else {
+                // 跟本体 showStaticText 同一套:字重按这段文字取、颜色走「文字颜色」设置(空 = 系统文字色)。
                 Text(visible)
-                    .font(Font(MenuBarMarqueeRenderer.font))
-                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .font(Font(MenuBarMarqueeRenderer.font(for: visible)))
+                    .foregroundStyle(Color(nsColor: MenuBarScrollingLabel.textColor(
+                        hex: settings.menuBarLyricsTextColorHex, highlighted: false)))
                     .lineLimit(1)
                     .fixedSize()
                     .frame(height: MenuBarMarqueeRenderer.lineHeight)

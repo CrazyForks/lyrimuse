@@ -41,9 +41,12 @@ enum DesktopWallpaperLuma {
     }
 
     /// 缩到 16×16 以内再按 sRGB 线性化后的相对亮度取平均。
+    ///
+    /// 用 `FromImageIfAbsent` 而不是 `FromImageAlways`:后者无视文件里内嵌的缩略图、把整张壁纸完整解一遍
+    /// (6K 的 HEIC 动态壁纸在主线程上几十到上百毫秒),而 16 像素的平均亮度用内嵌缩略图就够了,没有才解原图。
     private static func averageLuma(of url: URL) -> Double? {
         let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
             kCGImageSourceThumbnailMaxPixelSize: 16,
         ]
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),

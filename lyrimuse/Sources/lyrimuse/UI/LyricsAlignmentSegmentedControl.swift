@@ -58,8 +58,11 @@ struct LyricsAlignmentSegmentedControl: View {
                         .lineLimit(1)
                         .frame(minWidth: 56)
                         .padding(.vertical, 4)
+                        // .plain 按钮只认字形,不补这个的话点在文字两侧的留白上没反应。
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)

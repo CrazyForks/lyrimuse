@@ -771,7 +771,7 @@ struct MenuBarFontWeightRow: View {
         SettingsRow(
             icon: "bold",
             title: L10n.t("粗细"),
-            help: L10n.t("菜单栏歌词的笔画粗细。字体族继续跟随系统菜单栏，「常规」就是系统菜单栏本来的粗细；中文只变粗不变宽，英文越粗越宽一点")
+            help: L10n.t("菜单栏歌词的笔画粗细。「常规」就是系统菜单栏本来的粗细；中文只变粗不变宽，英文越粗越宽一点")
         ) {
             Picker("", selection: $settings.menuBarLyricsFontWeight) {
                 ForEach(OverlayFontWeight.allCases, id: \.self) { weight in

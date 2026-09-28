@@ -1458,4 +1458,23 @@ func runOverlayTests() {
         expectEqual(view.contains("!surfaceVisible") && controller.contains("didChangeOcclusionStateNotification"), true,
                     "悬浮接线: 看不见时停表")
     }
+
+    // ---- UI 共用组件那一批的接线(契约) ----
+    do {
+        let ui = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lyrimuse/UI")
+        func src(_ name: String) -> String {
+            (try? String(contentsOf: ui.appendingPathComponent(name), encoding: .utf8)) ?? ""
+        }
+        expectEqual(src("CachedImage.swift").contains("private nonisolated static func load("), true,
+                    "UI 接线: 图片解码不跑在主线程(View 里的静态方法默认主线程隔离)")
+        expectEqual(src("DirectFirstImageLoad.swift").contains("case .serverAnswered:"), true,
+                    "UI 接线: 直连拿到 404 不拉黑主机、不再走代理")
+        expectEqual(src("SectionPreviewBars.swift").contains("MenuBarSlotPolicy.naturalWidth("), true,
+                    "UI 接线: 菜单栏预览跟本体共用槽宽算式")
+        expectEqual(src("ProgressFillLayer.swift").contains("override func viewDidChangeEffectiveAppearance()"), true,
+                    "UI 接线: 进度条切深浅色时重解颜色")
+        expectEqual(src("MarqueeText.swift").contains("guard isOverflowing, !reduceMotion else { return }"), true,
+                    "UI 接线: 跑马灯遵从减弱动态效果")
+    }
 }

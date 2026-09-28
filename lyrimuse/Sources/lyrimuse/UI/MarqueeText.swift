@@ -44,6 +44,8 @@ struct MarqueeText<Content: View>: View {
     /// 状态变化 —— 详见 restart() 里那段。
     @State private var generation: Int = 0
     @State private var scrollTask: Task<Void, Never>?
+    /// 「减弱动态效果」开着时不自动滚,装不下的部分照旧尾部渐隐 / 裁掉(间奏点、音浪、呼吸动画都已经为它停了)。
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { outerProxy in
@@ -68,7 +70,14 @@ struct MarqueeText<Content: View>: View {
         // 那一刻视图身份会变、整棵子树重建,正在跑的滚动动画会被打断。宽度为 0 时
         // gradient 那一段本身就是零宽,等效于没有 mask。
         .mask(fadeMask)
-        .onDisappear { scrollTask?.cancel() }
+        // 离开时取消的任务要清掉:再出现时宽度没变,apply 会提前返回,不在这里补一次的话跑马灯停着不动,
+        // 要等换句才恢复。
+        .onDisappear {
+            scrollTask?.cancel()
+            scrollTask = nil
+        }
+        .onAppear { if scrollTask == nil, isOverflowing { restart() } }
+        .onChange(of: reduceMotion) { restart() }
     }
 
     /// 量好宽度、并且按当前偏移摆好位置的内容。
@@ -207,7 +216,7 @@ struct MarqueeText<Content: View>: View {
             offset = 0
             generation &+= 1
         }
-        guard isOverflowing else { return }
+        guard isOverflowing, !reduceMotion else { return }
         scrollTask = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(marqueeHoldDuration * 1_000_000_000))
