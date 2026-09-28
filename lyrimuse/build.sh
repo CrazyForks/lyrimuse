@@ -874,6 +874,19 @@ fi
 # 老进程在被重启之前一直有完整的一份可用。
 # 首装(目标还不存在)时 renamex_np 返回 ENOENT,回退 mv;那条路径上目标不存在,没有嵌套风险。
 if [ -n "$STAGE" ]; then
+  # 换包之前先卸掉 collector 的 job,等老进程退出。collector 是裸可执行文件,TCC 按**路径**认它;
+  # 换完之后老进程的可执行文件落在 $STAGE(带 pid 的临时路径)里,在被重装之前它还会照常问 Spotify,
+  # TCC 当它是个新程序、弹「"collector"想要控制"Spotify"」,每次构建都弹一次,点了也白点;弹窗挂着时
+  # App 发给 Spotify 的 AppleEvent 也跟着卡住(见 02 章决策 63)。卸掉之后由下面的重装段或 App 的
+  # reconcileAfterLaunch(看到没在跑就重装)拉起,那两条路本来就会 bootout 一次,这里提前不冲突。
+  # 不重启(--no-restart)时没人拉起它,不卸。
+  if [ "$NO_RESTART" != 1 ] && [ -e "$FINAL_APP_DIR" ] && launchctl list "$COLLECTOR_LABEL" >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)/$COLLECTOR_LABEL" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      pgrep -f "$FINAL_APP_DIR/Contents/Resources/collector" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+  fi
   if [ -e "$FINAL_APP_DIR" ]; then
     /usr/bin/python3 - "$STAGE" "$FINAL_APP_DIR" <<'SWAP'
 import ctypes, sys

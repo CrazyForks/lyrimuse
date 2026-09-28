@@ -825,7 +825,17 @@ func runPlaybackPositionTests() {
             expectEqual(r3(LocalPlaybackSource.pauseResidualLead(bias: 0.256, pauseDelta: 0.303)), 0.223, "暂停残差: 偏置准时样本≈偏置本身")
             expectEqual(LocalPlaybackSource.pauseResidualLead(bias: 0.24, pauseDelta: -1.5) == nil, true, "暂停残差: 残差超过 1s 不学")
             expectEqual(LocalPlaybackSource.pauseResidualLead(bias: 0, pauseDelta: 0.9) == nil, true, "暂停残差: 反推出负领先不学")
-            expectEqual(r3(LocalPlaybackSource.learnedStartLead(current: 0.72, sample: 1.2)), 0.864, "起播领先学习: EMA α=0.3")
+            expectEqual(r3(LocalPlaybackSource.learnedStartLead(current: 0.72, sample: 1.2, samplesSoFar: 5)), 0.864,
+                        "起播领先学习: 学够样本后 EMA α=0.3")
+            // 先验 0.66、这台机器真值 0.26:α=0.5 两次到 0.36,α=0.3 两次还在 0.46。
+            expectEqual(r3(LocalPlaybackSource.learnedStartLead(current: 0.66, sample: 0.26, samplesSoFar: 0)), 0.46,
+                        "起播领先学习: 头几个样本 α=0.5")
+            expectEqual(r3(LocalPlaybackSource.learnedStartLead(current: 0.46, sample: 0.26,
+                                                                samplesSoFar: LocalPlaybackSource.startLeadFastSamples - 1)), 0.36,
+                        "起播领先学习: 第 3 个样本仍 α=0.5")
+            expectEqual(r3(LocalPlaybackSource.learnedStartLead(current: 0.36, sample: 0.26,
+                                                                samplesSoFar: LocalPlaybackSource.startLeadFastSamples)), 0.33,
+                        "起播领先学习: 第 4 个样本起回到 α=0.3")
             // 开播钟起步晚:真机首笔 0.001、1.3s 后 0.087,扣完偏置 −0.167、外推 1.061。
             expectEqual(LocalPlaybackSource.playerClockStartedLate(raw: 0.087, reported: -0.167, predicted: 1.061), true,
                         "开播起步晚: 曲首读数落在外推后面 → 跟着钟重新对准、偏置保留")
@@ -1268,6 +1278,78 @@ func runPlaybackPositionTests() {
         // 0.3×(-1.74) = -0.52 本会冲过 0.4 门槛把歌词拖回半秒,限幅后只到 -0.225。
         let (_, snap) = L.servoDecision(errEMA: 0, error: -1.74, tier: .cleanExtrapolated)
         expectEqual(snap, false, "冻结守卫: 第一拍大负偏差被限幅拦住,不回拖")
+    }
+
+    // ---- LocalPlaybackSource: 哪一轮 poll 的结果还能用 ----
+
+    do {
+        let f = LocalPlaybackSource.pollResultIsCurrent
+        // 每轮都比轮询间隔慢:第 1 轮回来时第 2、3 轮已经发起,之前一轮都没生效过 → 照用
+        expectEqual(f(1, 0, 0), true, "poll 世代: 比已生效的新,哪怕后面还有在飞的也用")
+        // 第 3 轮先生效,第 2 轮才回来 → 丢(防旧快照覆盖新快照)
+        expectEqual(f(2, 3, 0), false, "poll 世代: 比已生效的旧 → 丢")
+        expectEqual(f(3, 3, 0), false, "poll 世代: 同一轮不重复用")
+        // seek 时第 4 轮在飞(作废到 4),它回来 → 丢;seek 之后发起的第 5 轮 → 用
+        expectEqual(f(4, 2, 4), false, "poll 世代: seek 之前发起的 → 丢")
+        expectEqual(f(5, 2, 4), true, "poll 世代: seek 之后发起的 → 用")
+    }
+
+    // ---- MediaControlClient: 问不到 Spotify 时退回的 media-control 那份要补上等掉的时间 ----
+
+    do {
+        let catchUp = MediaControlClient.spotifyFallbackCaughtUp
+        let now = Date()
+        let playing = MediaControlSnapshot.forReplay(
+            title: "T", artist: "A", duration: 200, elapsedTime: 40, playing: true,
+            bundleIdentifier: PlaybackPlayer.spotify.bundleIdentifier, anchorElapsedTime: 12)
+        let caught = catchUp(playing, 6, now)
+        expectEqual(caught.elapsedTime, 46, "Spotify 回退: 在放时补上等掉的 6s")
+        expectEqual(caught.capturedAt, now, "Spotify 回退: 记成此刻读到的")
+        expectEqual(caught.anchorElapsedTime, 12, "Spotify 回退: 锚点不动(换钟判据靠它)")
+        let paused = MediaControlSnapshot.forReplay(
+            title: "T", artist: "A", duration: 200, elapsedTime: 40, playing: false,
+            bundleIdentifier: PlaybackPlayer.spotify.bundleIdentifier, anchorElapsedTime: 40)
+        expectEqual(catchUp(paused, 6, now).elapsedTime, 40, "Spotify 回退: 暂停不补")
+        expectEqual(catchUp(paused, 6, now).capturedAt, nil, "Spotify 回退: 暂停原样返回")
+    }
+
+    // ---- MediaControlClient: 问不到 Spotify 时用它那条通知里的位置当它自己的钟 ----
+
+    do {
+        let reading = MediaControlClient.spotifyNoticeReading
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        let sp = PlaybackPlayer.spotify.bundleIdentifier
+        // 开播 t0:通知说 0.007,MediaRemote 的锚点 1s 后才发、而且晚一截(锚点 0,采样时推出来 9.0)
+        let mc = MediaControlSnapshot.forReplay(
+            title: "Top Gun", artist: "bbno$", duration: 141, elapsedTime: 9.0, playing: true,
+            bundleIdentifier: sp, anchorElapsedTime: 0)
+        let sampledAt = t0.addingTimeInterval(10), now = t0.addingTimeInterval(10.5)
+        let notice = SpotifyNotificationHint(trackID: "spotify:track:x", name: "Top Gun", artist: "bbno$",
+                                             receivedAt: t0, playing: true, position: 0.007)
+        let r = reading(mc, notice, sampledAt, now)
+        expectEqual(r.map { abs(($0.elapsedTime ?? 0) - 10.507) < 0.001 }, true, "Spotify 通知: 按收到的时刻推到此刻(0.007 + 10.5)")
+        expectEqual(r?.anchorElapsedTime == nil, true, "Spotify 通知: 读数当播放器自己的钟(不带锚点)")
+        expectEqual(r?.capturedAt, now, "Spotify 通知: 记成此刻读到的")
+        let other = SpotifyNotificationHint(trackID: "spotify:track:y", name: "Edamame", artist: "bbno$",
+                                            receivedAt: t0, playing: true, position: 0.007)
+        expectEqual(reading(mc, other, sampledAt, now) == nil, true, "Spotify 通知: 说的是别的歌不用")
+        // 拖动:MediaRemote 在 t0+60 重发了锚点 60,通知还是开播那条 → 让位
+        let seeked = MediaControlSnapshot.forReplay(
+            title: "Top Gun", artist: "bbno$", duration: 141, elapsedTime: 70, playing: true,
+            bundleIdentifier: sp, anchorElapsedTime: 60)
+        expectEqual(reading(seeked, notice, t0.addingTimeInterval(70), t0.addingTimeInterval(70)) == nil, true,
+                    "Spotify 通知: 比 MediaRemote 重发的锚点旧得多就让位")
+        let paused = MediaControlSnapshot.forReplay(
+            title: "Top Gun", artist: "bbno$", duration: 141, elapsedTime: 9.0, playing: false,
+            bundleIdentifier: sp, anchorElapsedTime: 9.0)
+        expectEqual(reading(paused, notice, sampledAt, now) == nil, true, "Spotify 通知: 暂停不用")
+        let pausedNotice = SpotifyNotificationHint(trackID: "spotify:track:x", name: "Top Gun", artist: "bbno$",
+                                                   receivedAt: t0, playing: false, position: 0.007)
+        expectEqual(reading(mc, pausedNotice, sampledAt, now) == nil, true, "Spotify 通知: 通知说暂停不用")
+        let parsed = SpotifyNotificationHint(userInfo: ["Track ID": "spotify:track:x", "Name": "Top Gun", "Artist": "bbno$",
+                                                        "Player State": "Playing", "Playback Position": NSNumber(value: 0.007)])
+        expectEqual(parsed?.playing, true, "Spotify 通知: 解析 Player State")
+        expectEqual(parsed?.position, 0.007, "Spotify 通知: 解析 Playback Position")
     }
 
     // ---- LocalPlaybackSource: seek 之后丢弃陈旧位置读数 ----

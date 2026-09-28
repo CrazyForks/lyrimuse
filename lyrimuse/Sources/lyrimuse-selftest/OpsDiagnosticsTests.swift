@@ -508,6 +508,14 @@ func runOpsDiagnosticsTests() {
         expectEqual(explicit?.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines), "[on]",
                     "ProcessRunner: 传了 environment 就真的传进子进程")
 
+        // 不理 SIGTERM 的子进程(osascript 等授权弹窗时就是这样):超时后补 SIGKILL,不能一直卡着。
+        let stubbornStart = Date()
+        let stubborn = ProcessRunner.run("/bin/sh", ["-c", "trap '' TERM; exec /bin/sleep 30"], timeout: 0.3)
+        let stubbornSecs = Date().timeIntervalSince(stubbornStart)
+        expectEqual(stubborn?.timedOut, true, "ProcessRunner: 不理 SIGTERM 的也按超时处理")
+        expectEqual(stubbornSecs < 0.3 + ProcessRunner.killGraceSeconds + 1.5, true,
+                    "ProcessRunner: 不理 SIGTERM 的宽限后被 SIGKILL,不等满 30 秒(\(String(format: "%.1f", stubbornSecs))s)")
+
         let failed = ProcessRunner.run("/bin/sh", ["-c", "exit 3"], timeout: 5)
         expectEqual(failed?.status, 3, "ProcessRunner: 非零退出码如实返回")
         expectEqual(failed?.succeeded, false, "ProcessRunner: 非零退出不算成功")
@@ -848,6 +856,13 @@ func runOpsDiagnosticsTests() {
             let signCalls = codeLines.filter { $0.contains("codesign") && $0.contains("$SIGN_ID") }.count
             expectEqual(signCalls >= 8, true,
                         "构建签名: 走 $SIGN_ID 的签名调用点至少 8 处(嵌套二进制 + 框架 + 最外层 .app),实际 \(signCalls)")
+            // collector 是裸可执行文件,TCC 按路径认它:换包之后老进程落在带 pid 的暂存路径里还会问 Spotify,
+            // 每次构建都弹一次「collector 想要控制 Spotify」。卸 job 必须排在 renamex_np 之前(02 章决策 63)。
+            let code = codeLines.joined(separator: "\n")
+            let bootout = code.range(of: "launchctl bootout \"gui/$(id -u)/$COLLECTOR_LABEL\"")
+            let swap = code.range(of: "libc.renamex_np(sys.argv[1]")
+            expectEqual(bootout != nil && swap != nil && bootout!.lowerBound < swap!.lowerBound, true,
+                        "构建换包: collector 的 job 要在换包(renamex_np)之前卸掉,不然老进程在暂存路径里触发授权弹窗")
         } else {
             expectEqual(true, false, "构建签名: 读不到 build.sh(路径挪了?)")
         }

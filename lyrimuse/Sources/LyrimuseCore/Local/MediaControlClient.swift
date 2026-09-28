@@ -1065,7 +1065,14 @@ public enum MediaControlClient {
             // MediaRemote 那个冻结值是音频位置,`player position` 是它自己的钟,两者差一段输出
             // 链路的领先量。播放中显示后者、暂停那一拍换成前者,就是一次肉眼可见的回跳;从头到尾
             // 只用一个钟才没有接缝。
-            return fetchSpotifySnapshot() ?? mediaControl
+            let asked = Date()
+            if let spotify = fetchSpotifySnapshot() { return spotify }
+            let now = Date()
+            if let fromNotice = spotifyNoticeReading(mediaControl, notice: currentSpotifyNotice(),
+                                                     sampledAt: asked, now: now) {
+                return fromNotice
+            }
+            return spotifyFallbackCaughtUp(mediaControl, waited: now.timeIntervalSince(asked), now: now)
         default:
             return mediaControl
         }
@@ -1969,7 +1976,7 @@ public enum MediaControlClient {
             let reading = watcher.reading(
                 trackKey: trackKey, metadataTimestamp: timestampDate, playing: playing == true,
                 pauseObservedAt: Self.lastPauseObservedAt(), now: sampledAt,
-                pid: raw.processIdentifier.map { pid_t($0) }, duration: raw.duration)
+                pid: raw.processIdentifier.map { pid_t($0) }, duration: raw.duration, artist: raw.artist, title: raw.title)
             if reading.staleMetadata {
                 setSnapshotFailure(.targetNotPlayingMusic)
                 return nil
@@ -2000,6 +2007,59 @@ public enum MediaControlClient {
         // 补到处理那一刻(见 MediaControlSnapshot.capturedAt)。只对实测过的播放器开(决策 41)。
         if Self.stampsCaptureTime(bundleID: bundleID) || amazonPosition != nil { snapshot.capturedAt = sampledAt }
         return (snapshot, bundleID)
+    }
+
+    private static let spotifyNoticeLock = NSLock()
+    private static var latestSpotifyNotice: SpotifyNotificationHint?
+
+    /// `LocalPlaybackSource` 收到 Spotify 那条通知时记下(主队列上写,轮询的后台线程上读)。
+    public nonisolated static func noteSpotifyNotice(_ notice: SpotifyNotificationHint) {
+        spotifyNoticeLock.lock()
+        defer { spotifyNoticeLock.unlock() }
+        latestSpotifyNotice = notice
+    }
+
+    private static func currentSpotifyNotice() -> SpotifyNotificationHint? {
+        spotifyNoticeLock.lock()
+        defer { spotifyNoticeLock.unlock() }
+        return latestSpotifyNotice
+    }
+
+    /// 问不到 Spotify 的 AppleScript 时,拿它那条通知里的 `Playback Position` 当它自己的钟。MediaRemote 的开播锚点
+    /// 整首晚一截(决策 28),通知在开播那一刻就到,按收到的时刻推出来的位置跟 `player position` 只差一两百毫秒。
+    /// 只在放着、通知说的是这首歌、而且不早于 MediaRemote 最近一次重发锚点超过 `spotifyNoticeAnchorSlackSecs` 时用:
+    /// 拖动后 MediaRemote 重发的锚点是准的,比它旧的通知让位。产出的读数不带锚点(`anchorElapsedTime` = nil),
+    /// 下游按「播放器自己的钟」处置,跟 AppleScript 那份同一套起播领先量(见 02 章决策 63)。纯函数,selftest 直接覆盖。
+    public nonisolated static func spotifyNoticeReading(_ mediaControl: MediaControlSnapshot,
+                                                        notice: SpotifyNotificationHint?,
+                                                        sampledAt: Date, now: Date) -> MediaControlSnapshot? {
+        guard mediaControl.playing == true, let notice, notice.playing == true, let position = notice.position,
+              notice.matches(title: mediaControl.title, artist: mediaControl.artist),
+              let anchor = mediaControl.anchorElapsedTime, let elapsed = mediaControl.elapsedTime
+        else { return nil }
+        let rate = mediaControl.playbackRate ?? 1
+        guard rate > 0 else { return nil }
+        let anchorPublishedAt = sampledAt.addingTimeInterval(-(elapsed - anchor) / rate)
+        guard notice.receivedAt >= anchorPublishedAt.addingTimeInterval(-spotifyNoticeAnchorSlackSecs) else { return nil }
+        return MediaControlSnapshot(
+            title: mediaControl.title, artist: mediaControl.artist, album: mediaControl.album,
+            duration: mediaControl.duration,
+            elapsedTime: position + now.timeIntervalSince(notice.receivedAt) * rate,
+            playing: true, playbackRate: mediaControl.playbackRate, isMusicApp: mediaControl.isMusicApp,
+            bundleIdentifier: mediaControl.bundleIdentifier, anchorElapsedTime: nil, isRadio: mediaControl.isRadio,
+            capturedAt: now, anchorStartCorrection: nil)
+    }
+
+    /// 开播时通知比 MediaRemote 的锚点先到(实测早约 1s),这点提前量仍算同一段播放。
+    public nonisolated static let spotifyNoticeAnchorSlackSecs: Double = 3
+
+    /// 问 Spotify 自己没问到时退回的 media-control 那份:它是**问之前**读的,中间可能等满了 JXA 的超时
+    /// (自动化授权弹窗挂着时每次 5s 再加 SIGKILL 宽限)。在放的话按等掉的时间补到此刻、记成此刻读到的;
+    /// 不补的话每一拍都整段落后,伺服把屏上位置往回拽(见 02 章决策 63)。纯函数,selftest 直接覆盖。
+    public nonisolated static func spotifyFallbackCaughtUp(_ snapshot: MediaControlSnapshot, waited: TimeInterval,
+                                                            now: Date) -> MediaControlSnapshot {
+        guard snapshot.playing == true, let elapsed = snapshot.elapsedTime, waited > 0 else { return snapshot }
+        return snapshot.withElapsed(elapsed + waited * (snapshot.playbackRate ?? 1), capturedAt: now)
     }
 
     /// 哪些播放器的 media-control 读数带上读到的时刻(见上面那句)。酷狗;Safari 的媒体进程

@@ -7,19 +7,30 @@ import Foundation
 ///
 /// 用途只有一件:`Track ID` 以 `spotify:ad:` 开头就是广告 —— 跟 AppleScript `spotify url` 是同一个值,
 /// 但通知在换曲那一刻就到(实测比 MediaRemote 那份 now-playing 早,广告后开播那首早了约 2.4s),而且
-/// 不用 fork 子进程。位置、播放状态、标题**都不从这里喂状态**(02 章决策 1;这是它的第二个窄例外),
-/// 分类结果也只在 `LocalPlaybackSource.apply()` 里、按快照的歌名/歌手核对过之后才生效。
+/// 不用 fork 子进程。标题不从这里喂状态(02 章决策 1;这是它的第二个窄例外),分类结果也只在
+/// `LocalPlaybackSource.apply()` 里、按快照的歌名/歌手核对过之后才生效。
+///
+/// 第三个窄例外:问不到 Spotify 的 AppleScript(没授权 / 弹窗挂着)时,`Playback Position` + 收到的时刻当
+/// Spotify 自己的钟用,替掉开播时晚一截的 MediaRemote 锚点(见 `MediaControlClient.spotifyNoticeReading`、02 章决策 63)。
 public struct SpotifyNotificationHint: Equatable, Sendable {
     public let trackID: String
     public let name: String
     public let artist: String
     public let receivedAt: Date
+    /// `Player State` 是不是 Playing(没有这个键为 nil)。
+    public let playing: Bool?
+    /// `Playback Position`(秒):Spotify 自己的钟在发这条通知那一刻的读数。只给问不到 AppleScript 时的位置兜底用,
+    /// 见 `MediaControlClient.spotifyNoticeReading`。
+    public let position: Double?
 
-    public init(trackID: String, name: String, artist: String, receivedAt: Date = Date()) {
+    public init(trackID: String, name: String, artist: String, receivedAt: Date = Date(),
+                playing: Bool? = nil, position: Double? = nil) {
         self.trackID = trackID
         self.name = name
         self.artist = artist
         self.receivedAt = receivedAt
+        self.playing = playing
+        self.position = position
     }
 
     /// 从通知 userInfo 构造。没有 Track ID 的通知 → nil,别拿空串去分类。
@@ -30,7 +41,9 @@ public struct SpotifyNotificationHint: Equatable, Sendable {
         self.init(trackID: id.trimmingCharacters(in: .whitespaces),
                   name: (info["Name"] as? String) ?? "",
                   artist: (info["Artist"] as? String) ?? "",
-                  receivedAt: receivedAt)
+                  receivedAt: receivedAt,
+                  playing: (info["Player State"] as? String).map { $0 == "Playing" },
+                  position: (info["Playback Position"] as? NSNumber)?.doubleValue)
     }
 
     /// `spotify:ad:…` 是广告;其它一律不是(曲目 / 播客节目 / 本地文件)。

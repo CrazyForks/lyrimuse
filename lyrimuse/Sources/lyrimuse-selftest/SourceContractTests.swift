@@ -383,6 +383,21 @@ func runSourceContractTests() {
                         "Spotify 封面: LocalPlaybackSource 要给位置探针挂 artwork sink")
             expectEqual(lps.contains("BrowserPositionProbe.shared.setArtworkSink"), true,
                         "Spotify 封面: 网页版那条(BrowserPositionProbe)同样要挂 artwork sink")
+            expectEqual(lps.contains("guard Self.pollResultIsCurrent(generation: generation"), true,
+                        "poll 世代: poll() 要经 pollResultIsCurrent 决定用不用这一轮")
+            expectEqual(lps.contains("self.pollAppliedGeneration = generation"), true,
+                        "poll 世代: 用了的那一轮要记成已生效")
+            expectEqual(lps.contains("pollInvalidatedThrough = pollGeneration"), true,
+                        "poll 世代: seek 要把在飞的那几轮记成作废")
+            if let mcc = code(core.appendingPathComponent("MediaControlClient.swift")) {
+                expectEqual(mcc.contains("return spotifyFallbackCaughtUp(mediaControl, waited:"), true,
+                            "Spotify 回退: adaptedSnapshot 问不到 Spotify 时要经 spotifyFallbackCaughtUp 补上等掉的时间")
+                expectEqual(mcc.contains("if let fromNotice = spotifyNoticeReading(mediaControl, notice: currentSpotifyNotice(),"), true,
+                            "Spotify 回退: 问不到 AppleScript 时先试 Spotify 通知里的位置")
+            }
+            if lps.contains("if let hint { MediaControlClient.noteSpotifyNotice(hint) }") == false {
+                expectEqual(true, false, "Spotify 回退: 收到 Spotify 那条通知要记进 MediaControlClient.noteSpotifyNotice")
+            }
         } else {
             expectEqual(true, false, "Spotify 接线: 读不到 LyrimuseCore/Local/LocalPlaybackSource.swift(路径挪了?)")
         }

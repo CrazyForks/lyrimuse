@@ -33,6 +33,9 @@ public enum ProcessRunner {
         public var stderrText: String { String(data: stderr, encoding: .utf8) ?? "" }
     }
 
+    /// 超时发出 SIGTERM 之后,再等多久还没退出就 SIGKILL。
+    public static let killGraceSeconds: TimeInterval = 1
+
     /// 同步跑完一条命令。**会阻塞到子进程结束或超时**,别在主线程上调。
     ///
     /// 返回 nil 只代表"进程根本没起来"(可执行文件不存在/没有执行权限),跟"跑了但失败"
@@ -77,6 +80,12 @@ public enum ProcessRunner {
             guard process.isRunning else { return }
             flag.fire()
             process.terminate()
+            // SIGTERM 不一定管用:osascript 在等「自动化」授权弹窗时不理它,这时下面读管道、等退出会一直
+            // 卡到用户点掉弹窗(见 02 章决策 63)。宽限过后还在跑就 SIGKILL。
+            let pid = process.processIdentifier
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + killGraceSeconds) {
+                if process.isRunning { kill(pid, SIGKILL) }
+            }
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: killer)
 

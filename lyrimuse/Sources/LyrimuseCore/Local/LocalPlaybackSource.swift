@@ -825,12 +825,19 @@ public final class LocalPlaybackSource: ObservableObject {
         return lead
     }
 
-    /// 学到的领先量怎么更新:EMA α=0.3,别让一次异常样本把整档拽走。纯函数,selftest 直接覆盖。
-    public nonisolated static func learnedStartLead(current: Double, sample: Double) -> Double {
-        current * 0.7 + sample * 0.3
+    /// 学到的领先量怎么更新:EMA,这一档学过的样本不到 `startLeadFastSamples` 个时 α=0.5,之后 α=0.3。
+    /// 先验只在一台机器上量过几次,离这台机器的真值可以差出 0.3~0.4s,而样本只在暂停时才有一个;全程 α=0.3
+    /// 要暂停五六次才收敛,之前每首都偏(见 02 章决策 65)。收敛之后回到 0.3,别让一次异常样本把整档拽走。
+    /// 纯函数,selftest 直接覆盖。
+    public nonisolated static func learnedStartLead(current: Double, sample: Double, samplesSoFar: Int) -> Double {
+        let alpha = samplesSoFar < startLeadFastSamples ? 0.5 : 0.3
+        return current * (1 - alpha) + sample * alpha
     }
+    public nonisolated static let startLeadFastSamples = 3
 
     private static let spotifyStartLeadDefaultsKey = "np:spotifyStartLeadByKind"
+    /// 每一档学过几个样本(决定 `learnedStartLead` 的 α)。旧版本没有这张表,按 0 算。
+    private static let spotifyStartLeadSamplesDefaultsKey = "np:spotifyStartLeadSamplesByKind"
     private static let spotifyStartLeadSchemaDefaultsKey = "np:spotifyStartLeadSchema"
 
     /// 起播领先量表的规则版本。某一档的**判定或学习规则**变了,就把版本 +1、在 `migratedStartLeadTable`
@@ -865,10 +872,14 @@ public final class LocalPlaybackSource: ObservableObject {
     private func learnSpotifyStartLead(kind: SpotifyStartKind, sample: Double) {
         var table = loadStartLeadTable()
         let current = table[kind.rawValue] ?? Self.spotifyStartLeadPrior(kind)
-        let updated = Self.learnedStartLead(current: current, sample: sample)
+        var counts = (env.defaults.dictionary(forKey: Self.spotifyStartLeadSamplesDefaultsKey) as? [String: Int]) ?? [:]
+        let samplesSoFar = counts[kind.rawValue] ?? 0
+        let updated = Self.learnedStartLead(current: current, sample: sample, samplesSoFar: samplesSoFar)
         table[kind.rawValue] = updated
+        counts[kind.rawValue] = samplesSoFar + 1
         env.defaults.set(table, forKey: Self.spotifyStartLeadDefaultsKey)
-        logger.notice("spotify start lead learned: kind=\(kind.rawValue, privacy: .public) sample=\(sample, format: .fixed(precision: 3)) \(current, format: .fixed(precision: 3)) → \(updated, format: .fixed(precision: 3))")
+        env.defaults.set(counts, forKey: Self.spotifyStartLeadSamplesDefaultsKey)
+        logger.notice("spotify start lead learned: kind=\(kind.rawValue, privacy: .public) sample=\(sample, format: .fixed(precision: 3)) \(current, format: .fixed(precision: 3)) → \(updated, format: .fixed(precision: 3)) samples=\(samplesSoFar + 1)")
     }
 
     /// Spotify 自己的钟是不是开播起步晚了:还在曲首几秒、读数(已扣偏置)比外推慢出一截。纯函数,selftest 直接覆盖。
@@ -1510,17 +1521,11 @@ public final class LocalPlaybackSource: ObservableObject {
 
     private func verifySpotifyAdViaAppleScript(forKey key: String) {
         Task.detached(priority: .utility) {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            proc.arguments = ["-e", "tell application \"Spotify\" to spotify url of current track"]
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = Pipe()
-            guard (try? proc.run()) != nil else { return }
-            proc.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let out = String(data: data, encoding: .utf8),
-                  out.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("spotify:ad")
+            guard let r = ProcessRunner.run(
+                "/usr/bin/osascript", ["-e", "tell application \"Spotify\" to spotify url of current track"],
+                timeout: MusicPlaybackController.appleScriptTimeout),
+                r.succeeded,
+                r.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("spotify:ad")
             else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.lastSnapshot?.trackKey == key else { return }
@@ -2063,9 +2068,11 @@ public final class LocalPlaybackSource: ObservableObject {
         spotifyInfoObserver = center.addObserver(
             forName: NSNotification.Name("com.spotify.client.PlaybackStateChanged"),
             object: nil, queue: .main) { [weak self] note in
-                // 只读 Track ID / Name / Artist 做广告分类(上面那段 里的窄例外);位置与播放状态照旧只当
+                // 读 Track ID / Name / Artist 做广告分类(上面那段 里的窄例外);位置与播放状态只在问不到 Spotify 的
+                // AppleScript 时由 MediaControlClient.spotifyNoticeReading 拿去当它自己的钟,别的时候照旧只当
                 // "提前 poll 一次"的信号。userInfo 在主队列上读,跟下面 handler 同一条路。
                 let hint = SpotifyNotificationHint(userInfo: note.userInfo)
+                if let hint { MediaControlClient.noteSpotifyNotice(hint) }
                 let playingFromStart = (note.userInfo?["Player State"] as? String) == "Playing"
                     && ((note.userInfo?["Playback Position"] as? NSNumber)?.doubleValue ?? .infinity) < 1
                 MainActor.assumeIsolated {
@@ -2576,8 +2583,8 @@ public final class LocalPlaybackSource: ObservableObject {
     // Task,内部子进程调用(几十~上百毫秒,但权限弹窗/系统繁忙等情况下可能明显变慢)之间
     // 没有任何互斥,较早发起的一次如果比较晚发起的一次更慢完成,会在 apply() 里用一份
     // 过期快照覆盖掉刚刚已经生效的新快照,造成标题/歌词短暂跳回上一首歌。用单调递增的
-    // 世代号标记"这是第几次发起的轮询",子进程返回后只在"没有更新的轮询已经发起过"时
-    // 才继续走 apply()/clearIfWasPlaying()——跟 fetchArtworkForCurrentTrack() 已经用
+    // 世代号标记"这是第几次发起的轮询",子进程返回后只在"比已经生效的那一轮更新"时
+    // 才继续走 apply()/clearIfWasPlaying()(见 pollResultIsCurrent)——跟 fetchArtworkForCurrentTrack() 已经用
     // expectedKey 做的事是同一个模式,只是这里换歌与否都要防护,不能用 trackKey 当
     // 世代标识。
     //
@@ -2607,6 +2614,20 @@ public final class LocalPlaybackSource: ObservableObject {
         if pollFlight.finish() { poll() }
     }
 
+    /// 最近一次被采用的那一轮的世代号。
+    private var pollAppliedGeneration = 0
+    /// 这一轮及更早发起的一律作废(seek 时记下,见 `seek(toMs:)`)。
+    private var pollInvalidatedThrough = 0
+
+    /// 一轮 poll 的结果还能不能用:比已采用的那轮新,且不是 seek 之前发起的。
+    /// 别写成「必须是最后发起的那一轮」:每轮都比轮询间隔慢时(自动化权限弹窗挂着,Spotify 的 osascript
+    /// 每次都等满 5 秒超时,而轮询 2 秒一轮),每个结果回来时都已经有更晚的一轮在飞,全被丢掉,
+    /// 界面一直空着(见 02 章决策 63)。纯函数,selftest 直接覆盖。
+    public nonisolated static func pollResultIsCurrent(generation: Int, appliedGeneration: Int,
+                                                       invalidatedThrough: Int) -> Bool {
+        generation > appliedGeneration && generation > invalidatedThrough
+    }
+
     /// 连续多少次 poll() 拿到了 nil 快照——给下面"snapshot failed"那行判断该不该打日志用。
     /// 实测坐实的问题:这条路径原来无条件每拍都打一遍 `.error`,而空闲档
     /// (没在放歌)轮询间隔只有 10s,一晚上挂机就是几百条一模一样的行——诊断导出一份
@@ -2630,10 +2651,12 @@ public final class LocalPlaybackSource: ObservableObject {
             let (snapshot, snapshotFailure) = await Self.runOffPool(Self.pollQueue) {
                 (MediaControlClient.fetchSnapshot(), MediaControlClient.lastSnapshotFailure)
             }
-            guard generation == self.pollGeneration else {
-                logger.debug("poll result discarded: stale generation (\(generation) vs \(self.pollGeneration))")
+            guard Self.pollResultIsCurrent(generation: generation, appliedGeneration: self.pollAppliedGeneration,
+                                           invalidatedThrough: self.pollInvalidatedThrough) else {
+                logger.debug("poll result discarded: stale generation (\(generation) vs applied \(self.pollAppliedGeneration), invalidated through \(self.pollInvalidatedThrough))")
                 return
             }
+            self.pollAppliedGeneration = generation
             guard let snapshot else {
                 // 返回 nil 不只是"调用失败"(比如没有"自动化"权限),更常见的是真的没有
                 // 任何曲目在加载(比如 Music.app 处于 stopped 而不是 paused——paused 时
@@ -3447,7 +3470,7 @@ public final class LocalPlaybackSource: ObservableObject {
         // 才在播放器侧生效(Music.app 的 AppleScript 状态实测要 ~294ms 才切换,见
         // handlePlayerInfoChanged 那段注释),那之后**新发起**的 poll 同样会读到旧位置,
         // 靠上面那个接受窗兜。
-        pollGeneration += 1
+        pollInvalidatedThrough = pollGeneration
         // 在飞的那一轮作废了,回来后补跑一轮拿拖动之后的状态(单飞,见 PollSingleFlight)。
         pollFlight.invalidateInFlight()
         trackPosSeconds = seconds

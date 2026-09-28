@@ -184,8 +184,8 @@ private func replaySpotifyManualStart() {
     expectEqual(near(rig.shown(at: at(19.8)), frozen, 0.001), true, "回放·Spotify 手动点播: 暂停后屏上 = 冻结值")
     expectEqual(rig.source.replayReportedBiasSecs, 0, "回放·Spotify 手动点播: 暂停作废偏置")
     let learned = rig.startLeadTable["fresh"]
-    expectEqual(near(learned, 0.24 * 0.7 + trueLead * 0.3, 0.002), true,
-                "回放·Spotify 手动点播: 暂停反推的 0.271 按 α=0.3 学进 fresh(\(learned.map { String(format: "%.4f", $0) } ?? "nil"))")
+    expectEqual(near(learned, 0.24 * 0.5 + trueLead * 0.5, 0.002), true,
+                "回放·Spotify 手动点播: 暂停反推的 0.271 按头几个样本的 α=0.5 学进 fresh(\(learned.map { String(format: "%.4f", $0) } ?? "nil"))")
     expectEqual(rig.startLeadTable["afterAd"], nil, "回放·Spotify 手动点播: 不碰 afterAd")
 }
 
@@ -212,7 +212,7 @@ private func replaySpotifyAfterAd() {
         let frozen = raw(19) - 0.766 + LocalPlaybackSource.spotifyPauseFadeSecs
         rig.tick(spotify("還是會寂寞", artist: "陳綺貞", raw: frozen, duration: 272.29, playing: false), at: at(19.3))
         let table = rig.startLeadTable
-        expectEqual(near(table["afterAd"], 0.66 * 0.7 + 0.766 * 0.3, 0.002), true,
+        expectEqual(near(table["afterAd"], 0.66 * 0.5 + 0.766 * 0.5, 0.002), true,
                     "回放·Spotify 广告之后: 暂停反推的 0.766 学进 afterAd(\(table["afterAd"].map { String(format: "%.4f", $0) } ?? "nil"))")
         expectEqual(table["fresh"], nil, "回放·Spotify 广告之后: fresh 不被这个样本污染")
     }
