@@ -57,8 +57,13 @@ func neteasePeripheralFields(ne neteaseInfo, durationSecs float64) enrichEntry {
 // lyricsEntryFromScored 按一轮检索结果拼出条目里歌词那部分:网易云封面与链接、各源到场情况、决策存档、
 // 选中的歌词。首次解析的最终结果和首轮先上屏的那一份都走这里,两份字段口径一致。选不出歌词时 picked 为 nil,
 // 纯音乐 / 纯文本兜底由调用方处理。
+//
+// 决策日志一首只记一行:provisional(先上屏那一份)落 Debug,它跟最终定案通常一模一样;最终定案时
+// shownFirst 是先上屏那份的源("" = 没有先上屏),跟最终胜者不同就带上 provisional_winner,开头几秒
+// 显示的是另一份歌词这件事照样看得到。
 func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSecs float64, ne neteaseInfo,
-	scored []scoredLyricCandidateResult, skipped []string, queries []lyricQueryRecord) (enrichEntry, *scoredLyricCandidateResult) {
+	scored []scoredLyricCandidateResult, skipped []string, queries []lyricQueryRecord,
+	provisional bool, shownFirst string) (enrichEntry, *scoredLyricCandidateResult) {
 	e := neteasePeripheralFields(ne, durationSecs)
 	// 不管选没选中,都记下这一轮到底有哪些源真的给出了可用候选 —— needsLyricsRetry
 	// 靠"有启用的源这轮没露面"来判断这次结果是不是在信息不全的情况下做的决定。
@@ -66,8 +71,13 @@ func lyricsEntryFromScored(decisionPath, artist, title, album string, durationSe
 	e.LyricsSourcesResponded = lyricSourcesResponded(scored)
 	e.LyricsSourcesSkipped = skipped
 	picked := pickLyricCandidate(scored)
-	e.LyricsDecision = buildLyricsDecision(
+	e.LyricsDecision = newLyricsDecision(
 		decisionPath, artist, title, album, durationSecs, scored, picked, picked != nil)
+	var extra []any
+	if !provisional && shownFirst != "" && (picked == nil || picked.Source != shownFirst) {
+		extra = append(extra, "provisional_winner", shownFirst)
+	}
+	logLyricsDecision(e.LyricsDecision, picked, provisional, extra...)
 	e.LyricsDecision.SourcesSkipped = skipped
 	e.LyricsDecision.QueriesTried = queries
 	if picked == nil {

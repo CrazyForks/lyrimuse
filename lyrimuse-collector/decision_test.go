@@ -152,6 +152,26 @@ func TestLogLyricsDecisionLine(t *testing.T) {
 		}
 	})
 
+	// 首次解析一首只记一行:先上屏那一份落 Debug;最终定案的胜者跟先上屏的不同时带上 provisional_winner。
+	t.Run("先上屏与最终定案合成一行", func(t *testing.T) {
+		scored := []scoredLyricCandidateResult{{Source: "qq", Lyrics: "[00:01.00]a", Score: 900}}
+		if out := capture(func() {
+			lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "a", "t", "", 0, neteaseInfo{}, scored, nil, nil, true, "")
+		}); strings.Contains(out, "lyrics decision") {
+			t.Errorf("先上屏那一份不该落 Info: %q", out)
+		}
+		if out := capture(func() {
+			lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "a", "t", "", 0, neteaseInfo{}, scored, nil, nil, false, "qq")
+		}); !strings.Contains(out, "lyrics decision") || strings.Contains(out, "provisional_winner") {
+			t.Errorf("最终定案要落 Info;胜者跟先上屏的一样时不带 provisional_winner: %q", out)
+		}
+		if out := capture(func() {
+			lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "a", "t", "", 0, neteaseInfo{}, scored, nil, nil, false, "kugou")
+		}); !strings.Contains(out, "provisional_winner=kugou") {
+			t.Errorf("先上屏的是另一个源时要带上 provisional_winner: %q", out)
+		}
+	})
+
 	// 没在播的歌的重新打分(全量扫库)落 Debug;在播那首的照常落 Info,并标 playing=true。
 	t.Run("重新打分只在播那首进 Info", func(t *testing.T) {
 		saved := enrichPlayingKey.Load()

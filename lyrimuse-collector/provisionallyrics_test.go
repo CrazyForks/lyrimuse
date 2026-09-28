@@ -42,7 +42,7 @@ func TestLyricsEntryFromScored(t *testing.T) {
 	}
 	ne := neteaseInfo{Cover: "https://example.invalid/c.jpg", Album: "A", SongURL: "https://example.invalid/s"}
 	q := []lyricQueryRecord{{Artist: "x", Title: "y"}}
-	e, picked := lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "x", "y", "A", 200, ne, scored, []string{"lrclib"}, q)
+	e, picked := lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "x", "y", "A", 200, ne, scored, []string{"lrclib"}, q, false, "")
 	if picked == nil || picked.Source != "kugou" {
 		t.Fatalf("picked=%+v", picked)
 	}
@@ -58,7 +58,7 @@ func TestLyricsEntryFromScored(t *testing.T) {
 		t.Fatalf("决策存档: %+v", e.LyricsDecision)
 	}
 
-	e, picked = lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "x", "y", "A", 200, ne, scored[1:], nil, nil)
+	e, picked = lyricsEntryFromScored(lyricsDecisionPathFirstResolve, "x", "y", "A", 200, ne, scored[1:], nil, nil, false, "")
 	if picked != nil || e.Lyrics != "" || e.LyricsDecisionApplied != nil || e.LyricsDecision == nil {
 		t.Fatalf("选不出歌词:只留决策存档,不写出处 %+v", e)
 	}

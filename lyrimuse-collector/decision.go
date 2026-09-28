@@ -180,6 +180,17 @@ func buildLyricsDecision(
 	path, artist, title, album string, durationSecs float64,
 	scored []scoredLyricCandidateResult, picked *scoredLyricCandidateResult, applied bool,
 ) *lyricsDecision {
+	d := newLyricsDecision(path, artist, title, album, durationSecs, scored, picked, applied)
+	logLyricsDecision(d, picked, false)
+	return d
+}
+
+// newLyricsDecision 同 buildLyricsDecision,只是不记决策日志:调用方自己按场合记(首次解析的先上屏
+// 那一份,见 lyricsEntryFromScored)。
+func newLyricsDecision(
+	path, artist, title, album string, durationSecs float64,
+	scored []scoredLyricCandidateResult, picked *scoredLyricCandidateResult, applied bool,
+) *lyricsDecision {
 	d := &lyricsDecision{
 		Path:             path,
 		DecidedAt:        time.Now().Unix(),
@@ -216,7 +227,6 @@ func buildLyricsDecision(
 		})
 	}
 	d.WinnerArtist = decisionWinnerArtist(d)
-	logLyricsDecision(d, picked)
 	return d
 }
 
@@ -278,7 +288,8 @@ const lyricsDecisionLogMaxCandidates = 12
 // 打在这里而不是五个调用点各写一遍 —— 这是它们唯一的汇聚点,各写一遍迟早漏掉一条路径。
 // 这不违反文件头铁律 2「只写不读」:那条说的是解析逻辑不许拿决策当输入反过来影响行为,
 // 写进日志不参与任何判断。
-func logLyricsDecision(d *lyricsDecision, picked *scoredLyricCandidateResult) {
+// quiet:这一行落 Debug。extra 追加在 candidates 之前。
+func logLyricsDecision(d *lyricsDecision, picked *scoredLyricCandidateResult, quiet bool, extra ...any) {
 	// 按分数降序列候选,好回答"为什么没选第二名"。排的是索引,d.Candidates 本身的顺序
 	// 要原样进缓存,不能在这里被重排。
 	order := make([]int, len(d.Candidates))
@@ -326,10 +337,11 @@ func logLyricsDecision(d *lyricsDecision, picked *scoredLyricCandidateResult) {
 	if d.CorrectedTitle != "" {
 		attrs = append(attrs, "corrected_title", d.CorrectedTitle)
 	}
+	attrs = append(attrs, extra...)
 	// 没在播的歌的重新打分几乎都来自全量扫库,一轮上千条;明细已经存进条目(「解析决策」面板),
 	// 换了源的另有一行 "lyrics rescore: … -> …"。这一类落 Debug。
 	level := slog.LevelInfo
-	if d.Path == lyricsDecisionPathRescore && !playing {
+	if quiet || d.Path == lyricsDecisionPathRescore && !playing {
 		level = slog.LevelDebug
 	}
 	slog.Log(context.Background(), level, "lyrics decision", append(attrs, "candidates", sb.String())...)

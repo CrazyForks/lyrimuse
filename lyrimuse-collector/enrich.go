@@ -2628,12 +2628,18 @@ func resolveTrackEnrichment(ctx context.Context, artist, title, album string, du
 	roundCtx, round := withLyricSourceRound(ctx)
 	roundCtx, queries := withLyricQueryLog(roundCtx)
 	// 首轮先上屏(见 provisionallyrics.go):首轮挑得出歌词、还要接着跑补查轮时,先把首轮的结果提交一份。
+	// shownFirst:先上屏的那一份用的是哪个源,给最终定案那行决策日志用(见 lyricsEntryFromScored)。
+	var shownMu sync.Mutex
+	var shownFirst string
 	if onLyrics != nil {
 		roundCtx = withProvisionalLyrics(roundCtx, func(ne neteaseInfo, scored []scoredLyricCandidateResult) {
 			timer := newStepTimer()
 			if p, picked := lyricsEntryFromScored(decisionPath, artist, title, album, durationSecs, ne, scored,
-				round.skippedSources(), queries.queries()); picked != nil {
+				round.skippedSources(), queries.queries(), true, ""); picked != nil {
 				timer.mark("build")
+				shownMu.Lock()
+				shownFirst = picked.Source
+				shownMu.Unlock()
 				onLyrics(p)
 				timer.mark("commit")
 				timer.logIfSlow("provisional lyrics for "+artist+" - "+title, slowCommitThreshold)
@@ -2653,8 +2659,11 @@ func resolveTrackEnrichment(ctx context.Context, artist, title, album string, du
 	// 唯一的例外是上面说的:网易云作为歌词源被关掉时 ne 是空的,这里自然拿不到它的封面和链接。
 	// 决策固化(见 decision.go):首次解析是最要紧的一份 —— 缓存永久保留,这一刻的运气
 	// 就是这首歌以后一直显示的东西,不记下来事后无从复盘。
+	shownMu.Lock()
+	provisionalSource := shownFirst
+	shownMu.Unlock()
 	e, picked := lyricsEntryFromScored(decisionPath, artist, title, album, durationSecs, ne, scored,
-		round.skippedSources(), queries.queries())
+		round.skippedSources(), queries.queries(), false, provisionalSource)
 	// 首次解析这里拿不到 key(它由上层 trackEnrichment 用**未转简体**的原始标签拼),
 	// 用查询词拼一个等价形状 —— trace 是流水账,要的是"能对上是哪首歌",不参与任何查找。
 	traceLyricsDecision(artist+"|"+title+"|"+album, e.LyricsDecision)
