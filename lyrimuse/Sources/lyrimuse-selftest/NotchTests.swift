@@ -1089,12 +1089,10 @@ func runNotchTests() {
                     "全屏契约: 每个实例(含镜像副本)自己订阅开关与全屏表,值从 sink 参数拿")
         expectEqual(controller.contains("let screen = resolvedScreen()\n        let covered = FullScreenSpaces.covers("), true,
                     "全屏契约: 按这扇窗自己所在的屏判,不看别的屏")
-        expectEqual(controller.contains("screenHasNotch: (screen?.safeAreaInsets.top ?? 0) > 0)"), true,
-                    "全屏契约: 刘海屏 / 无刘海屏按这扇窗所在屏幕的刘海判")
-        expectEqual(controller.contains("let effective = showsLyricsSetting && !lyricsOff"), true,
-                    "全屏契约: 刘海屏全屏时 showsLyrics 按关掉算,用户开关本身不动")
-        expectEqual(view.contains("label: controller.showsLyricsSetting ? L10n.t(\"隐藏歌词\") : L10n.t(\"显示歌词\")"), true,
-                    "全屏契约: 快捷操作「显示歌词」键读用户开关,不读叠加了全屏的生效值")
+        expectEqual(controller.contains("let hide = NotchVisibility.fullScreenHides(enabled: enabled, coveredByFullScreenApp: covered)"), true,
+                    "全屏契约: 全屏一律整卡隐藏,判据走 Core")
+        expectEqual(controller.contains("safeAreaInsets.top ?? 0) > 0") || controller.contains("lyricsOffByFullScreen"), false,
+                    "全屏契约: 不再按有没有刘海区别对待(刘海屏也整卡隐藏,不是只收歌词行)")
         expectEqual(controller.contains("fullScreenObserver?.cancel()"), true, "全屏契约: teardown 摘掉订阅")
         expectEqual(view.contains("isPlaying: playback.isPlayingNow && surfaceVisible"), true,
                     "可见性契约: 顶行音浪看不见时按暂停处理")
@@ -1148,20 +1146,15 @@ func runNotchTests() {
                     "显隐: 「发现新播放器」提醒挂着时即使没在播也要显示")
         expectEqual(V.shouldShow(isVisible: true, hideWhenNotPlaying: false, isPlaying: true, alertHold: false,
                                  coveredByFullScreen: true), false,
-                    "显隐: 无刘海屏的全屏 Space = 藏,在播也藏")
+                    "显隐: 全屏 Space = 藏,在播也藏")
         expectEqual(V.shouldShow(isVisible: true, hideWhenNotPlaying: true, isPlaying: false, alertHold: true,
                                  coveredByFullScreen: true), false,
                     "显隐: 全屏压过「发现新播放器」提醒")
 
-        typealias T = V.FullScreenTreatment
-        expectEqual(V.fullScreenTreatment(enabled: true, coveredByFullScreenApp: true, screenHasNotch: true), T.lyricsOff,
-                    "全屏处理: 刘海屏只收歌词行,顶行留在刘海两侧的黑边里")
-        expectEqual(V.fullScreenTreatment(enabled: true, coveredByFullScreenApp: true, screenHasNotch: false), T.hide,
-                    "全屏处理: 无刘海屏整卡隐藏(顶行也会盖住画面)")
-        expectEqual(V.fullScreenTreatment(enabled: false, coveredByFullScreenApp: true, screenHasNotch: false), T.none,
-                    "全屏处理: 开关关着不处理")
-        expectEqual(V.fullScreenTreatment(enabled: true, coveredByFullScreenApp: false, screenHasNotch: true), T.none,
-                    "全屏处理: 不在全屏 Space 不处理")
+        expectEqual(V.fullScreenHides(enabled: true, coveredByFullScreenApp: true), true,
+                    "全屏处理: 全屏 Space 整卡隐藏,刘海屏也一样(不再只收歌词行)")
+        expectEqual(V.fullScreenHides(enabled: false, coveredByFullScreenApp: true), false, "全屏处理: 开关关着不处理")
+        expectEqual(V.fullScreenHides(enabled: true, coveredByFullScreenApp: false), false, "全屏处理: 不在全屏 Space 不处理")
 
         // 哪块屏的当前 Space 是全屏(CGSCopyManagedDisplaySpaces 的形状)
         typealias F = FullScreenSpaces

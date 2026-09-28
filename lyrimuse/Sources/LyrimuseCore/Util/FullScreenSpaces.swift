@@ -1,4 +1,4 @@
-/// 哪些屏幕的当前 Space 是全屏 App(灵动岛「全屏时收起歌词」的纯逻辑部分)。
+/// 哪些屏幕的当前 Space 是全屏 App(灵动岛「全屏时隐藏」的纯逻辑部分)。
 ///
 /// 输入是私有函数 `CGSCopyManagedDisplaySpaces` 的返回值:每块屏幕一项,带 `Display Identifier`、
 /// `Current Space`、`Spaces`。当前 Space 的字典里有 `TileLayoutManager` 键就是原生全屏 Space(分屏也算)。

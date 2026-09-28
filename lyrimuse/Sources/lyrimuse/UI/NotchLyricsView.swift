@@ -618,11 +618,9 @@ protocol NotchChromeSource: ObservableObject {
     /// AppSettings(那是性能审计定的:别让无关设置写入打醒整卡)。真窗口那一侧
     /// 由控制器订阅设置后 @Published 出来,预览那一侧现读即可。
     ///
-    /// 这是**生效值**:真窗口在刘海屏的全屏 Space 里会临时按关掉算(「全屏时收起歌词」,
-    /// 见 `NotchVisibility.fullScreenTreatment`)。要表达"用户开关本身"的地方读 `showsLyricsSetting`。
+    /// 卡片按它排歌词行;要表达"用户开关本身"的地方读 `showsLyricsSetting`(两者现在恒等)。
     var showsLyrics: Bool { get }
-    /// 用户「显示歌词」开关本身,不叠加全屏收起。只给展开态快捷操作那颗「显示 / 隐藏歌词」键用 ——
-    /// 全屏时它照旧反映用户的选择,不会显示成关着、点了却看不出变化。
+    /// 用户「显示歌词」开关本身。只给展开态快捷操作那颗「显示 / 隐藏歌词」键用。
     var showsLyricsSetting: Bool { get }
     /// 要不要显示播放指示条(音浪)。同上,走 chrome 不直接读 AppSettings——它同时影响
     /// 渲染(NotchLyricsView.topRow)和宽度下限(NotchLyricsWindowController.minEarWidth)。

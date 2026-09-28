@@ -36152,25 +36152,19 @@
         }
       }
     },
-    "全屏时收起歌词" : {
+    "全屏时隐藏" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hide Lyrics in Full Screen"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全屏时收起歌词"
+            "value" : "Hide in Full Screen"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全螢幕時收起歌詞"
+            "value" : "全螢幕時隱藏"
           }
         }
       }

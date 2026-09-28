@@ -3034,7 +3034,7 @@ enum NotchBehaviorItem: String, CaseIterable, Identifiable {
         case .showLyrics: return L10n.t("显示歌词")
         case .karaoke: return L10n.t("卡拉OK效果")
         case .collapseWhenPaused: return L10n.t("暂停缩回")
-        case .hideInFullScreen: return L10n.t("全屏时收起歌词")
+        case .hideInFullScreen: return L10n.t("全屏时隐藏")
         case .lyricRowArtwork: return L10n.t("显示封面")
         // 标题里要把"只在展开时"说出来,否则跟上一行「副行 · 下一句」读起来像同一个开关的两种写法。
         case .expandedNextLine: return L10n.t("展开时预览下一句")
@@ -3376,7 +3376,7 @@ struct NotchExpandedSettingsRows: View {
 
 /// 「行为」组 —— 工具栏「行为」浮层(`NotchBehaviorPopover`)与抽屉 `behaviorGroup` 同一份:
 /// 「暂停缩回」+ 两行自动隐藏(`AutoHideSettingsRows`,跟悬浮歌词共用同一份视图、靠 `surface`
-/// 分流到 `notchHide*`)+「全屏时收起歌词」(只有灵动岛有,所以不进 `AutoHideItem`)。
+/// 分流到 `notchHide*`)+「全屏时隐藏」(只有灵动岛有,所以不进 `AutoHideItem`)。
 ///
 /// 工具栏「行为」按钮的摘要(`NotchEditorStage.behaviorSummary`)要把这四项都算进去 ——
 /// 少算不会编译报错,只会让按钮在漏掉的那项开着时照旧显示「全部关闭」。

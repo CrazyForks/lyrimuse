@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import LyrimuseCore
 
-/// 各块屏幕的当前 Space 是不是全屏 App,给灵动岛「全屏时收起歌词」用。判据在 Core `FullScreenSpaces`。
+/// 各块屏幕的当前 Space 是不是全屏 App,给灵动岛「全屏时隐藏」用。判据在 Core `FullScreenSpaces`。
 ///
 /// 只在切 Space、屏幕配置变化时读一次,不轮询。通知到达时系统的 Space 表偶尔还没换过来,
 /// 所以每次通知之后再补读一次(`settleDelay`)。私有函数取不到数据时按「没有全屏」算,

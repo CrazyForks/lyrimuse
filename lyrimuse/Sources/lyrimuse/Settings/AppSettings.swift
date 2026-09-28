@@ -421,8 +421,7 @@ final class AppSettings: ObservableObject {
     /// 这里的常量只回答前者(= 重置按钮该恢复成什么)。
     static let defaultNotchHideDuringScreenCapture = false
     static let defaultNotchHideWhenNotPlaying = false
-    /// 默认开:稳态那行歌词在刘海下沿以下,全屏 App 的内容从刘海下沿开始画,不收会压在它顶部正中。
-    /// 刘海屏只收歌词行、无刘海屏整卡隐藏,见 `NotchVisibility.fullScreenTreatment`。
+    /// 默认开:全屏 App 期间整卡隐藏(有没有刘海一样),见 `NotchVisibility.fullScreenHides`。
     static let defaultNotchHideInFullScreen = true
     static let defaultNotchShowLyrics = true
     /// 动态封面(Apple Music 的 motion artwork)默认**开**。

@@ -82,12 +82,9 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
     /// 的机器上,提醒发生的那一刻窗口本来是隐藏的(没有曲目),得把它叫回来、到点再照常隐藏。
     private var hoverExpanded = false
     private var alertHold = false
-    /// 「全屏时收起歌词」的两种结果(`NotchVisibility.fullScreenTreatment`),由 `applyFullScreenCover` 写入。
-    /// 主实例和镜像副本各看自己那块屏,别的屏全屏不算。
-    /// `coveredByFullScreen`:没有刘海的屏幕,整卡隐藏,进 updateActualVisibility 的判据。
-    /// `lyricsOffByFullScreen`:刘海屏,只把 `showsLyrics` 按关掉算。
+    /// 「全屏时隐藏」(`NotchVisibility.fullScreenHides`)的结论,由 `applyFullScreenCover` 写入,进
+    /// updateActualVisibility 的判据。主实例和镜像副本各看自己那块屏,别的屏全屏不算。
     private var coveredByFullScreen = false
-    private var lyricsOffByFullScreen = false
     /// 当前有没有在播放。由 isPlayingObserver 写入,值取 sink 的**参数**——不能回头去读
     /// PlaybackCoordinator 的存储属性,@Published 在 willSet 时机发布,那一刻读到的还是
     /// 旧值(本项目已实测踩过两次,见下面 isPlayingObserver 处的注释)。
@@ -149,7 +146,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
     /// 用户要不要看歌词行,真值在 `AppSettings.notchShowLyrics`(见那边的注释)。
     /// 镜像到这里是因为 `NotchWindowRoot` 只观察这个控制器、不观察 AppSettings ——
     /// 那是性能审计定的纪律,别为了这一个开关把整卡挂回去观察全部设置。
-    /// 生效值 = 用户开关 且 没在刘海屏的全屏 Space 里(见 `lyricsOffByFullScreen`);开关本身在 `showsLyricsSetting`。
+    /// `showsLyrics` 是卡片读的生效值,`showsLyricsSetting` 是开关本身(快捷操作那颗键的文案读它);两者现在恒等。
     @Published private(set) var showsLyrics: Bool = AppSettings.shared.notchShowLyrics
     @Published private(set) var showsLyricsSetting: Bool = AppSettings.shared.notchShowLyrics
     /// 展开区要不要给迷你进度条留高度(= 这首歌有没有时长)。同上。
@@ -478,8 +475,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
         showLyricsObserver = AppSettings.shared.$notchShowLyrics.removeDuplicates().sink { [weak self] show in
             guard let self else { return }
             showsLyricsSetting = show
-            let effective = show && !lyricsOffByFullScreen
-            if showsLyrics != effective { showsLyrics = effective }
+            if showsLyrics != show { showsLyrics = show }
         }
         // 「暂停时缩到最小」开关。同一个 willSet 坑同一个修法:存 sink 参数值。写入
         // @Published 即生效——isCollapsed 是计算属性,靠这次 objectWillChange 让依赖它的
@@ -1008,17 +1004,7 @@ final class NotchLyricsWindowController: NSWindowController, ObservableObject, N
             screenID: screen.flatMap(ScreenIdentity.id(of:)),
             isMainScreen: screen != nil && screen == NSScreen.screens.first,
             fullScreenDisplays: displays)
-        let treatment = NotchVisibility.fullScreenTreatment(
-            enabled: enabled, coveredByFullScreenApp: covered,
-            screenHasNotch: (screen?.safeAreaInsets.top ?? 0) > 0)
-        let lyricsOff = treatment == .lyricsOff
-        if lyricsOff != lyricsOffByFullScreen {
-            lyricsOffByFullScreen = lyricsOff
-            // 只改卡片内容和高度,窗口尺寸不用重算(窗口恒为最大形态),同「显示歌词」开关。
-            let effective = showsLyricsSetting && !lyricsOff
-            if showsLyrics != effective { showsLyrics = effective }
-        }
-        let hide = treatment == .hide
+        let hide = NotchVisibility.fullScreenHides(enabled: enabled, coveredByFullScreenApp: covered)
         guard hide != coveredByFullScreen else { return }
         coveredByFullScreen = hide
         updateActualVisibility(isPlayingNow: PlaybackCoordinator.shared.isPlayingSmoothed)
