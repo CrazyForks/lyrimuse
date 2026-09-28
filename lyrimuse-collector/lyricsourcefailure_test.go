@@ -96,7 +96,7 @@ func TestTransportFailureCodesAreWired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(cli), "lyricSourceBreakerShared.transportFailureCodes()") {
+	if !strings.Contains(string(cli), "sharedLyricSourceBreaker().transportFailureCodes()") {
 		t.Error("searchcli.go 的 lyricSourceFailureReasons 没有消费 transportFailureCodes —— 三个代码永远报不出去")
 	}
 	// 分类必须挂在 observe 上(doHTTPTracked 唯一的失败观察入口),不能是另开的旁路。

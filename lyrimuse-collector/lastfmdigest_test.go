@@ -31,10 +31,12 @@ type fakeLastfmRead struct {
 // useUnthrottledGuard 换一个不限速的出站闸:真实的那个给 Last.fm 每秒 1 个,一组测试要多等几十秒。
 func useUnthrottledGuard(t *testing.T) {
 	t.Helper()
-	saved := hostGuardShared
-	t.Cleanup(func() { hostGuardShared = saved })
-	hostGuardShared = newHostGuard(time.Now)
-	hostGuardShared.rateFor = func(string) hostRate { return hostRate{perSec: 1000, burst: 1000} }
+	saved := sharedHostGuard()
+	t.Cleanup(func() { setSharedHostGuard(saved) })
+	// 字段改完再发布:发布之后再改,别的 goroutine 读到的就是改到一半的对象。
+	guard := newHostGuard(time.Now)
+	guard.rateFor = func(string) hostRate { return hostRate{perSec: 1000, burst: 1000} }
+	setSharedHostGuard(guard)
 }
 
 func useFakeLastfmRead(t *testing.T, routes map[string]string) *fakeLastfmRead {

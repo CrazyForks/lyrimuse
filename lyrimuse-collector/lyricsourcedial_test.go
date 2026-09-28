@@ -221,7 +221,7 @@ func TestLyricSourceFilesUseLyricHTTPClient(t *testing.T) {
 		t.Fatal("一个 lyricHTTPClient( 都没扫到 —— 守卫失效")
 	}
 	// lyricHTTPClient 必须真的挂了自定义拨号器,否则等于没改。
-	if lyricSourceTransport.DialContext == nil {
+	if sharedLyricSourceTransport().DialContext == nil {
 		t.Fatal("lyricSourceTransport 没有自定义 DialContext")
 	}
 }

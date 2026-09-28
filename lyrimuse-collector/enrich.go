@@ -3556,7 +3556,7 @@ func lyricSourcesWorthAliasRetry(scored []scoredLyricCandidateResult) []string {
 			usable[c.Source] = true
 		}
 	}
-	transport := lyricSourceBreakerShared.transportFailureCodes()
+	transport := sharedLyricSourceBreaker().transportFailureCodes()
 	var out []string
 	for _, s := range lyricSourceNames {
 		if !lyricSourceEnabled(s) || usable[s] || transport[s] != "" {
@@ -4414,7 +4414,7 @@ func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, alb
 	// 源级熔断(sourcebreaker.go):起跑前算一次"谁在冷却中",冷却中的源不发请求、立刻回一个
 	// 空结果——省掉的正是那 20 秒截止里白等的部分。被跳过的源记进 ctx 上的 round(没挂就
 	// 不记,CLI 路径),由写缓存的那几层落到 lyrics_sources_skipped。
-	breakerPlan := lyricSourceBreakerShared.planRound(lyricSourceNames, lyricSourceEnabled)
+	breakerPlan := sharedLyricSourceBreaker().planRound(lyricSourceNames, lyricSourceEnabled)
 	round := lyricSourceRoundFrom(ctx)
 	// 未启用的源这一轮**不发请求**(「没启用肯定就不查」)。无条件全查、只在
 	// filterEnabledLyricSources / pickLyricCandidate 那步丢结果的话,关掉的源照样吃一份网络

@@ -98,13 +98,13 @@ func TestHostGuardHonorsSharedCooldownWrittenByApp(t *testing.T) {
 // collector 这边撞到的限流写进共享文件,App 才看得见。
 func TestCollectorPublishesItsRateLimitWindows(t *testing.T) {
 	withSharedCooldownFile(t)
-	savedGuard := hostGuardShared
-	hostGuardShared = newHostGuard(time.Now)
-	t.Cleanup(func() { hostGuardShared = savedGuard })
+	savedGuard := sharedHostGuard()
+	setSharedHostGuard(newHostGuard(time.Now))
+	t.Cleanup(func() { setSharedHostGuard(savedGuard) })
 	resetITunesSearchBackoff(t)
 
 	req := mustReq(t, context.Background(), http.MethodGet, "https://ws.audioscrobbler.com/2.0/?method=track.getInfo")
-	hostGuardShared.observe(req, http.StatusTooManyRequests, "60")
+	sharedHostGuard().observe(req, http.StatusTooManyRequests, "60")
 	if got := sharedCooldownUntil(sharedCooldownLastfm, time.Now()); got.IsZero() {
 		t.Error("Last.fm 的 429 窗口该写进共享文件")
 	}

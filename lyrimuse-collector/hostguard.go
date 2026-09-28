@@ -11,12 +11,13 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // ---- 出站读请求的本地闸:接口熔断、按主机限速、429 窗口、歌词源冷却 ----
 //
-// doHTTPTracked 真正发请求之前先过 hostGuardShared.admit,依次四道:
+// doHTTPTracked 真正发请求之前先过 sharedHostGuard().admit,依次四道:
 //
 //  0. 接口熔断:同一个端点(键同下)连续 endpointTripAfter 次回 5xx,或调用方从响应体认出拒绝
 //     (reportEndpointRejected),就停用 endpointCooldownSchedule 一档;到期放请求试探,再失败升
@@ -226,7 +227,17 @@ func (g *hostGuard) holdSource(source string, lane outboundLane) {
 	g.sourceHeld[sourceHoldKey(source, lane)] = g.now().Add(hostGuardSourceHold)
 }
 
-var hostGuardShared = newHostGuard(time.Now)
+// hostGuardSharedPtr 是常驻采集器用的那一份出站闸。经 sharedHostGuard / setSharedHostGuard 读写(原子指针):单测会整份换掉它,
+// 而前一个用例留下的后台歌词解析可能还在用 —— 裸的包级变量在那一刻就是数据竞争(`go test -race` 全量跑会报,
+// 连带把新建对象的构造写入跟别的 goroutine 的加锁报成竞争)。换成原子指针之后,旧任务拿到哪一份就用哪一份。
+var hostGuardSharedPtr atomic.Pointer[hostGuard]
+
+func init() { hostGuardSharedPtr.Store(newHostGuard(time.Now)) }
+
+func sharedHostGuard() *hostGuard { return hostGuardSharedPtr.Load() }
+
+// setSharedHostGuard 只给单测换掉整份出站闸。
+func setSharedHostGuard(g *hostGuard) { hostGuardSharedPtr.Store(g) }
 
 // guardHost 取请求的主机名(小写、去端口)。
 func guardHost(u *url.URL) string {
@@ -289,7 +300,7 @@ func (g *hostGuard) admit(req *http.Request) error {
 			return errHostGuarded
 		}
 	} else if round == nil {
-		if left, cooling := lyricSourceBreakerShared.coolingDown(source); cooling {
+		if left, cooling := sharedLyricSourceBreaker().coolingDown(source); cooling {
 			g.logHeld(host, "lyric source "+source+" cooling down for another "+left.Round(time.Second).String())
 			return errHostGuarded
 		}
@@ -635,7 +646,7 @@ func reportEndpointRejected(u *url.URL) {
 	if u == nil {
 		return
 	}
-	hostGuardShared.noteEndpointBad(guardEndpointKey(u), true)
+	sharedHostGuard().noteEndpointBad(guardEndpointKey(u), true)
 }
 
 // reportEndpointAccepted:调用方确认响应体不是拒绝(包括正常的查无结果),清掉拒绝计数。
@@ -645,7 +656,7 @@ func reportEndpointAccepted(u *url.URL) {
 	if u == nil {
 		return
 	}
-	hostGuardShared.noteEndpointGood(guardEndpointKey(u), true)
+	sharedHostGuard().noteEndpointGood(guardEndpointKey(u), true)
 }
 
 // reportEndpointRateLimited:调用方从响应体里认出了限流(比如 Last.fm 的 200 + error 29),
@@ -655,5 +666,5 @@ func reportEndpointRateLimited(u *url.URL, retryAfter string) {
 	if u == nil || lyricSourceForHost(guardHost(u)) != "" {
 		return
 	}
-	hostGuardShared.block(guardHost(u), guardEndpointKey(u), parseLyricSourceRetryAfter(retryAfter))
+	sharedHostGuard().block(guardHost(u), guardEndpointKey(u), parseLyricSourceRetryAfter(retryAfter))
 }

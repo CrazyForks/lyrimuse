@@ -773,9 +773,9 @@ func TestMatchScopeChangeInvalidatesCachedDecision(t *testing.T) {
 
 // 响应体里的 error 29 让 Last.fm 读接口进出站闸的限流窗口,别接着一首一首地撞。
 func TestLastfmCatalogErrorRateLimitedBlocksEndpoint(t *testing.T) {
-	saved := hostGuardShared
-	hostGuardShared = newHostGuard(time.Now)
-	t.Cleanup(func() { hostGuardShared = saved })
+	saved := sharedHostGuard()
+	setSharedHostGuard(newHostGuard(time.Now))
+	t.Cleanup(func() { setSharedHostGuard(saved) })
 
 	const artist, track = "陶喆", "那个女孩"
 	col, cs := newCatalogServer(t, map[string]probeResp{
@@ -786,7 +786,7 @@ func TestLastfmCatalogErrorRateLimitedBlocksEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, blocked := hostGuardShared.endpointBlockedUntil(guardEndpointKey(u)); !blocked {
+	if _, blocked := sharedHostGuard().endpointBlockedUntil(guardEndpointKey(u)); !blocked {
 		t.Fatal("error 29 该让这个端点进限流窗口")
 	}
 }

@@ -31,9 +31,9 @@ func (f *qqFake) count(key string) int {
 // withQQFake 的 handle 收到 target:网页接口是 "host/path",网关是 "host/musicu:<method>"。
 func withQQFake(t *testing.T, handle func(target string) (int, string)) *qqFake {
 	t.Helper()
-	savedGuard, savedBreaker, savedTransport := hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport
-	hostGuardShared = newHostGuard(time.Now)
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	savedGuard, savedBreaker, savedTransport := sharedHostGuard(), sharedLyricSourceBreaker(), sharedLyricSourceTransport()
+	setSharedHostGuard(newHostGuard(time.Now))
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	qqSongDetailMu.Lock()
 	savedDetail := qqSongDetailCache
 	qqSongDetailCache = map[string]qqSongDetailInfo{}
@@ -47,7 +47,9 @@ func withQQFake(t *testing.T, handle func(target string) (int, string)) *qqFake 
 	qqAlbumSongsCache = map[string][]qqAlbumSong{}
 	qqAlbumSongsMu.Unlock()
 	t.Cleanup(func() {
-		hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport = savedGuard, savedBreaker, savedTransport
+		setSharedHostGuard(savedGuard)
+		setSharedLyricSourceBreaker(savedBreaker)
+		setSharedLyricSourceTransport(savedTransport)
 		qqSongDetailMu.Lock()
 		qqSongDetailCache = savedDetail
 		qqSongDetailMu.Unlock()
@@ -85,12 +87,12 @@ func withQQFake(t *testing.T, handle func(target string) (int, string)) *qqFake 
 	}))
 	t.Cleanup(srv.Close)
 	addr := srv.Listener.Addr().String()
-	lyricSourceTransport = &http.Transport{
+	setSharedLyricSourceTransport(&http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	})
 	return f
 }
 

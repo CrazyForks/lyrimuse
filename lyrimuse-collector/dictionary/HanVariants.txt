@@ -3,7 +3,7 @@
 # 数据来源:Unicode Unihan 17.0.0(kUnihanCore2020/kGradeLevel/k*Variant)+ OpenCC TSCharacters
 #          + scripts/han-variant-overrides.txt(人工补丁,每行带理由)
 # 列:变体字<TAB>大陆规范字<TAB>数据依据<TAB>填的是谁的缺口(icu=Swift 侧 / opencc=Go 侧)
-# 条目 681;依据分布 opencc=83 override=2 unihan-semantic=453 unihan-simplified=88 unihan-specialized=55;缺口分布 icu=97 icu+opencc=467 opencc=117
+# 条目 681;依据分布 opencc=83 override=4 unihan-semantic=452 unihan-simplified=88 unihan-specialized=54;缺口分布 icu=97 icu+opencc=467 opencc=117
 㐵	儒	unihan-semantic	icu+opencc
 㓁	网	unihan-semantic	icu+opencc
 㓟	披	unihan-specialized	icu+opencc
@@ -246,7 +246,7 @@
 槖	橐	unihan-semantic	opencc
 槩	概	unihan-semantic	icu+opencc
 檝	楫	unihan-semantic	opencc
-櫂	掉	unihan-specialized	icu+opencc
+櫂	棹	override	icu+opencc
 櫈	凳	unihan-semantic	icu+opencc
 櫌	耰	unihan-semantic	icu+opencc
 櫍	𬃊	unihan-simplified	opencc
@@ -263,7 +263,7 @@
 氜	阳	unihan-semantic	icu+opencc
 氥	氙	unihan-semantic	icu+opencc
 氷	冰	unihan-semantic	icu+opencc
-汚	洿	unihan-semantic	icu+opencc
+汚	污	override	icu+opencc
 沍	冱	unihan-semantic	opencc
 泝	溯	opencc	icu
 洤	泉	unihan-semantic	icu+opencc

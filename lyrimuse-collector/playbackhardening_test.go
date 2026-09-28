@@ -253,10 +253,31 @@ func TestWaitMirrorsInflight(t *testing.T) {
 	}
 }
 
+// suppressEnrichResolveForTest 把这几个 key 标成「后台解析在飞」:trackEnrichment 看到在飞就不再起一个(见 enrich.go
+// looseInflightKey),测试里只查缓存、不留下联网的后台任务。收尾时撤掉标记。
+func suppressEnrichResolveForTest(t *testing.T, keys ...string) {
+	t.Helper()
+	enrichMu.Lock()
+	for _, k := range keys {
+		enrichInflight[k] = true
+	}
+	enrichMu.Unlock()
+	t.Cleanup(func() {
+		enrichMu.Lock()
+		for _, k := range keys {
+			delete(enrichInflight, k)
+		}
+		enrichMu.Unlock()
+	})
+}
+
 // LB 挂着时每一拍都会再 announce 一次:Last.fm now-playing 自己节流,播放 / 暂停切换当场发,其余最多每分钟一次。
 func TestAnnounceThrottlesLastfmNowPlaying(t *testing.T) {
 	p := &poller{ctx: context.Background(), lb: &lbClient{dryRun: true}, announceDoneCh: make(chan announceOutcome, 8)}
 	p.cur = snapshot{Artist: "歌手", Title: "歌", Playing: true}
+	// announce 组装载荷时会查这首的歌词(lbMeta → trackEnrichment),缓存里没有就起一个真去联网的后台解析,
+	// 测试结束了它还在跑,撞上后面换网络钩子、改开关的用例。标成「解析在飞」,这里只查不起。
+	suppressEnrichResolveForTest(t, enrichKey(p.cur.Artist, p.cur.Title, p.cur.Album))
 	p.sess = &playSession{key: p.cur.key(), meta: p.cur}
 	t0 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	step := func(at time.Time, why string) {

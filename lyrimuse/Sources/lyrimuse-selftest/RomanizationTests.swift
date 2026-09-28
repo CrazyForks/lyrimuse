@@ -1050,6 +1050,9 @@ func runRomanizationTests() {
         expectEqual(chained, 0, "异体字表: 没有链式映射(A->B 且 B->C)")
         expectEqual(HanVariants.toSimplified.count > 100, true,
                     "异体字表: 条目数量级正常(生成产物没读空)")
+        // 覆盖表纠正的两条(scripts/han-variant-overrides.txt):上游推导得出的「洿」「掉」意思都不对。
+        expectEqual(HanVariants.toSimplified["汚"], "污", "异体字表: 汚 → 污(不是积水的「洿」)")
+        expectEqual(HanVariants.toSimplified["櫂"], "棹", "异体字表: 櫂 → 棹(船桨,不是「掉」)")
 
         // ⑨ 逐字替换的前提:ICU 对**它确实不转的那批 key**,整条链路的产物必须等于表里的
         //    规范字。只对这一批断言,不是对全表 —— 其余条目 ICU 自己就转掉了(它们留在表里

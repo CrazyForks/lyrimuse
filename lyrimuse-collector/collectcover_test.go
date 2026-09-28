@@ -77,12 +77,12 @@ func TestDropAMLLWithoutIDSource(t *testing.T) {
 // 网易云、QQ 都已经给出可用候选时,别名轮名单里不该有 amll —— 那一轮不重查它俩,amll 拿不到新 ID。
 func TestAliasRetryListDropsAMLLWhenIDSourcesAnswered(t *testing.T) {
 	savedFeatures := features()
-	savedBreaker := lyricSourceBreakerShared
+	savedBreaker := sharedLyricSourceBreaker()
 	savedYT, savedMM := ytmusicLastFailureReasonNow(), musixmatchLastFailureReasonNow()
 	savedDZ, savedAM := deezerLastFailureReasonNow(), applemusicLastFailureReasonNow()
 	t.Cleanup(func() {
 		setFeatures(savedFeatures)
-		lyricSourceBreakerShared = savedBreaker
+		setSharedLyricSourceBreaker(savedBreaker)
 		ytmusicSetLastFailureReason(savedYT)
 		musixmatchSetLastFailureReason(savedMM)
 		deezerSetLastFailureReason(savedDZ)
@@ -92,7 +92,7 @@ func TestAliasRetryListDropsAMLLWhenIDSourcesAnswered(t *testing.T) {
 	for _, s := range lyricSourceNames {
 		featuresRef().LyricsSources[s] = true
 	}
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	ytmusicSetLastFailureReason("")
 	musixmatchSetLastFailureReason("")
 	deezerSetLastFailureReason("")

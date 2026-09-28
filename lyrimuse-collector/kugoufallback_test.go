@@ -29,11 +29,13 @@ func (f *kgFake) count(key string) int {
 
 func withKugouFake(t *testing.T, handle func(target string) (int, string)) *kgFake {
 	t.Helper()
-	savedGuard, savedBreaker, savedTransport := hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport
-	hostGuardShared = newHostGuard(time.Now)
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	savedGuard, savedBreaker, savedTransport := sharedHostGuard(), sharedLyricSourceBreaker(), sharedLyricSourceTransport()
+	setSharedHostGuard(newHostGuard(time.Now))
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	t.Cleanup(func() {
-		hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport = savedGuard, savedBreaker, savedTransport
+		setSharedHostGuard(savedGuard)
+		setSharedLyricSourceBreaker(savedBreaker)
+		setSharedLyricSourceTransport(savedTransport)
 	})
 	f := &kgFake{hits: map[string]int{}}
 	mk := func(scheme string) http.HandlerFunc {
@@ -56,7 +58,7 @@ func withKugouFake(t *testing.T, handle func(target string) (int, string)) *kgFa
 	t.Cleanup(plain.Close)
 	t.Cleanup(secure.Close)
 	plainAddr, secureAddr := plain.Listener.Addr().String(), secure.Listener.Addr().String()
-	lyricSourceTransport = &http.Transport{
+	setSharedLyricSourceTransport(&http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			target := plainAddr
 			if strings.HasSuffix(addr, ":443") {
@@ -65,7 +67,7 @@ func withKugouFake(t *testing.T, handle func(target string) (int, string)) *kgFa
 			return (&net.Dialer{}).DialContext(ctx, network, target)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	})
 	return f
 }
 

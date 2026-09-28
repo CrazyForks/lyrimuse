@@ -59,7 +59,7 @@ var (
 func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, error) {
 	// 本地出站闸(hostguard.go):限速排队、429 窗口、歌词源冷却。拦下的请求没发出去,
 	// 不计数、不喂熔断、不进审计汇总。
-	if err := hostGuardShared.admit(req); err != nil {
+	if err := sharedHostGuard().admit(req); err != nil {
 		return nil, err
 	}
 	// DNS 阶段轨迹,只给歌词源的传输层失败分类用(sourcebreaker.go 最后一节的
@@ -132,11 +132,11 @@ func doHTTPTrackedOnce(cli *http.Client, req *http.Request) (*http.Response, err
 		}
 		// 歌词源级熔断的失败观察(见 sourcebreaker.go):只有歌词源的主机会被记,别的请求
 		// 在 lyricSourceForHost 那里直接归零。
-		lyricSourceBreakerShared.observeTraced(req.URL.Host, guardEndpointKey(req.URL), err, 0, "", tr)
+		sharedLyricSourceBreaker().observeTraced(req.URL.Host, guardEndpointKey(req.URL), err, 0, "", tr)
 		return resp, err
 	}
-	lyricSourceBreakerShared.observeTraced(req.URL.Host, guardEndpointKey(req.URL), nil, resp.StatusCode, resp.Header.Get("Retry-After"), tr)
-	hostGuardShared.observe(req, resp.StatusCode, resp.Header.Get("Retry-After"))
+	sharedLyricSourceBreaker().observeTraced(req.URL.Host, guardEndpointKey(req.URL), nil, resp.StatusCode, resp.Header.Get("Retry-After"), tr)
+	sharedHostGuard().observe(req, resp.StatusCode, resp.Header.Get("Retry-After"))
 	if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 		if src := lyricSourceForHost(req.URL.Host); src != "" {
 			lyricSourceRoundFrom(req.Context()).markReached(src)

@@ -476,7 +476,7 @@ func tracksFoundNoLyrics(results []scoredLyricCandidateResult) []trackFoundNoLyr
 // 模式,原因会在这次进程里被设置一次,读到的就是这次搜索本身的真实原因,不是别的进程/
 // 别的时间点残留下来的陈旧值。
 func lyricSourceFailureReasons(results []scoredLyricCandidateResult) map[string]string {
-	return lyricSourceFailureReasonsWith(results, lyricSourceBreakerShared.transportFailureCodes(),
+	return lyricSourceFailureReasonsWith(results, sharedLyricSourceBreaker().transportFailureCodes(),
 		lyricSourceEnabled, amllSkippedForMissingIDsNow())
 }
 

@@ -15,13 +15,13 @@ import (
 
 func TestLyricSourcesWorthAliasRetry(t *testing.T) {
 	savedFeatures := features()
-	savedBreaker := lyricSourceBreakerShared
+	savedBreaker := sharedLyricSourceBreaker()
 	savedYT, savedMM := ytmusicLastFailureReasonNow(), musixmatchLastFailureReasonNow()
 	savedDZ := deezerLastFailureReasonNow()
 	savedAM := applemusicLastFailureReasonNow()
 	t.Cleanup(func() {
 		setFeatures(savedFeatures)
-		lyricSourceBreakerShared = savedBreaker
+		setSharedLyricSourceBreaker(savedBreaker)
 		ytmusicSetLastFailureReason(savedYT)
 		musixmatchSetLastFailureReason(savedMM)
 		deezerSetLastFailureReason(savedDZ)
@@ -32,10 +32,10 @@ func TestLyricSourcesWorthAliasRetry(t *testing.T) {
 		featuresRef().LyricsSources[s] = true
 	}
 	featuresRef().LyricsSources["migu"] = false // 关掉的不算
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	// 酷我:传输层连不上 —— 换名字也没用
 	dns := &url.Error{Op: "Get", Err: &net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", IsNotFound: true}}}
-	lyricSourceBreakerShared.observe("search.kuwo.cn", dns, 0, "")
+	sharedLyricSourceBreaker().observe("search.kuwo.cn", dns, 0, "")
 	// lyricfind 地区限制、musixmatch 直连被堵、deezer 换不到匿名 JWT —— 同理
 	ytmusicSetLastFailureReason(lyricFailureReasonLyricFindRegionRestricted)
 	musixmatchSetLastFailureReason(lyricFailureReasonMusixmatchDirectBlocked)

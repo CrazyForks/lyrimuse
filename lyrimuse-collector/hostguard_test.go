@@ -155,37 +155,37 @@ func TestHostGuardEndpointWindow(t *testing.T) {
 
 // 响应体里认出的限流(Last.fm 200 + error 29)同样进窗口。
 func TestReportEndpointRateLimited(t *testing.T) {
-	saved := hostGuardShared
+	saved := sharedHostGuard()
 	c := &guardClock{t: time.Unix(1_000_000, 0)}
-	hostGuardShared = newHostGuard(c.now)
-	t.Cleanup(func() { hostGuardShared = saved })
+	setSharedHostGuard(newHostGuard(c.now))
+	t.Cleanup(func() { setSharedHostGuard(saved) })
 
 	u, _ := url.Parse("https://ws.audioscrobbler.com/2.0/?method=track.getInfo")
 	reportEndpointRateLimited(u, "")
 	req := mustReq(t, context.Background(), http.MethodGet, u.String())
-	if err := hostGuardShared.admit(req); !errors.Is(err, errHostGuarded) {
+	if err := sharedHostGuard().admit(req); !errors.Is(err, errHostGuarded) {
 		t.Fatalf("报了限流该拦下: %v", err)
 	}
 	other := mustReq(t, context.Background(), http.MethodGet, "https://ws.audioscrobbler.com/2.0/?method=user.getRecentTracks")
-	if err := hostGuardShared.admit(other); !errors.Is(err, errHostGuarded) {
+	if err := sharedHostGuard().admit(other); !errors.Is(err, errHostGuarded) {
 		t.Fatal("Last.fm 所有读接口是同一个端点,一起停")
 	}
 	scrobble := mustReq(t, context.Background(), http.MethodPost, "https://ws.audioscrobbler.com/2.0/")
-	if err := hostGuardShared.admit(scrobble); err != nil {
+	if err := sharedHostGuard().admit(scrobble); err != nil {
 		t.Fatalf("scrobble(POST)不受影响: %v", err)
 	}
 }
 
 // 歌词源冷却:一轮歌词搜索之外拦下;一轮之内交给 planRound,这里不拦。
 func TestHostGuardLyricSourceCooling(t *testing.T) {
-	savedBreaker := lyricSourceBreakerShared
+	savedBreaker := sharedLyricSourceBreaker()
 	c := &guardClock{t: time.Unix(1_000_000, 0)}
-	lyricSourceBreakerShared = newLyricSourceBreaker(c.now)
-	t.Cleanup(func() { lyricSourceBreakerShared = savedBreaker })
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(c.now))
+	t.Cleanup(func() { setSharedLyricSourceBreaker(savedBreaker) })
 	boom := errors.New("connection refused")
-	lyricSourceBreakerShared.observe("c.y.qq.com", boom, 0, "")
-	lyricSourceBreakerShared.observe("c.y.qq.com", boom, 0, "")
-	if _, cooling := lyricSourceBreakerShared.coolingDown("qq"); !cooling {
+	sharedLyricSourceBreaker().observe("c.y.qq.com", boom, 0, "")
+	sharedLyricSourceBreaker().observe("c.y.qq.com", boom, 0, "")
+	if _, cooling := sharedLyricSourceBreaker().coolingDown("qq"); !cooling {
 		t.Fatal("前提:qq 该在冷却中")
 	}
 
@@ -238,10 +238,10 @@ func TestHostGuardSkipsLoopback(t *testing.T) {
 
 // 拦下的请求根本不到传输层,也不计入网络尝试次数(不然会被 roundLooksNetworkDown 读成断网)。
 func TestDoHTTPTrackedGuardedRequestNeverSent(t *testing.T) {
-	saved := hostGuardShared
+	saved := sharedHostGuard()
 	c := &guardClock{t: time.Unix(1_000_000, 0)}
-	hostGuardShared = newHostGuard(c.now)
-	t.Cleanup(func() { hostGuardShared = saved })
+	setSharedHostGuard(newHostGuard(c.now))
+	t.Cleanup(func() { setSharedHostGuard(saved) })
 
 	var sent int32
 	cli := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -365,15 +365,15 @@ func TestHostGuardEndpointCircuitSchedule(t *testing.T) {
 
 // 响应体里认出的拒绝按失败计。
 func TestReportEndpointRejectedCounts(t *testing.T) {
-	saved := hostGuardShared
+	saved := sharedHostGuard()
 	c := &guardClock{t: time.Unix(1_000_000, 0)}
-	hostGuardShared = newHostGuard(c.now)
-	t.Cleanup(func() { hostGuardShared = saved })
+	setSharedHostGuard(newHostGuard(c.now))
+	t.Cleanup(func() { setSharedHostGuard(saved) })
 	u, _ := url.Parse("https://pd.musicapp.migu.cn/MIGUM2.0/v1.0/content/search_all.do?text=x")
 	for i := 0; i < endpointTripAfter; i++ {
 		reportEndpointRejected(u)
 	}
-	if _, open := hostGuardShared.endpointOpenUntil(guardEndpointKey(u)); !open {
+	if _, open := sharedHostGuard().endpointOpenUntil(guardEndpointKey(u)); !open {
 		t.Fatal("连续报 5 次拒绝该跳闸")
 	}
 }
@@ -400,11 +400,13 @@ func TestKugouSearchRejected(t *testing.T) {
 // 端到端:QQ 主搜索的首选主机一直回 5xx 时,每次都退到下一个主机拿到结果;首选那个 5 次之后
 // 不再打(真实主机名经改写的传输层指到本地,按 Host 头区分)。
 func TestQQClientSearchFallsBackAndStopsHittingDeadHost(t *testing.T) {
-	savedGuard, savedBreaker, savedTransport := hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport
-	hostGuardShared = newHostGuard(time.Now)
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	savedGuard, savedBreaker, savedTransport := sharedHostGuard(), sharedLyricSourceBreaker(), sharedLyricSourceTransport()
+	setSharedHostGuard(newHostGuard(time.Now))
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	t.Cleanup(func() {
-		hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport = savedGuard, savedBreaker, savedTransport
+		setSharedHostGuard(savedGuard)
+		setSharedLyricSourceBreaker(savedBreaker)
+		setSharedLyricSourceTransport(savedTransport)
 	})
 	var deadHits, aliveHits int32
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -418,12 +420,12 @@ func TestQQClientSearchFallsBackAndStopsHittingDeadHost(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	target := srv.Listener.Addr().String()
-	lyricSourceTransport = &http.Transport{
+	setSharedLyricSourceTransport(&http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, target)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	})
 	// 在一轮歌词搜索之内跑:源级冷却那道在轮内不管(交给 planRound),只剩接口熔断。
 	roundCtx, _ := withLyricSourceRound(context.Background())
 	calls := endpointTripAfter + 3
@@ -549,11 +551,13 @@ func TestHostGuardEndpointCircuitIgnoresFailuresWhileOpen(t *testing.T) {
 
 // 端到端:QQ 主搜索回 200 但 code 非 0(服务端拒绝)也按失败计,5 次之后不再发;code 0 的查无不算。
 func TestQQClientSearchCodeRejectionTripsEndpoint(t *testing.T) {
-	savedGuard, savedBreaker, savedTransport := hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport
-	hostGuardShared = newHostGuard(time.Now)
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	savedGuard, savedBreaker, savedTransport := sharedHostGuard(), sharedLyricSourceBreaker(), sharedLyricSourceTransport()
+	setSharedHostGuard(newHostGuard(time.Now))
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	t.Cleanup(func() {
-		hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport = savedGuard, savedBreaker, savedTransport
+		setSharedHostGuard(savedGuard)
+		setSharedLyricSourceBreaker(savedBreaker)
+		setSharedLyricSourceTransport(savedTransport)
 	})
 	var hits int32
 	body := `{"code":0,"data":{"song":{"list":[]}}}`
@@ -566,12 +570,12 @@ func TestQQClientSearchCodeRejectionTripsEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	target := srv.Listener.Addr().String()
-	lyricSourceTransport = &http.Transport{
+	setSharedLyricSourceTransport(&http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, target)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	})
 	savedBases := qqClientSearchBases
 	qqClientSearchBases = []string{"https://shc.y.qq.com/soso/fcgi-bin/client_search_cp"}
 	t.Cleanup(func() { qqClientSearchBases = savedBases })

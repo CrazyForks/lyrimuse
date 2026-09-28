@@ -208,9 +208,9 @@ func TestScrobbleShortTracksFlagRoundTrip(t *testing.T) {
 
 // 回填复核也走同一条闸:开关关着时,日志里的短曲目记录不会被补上去;开着才补。
 func TestPendingBackfillListensHonorsShortTrackFlag(t *testing.T) {
-	savedFlag := features().ScrobbleShortTracks
+	// 开关整体替换快照(setFeatureForTest),不原地改:别的用例留下的后台歌词解析可能正在读 features()。
 	savedPath := listenLogPath
-	defer func() { featuresRef().ScrobbleShortTracks = savedFlag; listenLogPath = savedPath }()
+	defer func() { listenLogPath = savedPath }()
 	listenLogPath = filepath.Join(t.TempDir(), "listens.jsonl")
 
 	now := time.Now()
@@ -218,12 +218,12 @@ func TestPendingBackfillListensHonorsShortTrackFlag(t *testing.T) {
 	appendListenLogLine(listenLogLine{T: "l", V: listenLogSchemaVersion, UTS: uts, AR: "A", TI: "短曲", DUR: 20, AT: now.Unix()})
 	appendListenLogLine(listenLogLine{T: "l", V: listenLogSchemaVersion, UTS: uts + 60, AR: "A", TI: "长曲", DUR: 200, AT: now.Unix()})
 
-	featuresRef().ScrobbleShortTracks = false
+	setFeatureForTest(t, func(f *featureFlags) { f.ScrobbleShortTracks = false })
 	pending, _ := pendingBackfillListens(now)
 	if len(pending) != 1 || pending[0].TI != "长曲" {
 		t.Fatalf("开关关:应只剩长曲,got %+v", pending)
 	}
-	featuresRef().ScrobbleShortTracks = true
+	setFeatureForTest(t, func(f *featureFlags) { f.ScrobbleShortTracks = true })
 	pending, _ = pendingBackfillListens(now)
 	if len(pending) != 2 {
 		t.Fatalf("开关开:短曲也该进待补清单,got %+v", pending)

@@ -283,9 +283,9 @@ func TestNormalizeAuditPath(t *testing.T) {
 // 没有 *net.DNSError;只有 doHTTPTracked 挂的 httptrace 轨迹能证明"死在 DNS 阶段"。
 // 用 lyricSourceForHost 认得的主机名(music.163.com),但解析器根本不发包,不碰真实网络。
 func TestDoHTTPTracked_HungDNSClassifiedAsDNSFailed(t *testing.T) {
-	saved := lyricSourceBreakerShared
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
-	t.Cleanup(func() { lyricSourceBreakerShared = saved })
+	saved := sharedLyricSourceBreaker()
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
+	t.Cleanup(func() { setSharedLyricSourceBreaker(saved) })
 
 	hungResolver := &net.Resolver{
 		PreferGo: true,
@@ -309,7 +309,7 @@ func TestDoHTTPTracked_HungDNSClassifiedAsDNSFailed(t *testing.T) {
 	if errors.As(err, &dnsErr) {
 		t.Logf("注意:这个 Go 版本的错误链里居然还带着 DNSError(%v),轨迹那条判据没被真正考到", err)
 	}
-	got := lyricSourceBreakerShared.transportFailureCodes()
+	got := sharedLyricSourceBreaker().transportFailureCodes()
 	if got["netease"] != lyricFailureReasonDNSFailed {
 		t.Fatalf("netease 应为 dns_failed,实际 %q(err=%v)", got["netease"], err)
 	}
@@ -317,9 +317,9 @@ func TestDoHTTPTracked_HungDNSClassifiedAsDNSFailed(t *testing.T) {
 
 // 对照:解析成功、连接被拒 → connect_failed(DNS 轨迹走完且无错,不能误归 dns)。
 func TestDoHTTPTracked_RefusedConnectionClassifiedAsConnectFailed(t *testing.T) {
-	saved := lyricSourceBreakerShared
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
-	t.Cleanup(func() { lyricSourceBreakerShared = saved })
+	saved := sharedLyricSourceBreaker()
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
+	t.Cleanup(func() { setSharedLyricSourceBreaker(saved) })
 
 	// 拿一个刚释放的本地端口,保证 connection refused。
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -349,7 +349,7 @@ func TestDoHTTPTracked_RefusedConnectionClassifiedAsConnectFailed(t *testing.T) 
 	if _, err := doHTTPTracked(cli, req); err == nil {
 		t.Fatal("连到已关闭端口竟然成功了")
 	}
-	got := lyricSourceBreakerShared.transportFailureCodes()
+	got := sharedLyricSourceBreaker().transportFailureCodes()
 	if got["qq"] != lyricFailureReasonConnectFailed {
 		t.Fatalf("qq 应为 connect_failed,实际 %q", got["qq"])
 	}

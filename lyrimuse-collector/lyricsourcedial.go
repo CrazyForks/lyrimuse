@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,17 +60,25 @@ var (
 
 // lyricSourceTransport 是八个歌词源(netease/qq/kugou/lrclib/kuwo/migu/amll/lyricfind)共用的
 // Transport:DefaultTransport 的克隆(代理环境变量、连接池、HTTP/2 等一律照旧),只换拨号器。
-var lyricSourceTransport = func() *http.Transport {
+// 经 sharedLyricSourceTransport / setSharedLyricSourceTransport 读写(原子指针,理由同 hostGuardSharedPtr)。
+var lyricSourceTransportPtr atomic.Pointer[http.Transport]
+
+func init() {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = lyricSourceDialContext
-	return t
-}()
+	lyricSourceTransportPtr.Store(t)
+}
+
+func sharedLyricSourceTransport() *http.Transport { return lyricSourceTransportPtr.Load() }
+
+// setSharedLyricSourceTransport 只给单测换掉传输层。
+func setSharedLyricSourceTransport(t *http.Transport) { lyricSourceTransportPtr.Store(t) }
 
 // lyricHTTPClient 是歌词源文件里造 client 的唯一入口(lyricsourcedial_test.go 用源码扫描钉着:
 // 那八个文件里不许再出现裸的 `&http.Client{`)。Timeout 语义跟原来的 `&http.Client{Timeout: d}`
 // 完全一样,只是多了上面那套拨号。
 func lyricHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: lyricSourceTransport}
+	return &http.Client{Timeout: timeout, Transport: sharedLyricSourceTransport()}
 }
 
 var (

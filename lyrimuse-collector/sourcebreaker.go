@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -109,8 +110,16 @@ func newLyricSourceBreaker(now func() time.Time) *lyricSourceBreaker {
 	}
 }
 
-// lyricSourceBreakerShared 是常驻采集器用的那一份(进程级)。
-var lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+// lyricSourceBreakerSharedPtr 是常驻采集器用的那一份(进程级)。经 sharedLyricSourceBreaker / setSharedLyricSourceBreaker 读写,
+// 原子指针的理由同 hostGuardSharedPtr。
+var lyricSourceBreakerSharedPtr atomic.Pointer[lyricSourceBreaker]
+
+func init() { lyricSourceBreakerSharedPtr.Store(newLyricSourceBreaker(time.Now)) }
+
+func sharedLyricSourceBreaker() *lyricSourceBreaker { return lyricSourceBreakerSharedPtr.Load() }
+
+// setSharedLyricSourceBreaker 只给单测换掉整份熔断器。
+func setSharedLyricSourceBreaker(b *lyricSourceBreaker) { lyricSourceBreakerSharedPtr.Store(b) }
 
 // lyricSourceForHost 把请求主机归到歌词源名(lyricSourceNames 里的写法);不是歌词源的主机
 // (Last.fm / ListenBrainz / MusicBrainz / iTunes / DoH …)返回空串。主机名单来自各源文件里
@@ -348,11 +357,11 @@ func (b *lyricSourceBreaker) planRound(sources []string, enabled func(string) bo
 //
 // 给 needsLyricsFirstFill 用:上一轮因熔断被跳过的那些源要是都不冷却了,那条"补空歌词"
 // 就不必再干等满 10 分钟(见那边的注释)。写成包级变量而不是直接调
-// lyricSourceBreakerShared,是为了让 enrich 侧的单测能把它换掉——熔断状态在进程内存里,
+// sharedLyricSourceBreaker(),是为了让 enrich 侧的单测能把它换掉——熔断状态在进程内存里,
 // 测试不该为了跑一条节流判定去伪造一个全局熔断器。
 var anyLyricSourceCooling = func(sources []string) bool {
 	for _, s := range sources {
-		if _, cooling := lyricSourceBreakerShared.coolingDown(s); cooling {
+		if _, cooling := sharedLyricSourceBreaker().coolingDown(s); cooling {
 			return true
 		}
 	}

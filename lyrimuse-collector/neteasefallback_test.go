@@ -29,9 +29,9 @@ func (f *neFake) count(key string) int {
 
 func withNeteaseFake(t *testing.T, handle func(target string) (int, string)) *neFake {
 	t.Helper()
-	savedGuard, savedBreaker, savedTransport := hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport
-	hostGuardShared = newHostGuard(time.Now)
-	lyricSourceBreakerShared = newLyricSourceBreaker(time.Now)
+	savedGuard, savedBreaker, savedTransport := sharedHostGuard(), sharedLyricSourceBreaker(), sharedLyricSourceTransport()
+	setSharedHostGuard(newHostGuard(time.Now))
+	setSharedLyricSourceBreaker(newLyricSourceBreaker(time.Now))
 	neteaseRateMu.Lock()
 	savedCall, savedCooldown, savedStreak := neteaseLastCall, neteaseCooldownUntil, neteaseBlockStreak
 	neteaseLastCall = time.Time{}
@@ -39,7 +39,9 @@ func withNeteaseFake(t *testing.T, handle func(target string) (int, string)) *ne
 	neteaseBlockStreak = map[string]int{}
 	neteaseRateMu.Unlock()
 	t.Cleanup(func() {
-		hostGuardShared, lyricSourceBreakerShared, lyricSourceTransport = savedGuard, savedBreaker, savedTransport
+		setSharedHostGuard(savedGuard)
+		setSharedLyricSourceBreaker(savedBreaker)
+		setSharedLyricSourceTransport(savedTransport)
 		neteaseRateMu.Lock()
 		neteaseLastCall, neteaseCooldownUntil, neteaseBlockStreak = savedCall, savedCooldown, savedStreak
 		neteaseRateMu.Unlock()
@@ -61,12 +63,12 @@ func withNeteaseFake(t *testing.T, handle func(target string) (int, string)) *ne
 	}))
 	t.Cleanup(srv.Close)
 	addr := srv.Listener.Addr().String()
-	lyricSourceTransport = &http.Transport{
+	setSharedLyricSourceTransport(&http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
+	})
 	return f
 }
 
