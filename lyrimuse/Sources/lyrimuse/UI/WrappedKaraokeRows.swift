@@ -35,6 +35,9 @@ struct WrappedKaraokeRows: NSViewRepresentable {
         var strokeColor: NSColor?
         var rowAlignment: WrapLayoutMath.RowAlignment
         var paused: Bool
+        /// 同 OverlayScrollingLyricRow.Spec 的两项,原样交给每一行。
+        var timingEpoch: Int = 0
+        var rate: Double = 1
     }
 
     let spec: Spec
@@ -217,6 +220,8 @@ final class WrappedKaraokeRowsView: NSView {
             romaFillColor: spec.romaFillColor,
             strokeColor: spec.strokeColor,
             alignment: .leading,
-            paused: spec.paused)
+            paused: spec.paused,
+            timingEpoch: spec.timingEpoch,
+            rate: spec.rate)
     }
 }

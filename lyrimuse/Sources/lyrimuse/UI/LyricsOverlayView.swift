@@ -130,6 +130,14 @@ private final class OverlayPlayback: ObservableObject {
     @Published private(set) var cardAvailableWidth: CGFloat = 0
     /// 四行字体的 AppKit 孪生,测宽用(见 `OverlayNaturalWidth`)。
     @Published private(set) var overlayNSFonts = OverlayNSFonts()
+    /// 播放时间基准的指纹(锚点重发、暂停位置、歌词时间轴总偏移)和播放速率,交给图层行:
+    /// 主行改成图层动画之后只在装的那一刻读一次时间,这几样变了没人叫它重对 —— 同一句里拖进度、
+    /// 暂停时拖进度、调一次 200ms 的偏移(小于图层行 250ms 的重装阈值),填色都停在旧位置直到换行。
+    @Published private(set) var timingEpoch: Int = 0
+    /// 这首只有一份没时间戳的纯文本(`PlaybackCoordinator.currentTrackPlainLyrics` 非空)。悬浮窗没法跟唱它,
+    /// 但也不该说「暂无歌词」—— 歌词窗口那边正把它当静态文字显示着,两处说法得对得上。
+    @Published private(set) var hasPlainLyrics = false
+    @Published private(set) var playbackRate: Double = 1
     private var subs: [AnyCancellable] = []
 
     init() {
@@ -238,6 +246,21 @@ private final class OverlayPlayback: ObservableObject {
                 .removeDuplicates()
                 .sink { [weak self] in self?.cardAvailableWidth = $0 },
             s.$overlayNSFonts.removeDuplicates().sink { [weak self] in self?.overlayNSFonts = $0 },
+            Publishers.CombineLatest3(p.$anchor, p.$pausedPositionMs, p.$currentLyricsOffsetMs)
+                .map { anchor, paused, offset -> Int in
+                    var h = Hasher()
+                    h.combine(anchor?.fetchedAt)
+                    h.combine(anchor?.progressMs)
+                    h.combine(anchor?.rate)
+                    h.combine(paused)
+                    h.combine(offset)
+                    return h.finalize()
+                }
+                .removeDuplicates()
+                .sink { [weak self] in self?.timingEpoch = $0 },
+            p.$anchor.map { $0?.rate ?? 1 }.removeDuplicates().sink { [weak self] in self?.playbackRate = $0 },
+            p.$currentTrackPlainLyrics.map { !$0.isEmpty }.removeDuplicates()
+                .sink { [weak self] in self?.hasPlainLyrics = $0 },
         ]
     }
 }
@@ -307,6 +330,14 @@ protocol OverlayChromeSource: ObservableObject {
     /// 子进程,所以做成回调而不是让视图直接打 `PlaybackCoordinator`:设置页预览必须能把
     /// 这条副作用空实现掉(同 `NotchChromeSource.setExpanded` 的处理)。
     func controlsDidBecomeVisible()
+    /// 这扇窗此刻真的看得见(打开着、没被 orderOut、occlusionState 含 `.visible`)。看不见时图层行停表、
+    /// 间奏点停表 —— 灵动岛、歌词窗口早就按各自的可见性停了,悬浮窗原来一直当自己看得见。
+    /// 预览外壳没有自己的窗口,走默认的 true,停不停由设置窗口推下来的 `previewHostVisible` 管。
+    var isSurfaceVisible: Bool { get }
+}
+
+extension OverlayChromeSource {
+    var isSurfaceVisible: Bool { true }
 }
 
 /// 设置页预览用的示例行 —— **真窗口恒传 nil**,排版逐像素不变。
@@ -396,6 +427,9 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
     /// 设置页编辑台里那一份:设置窗口看不见时跟暂停一样停表(见 PreviewHostVisibility.swift)。
     /// 桌面上那扇真窗读到的恒为 true。
     @Environment(\.previewHostVisible) private var previewHostVisible
+
+    /// 预览宿主(设置窗口)和真窗口自己的可见性取与,见 `OverlayChromeSource.isSurfaceVisible`。
+    private var surfaceVisible: Bool { previewHostVisible && overlayController.isSurfaceVisible }
 
     // 悬浮窗高度跟着内容动态变化(见 LyricsOverlayWindowController.updateHeight)——这里
     // 汇报"这次渲染实际需要多高",不需要就什么都不做(默认空闭包,方便预览/测试构造)。
@@ -967,7 +1001,11 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
         let override = playback.duetAlignmentOverride
         let current = duetInsets(for: override.effectiveDecorationSide(realSide: line?.side))
         let next = duetInsets(for: override.effectiveDecorationSide(realSide: playback.nextLineSide))
-        return (next.leading - current.leading, next.trailing - current.trailing)
+        // 外层卡片加的是**乘过** `duetInsetScale` 的当前行留白(见 lyricsCard 那两行 padding),差值也得按同一个
+        // 系数算:只减没乘系数的当前行留白,长句把系数压到 1 以下时预览会整体偏出 (1 − 系数) × 当前行留白,
+        // 被窗口裁掉一截、换句时再跳一下。
+        let scale = duetInsetScale
+        return ((next.leading - current.leading) * scale, (next.trailing - current.trailing) * scale)
     }
 
     /// 图层版的主歌词行。宽度吃满卡片(滚动窗就是它),高度用跟 SwiftUI 那条同一个公式。
@@ -990,7 +1028,9 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
                 strokeColor: playback.textStrokeEnabled ? NSColor(playback.textStrokeColor) : nil,
                 alignment: duetSide,
                 // 跟 SwiftUI 那条逐字染色的 TimelineView 同一条 paused 判据。
-                paused: !playback.isPlayingNow || playback.currentLineFillSettled || !previewHostVisible),
+                paused: !playback.isPlayingNow || playback.currentLineFillSettled || !surfaceVisible,
+                timingEpoch: playback.timingEpoch,
+                rate: playback.playbackRate),
             nowMs: Self.lyricsNowMs)
         .frame(maxWidth: .infinity)
         .frame(height: mainScrollRowHeight)
@@ -1014,7 +1054,9 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
                 romaFillColor: NSColor(playback.displayForegroundColor.opacity(0.75)),
                 strokeColor: playback.textStrokeEnabled ? NSColor(playback.textStrokeColor) : nil,
                 rowAlignment: duetRowAlignment,
-                paused: !playback.isPlayingNow || playback.currentLineFillSettled || !previewHostVisible),
+                paused: !playback.isPlayingNow || playback.currentLineFillSettled || !surfaceVisible,
+                timingEpoch: playback.timingEpoch,
+                rate: playback.playbackRate),
             nowMs: Self.lyricsNowMs,
             contentRectSink: wrapContentSink,
             sinkOwner: overlayLineLayoutKey)
@@ -1090,8 +1132,10 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
                 baseColor: ns, fillColor: ns, romaBaseColor: ns, romaFillColor: ns,
                 strokeColor: playback.textStrokeEnabled ? NSColor(playback.textStrokeColor) : nil,
                 alignment: alignment,
-                paused: !playback.isPlayingNow || !previewHostVisible,
-                pacedWindow: window),
+                paused: !playback.isPlayingNow || !surfaceVisible,
+                pacedWindow: window,
+                timingEpoch: playback.timingEpoch,
+                rate: playback.playbackRate),
             nowMs: Self.lyricsNowMs)
         .frame(maxWidth: .infinity)
         .frame(height: height)
@@ -1747,7 +1791,7 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
         } else if playback.currentTrackHasNoLyrics {
             // 搜完了、确实一句都没有。必须排在下面那个"搜索歌词中…"分支前面,否则这首歌
             // 只要还在播,那句"搜索中"就会一直挂着(见 PlaybackCoordinator.currentTrackHasNoLyrics)。
-            Text(L10n.t("暂无歌词"))
+            Text(playback.hasPlainLyrics ? L10n.t("仅有纯文本，没有时间戳") : L10n.t("暂无歌词"))
                 .font(playback.mainFont)
                 .foregroundStyle(playback.displayForegroundColor.opacity(0.5))
                 .lyricsTextStroke(playback.textStrokeEnabled, color: playback.textStrokeColor)
@@ -1786,7 +1830,7 @@ struct LyricsOverlayView<Chrome: OverlayChromeSource>: View {
                 startMs: window.startMs, endMs: window.endMs,
                 dotSize: playback.mainFontSize * 0.32, spacing: playback.mainFontSize * 0.3,
                 color: playback.displayForegroundColor,
-                isPlaying: playback.isPlayingNow, isVisible: previewHostVisible,
+                isPlaying: playback.isPlayingNow, isVisible: surfaceVisible,
                 reduceMotion: reduceMotion
             ) { date in
                 (PlaybackCoordinator.shared.anchor?.extrapolatedPositionMs(now: date)

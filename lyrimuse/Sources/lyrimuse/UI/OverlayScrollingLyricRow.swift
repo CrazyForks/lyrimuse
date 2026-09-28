@@ -52,6 +52,9 @@ struct OverlayScrollingLyricRow: NSViewRepresentable {
         /// 时间基准的指纹(宿主传歌词时间轴总偏移之类):一变就按新基准重装动画,不等漂移超过
         /// `resyncToleranceMs`。调一次偏移常常只有 200ms,小于那道阈值,不强制重装的话这一行一直按旧偏移走。
         var timingEpoch: Int = 0
+        /// 播放速率(锚点的 rate,倍速播放时不是 1)。关键帧按「歌词毫秒 ÷ 速率 = 墙钟秒」排,
+        /// 写死 1 的话倍速时填色和滚动越走越偏,只能靠漂移超过阈值时一次次重装去追。
+        var rate: Double = 1
     }
 
     /// 整行阴影。`offsetY` 取 SwiftUI 的口径(正 = 往下)。
@@ -206,7 +209,7 @@ final class OverlayLyricScrollView: NSView {
     func apply(spec next: OverlayScrollingLyricRow.Spec, nowMs: Int) {
         let imagesChanged = spec.map { !Self.sameImages($0, next) } ?? true
         let timingChanged = spec?.paused != next.paused || spec?.pacedWindow != next.pacedWindow
-            || spec?.timingEpoch != next.timingEpoch
+            || spec?.timingEpoch != next.timingEpoch || spec?.rate != next.rate
         spec = next
         if imagesChanged { rebuildImages(spec: next) }
         // 在跑时动画不在(首次装上 / 上一轮判成不用滚)要重装;停着时本来就不装动画,不算缺。
@@ -226,6 +229,7 @@ final class OverlayLyricScrollView: NSView {
         a.paused = b.paused
         a.pacedWindow = b.pacedWindow
         a.timingEpoch = b.timingEpoch
+        a.rate = b.rate
         return a == b
     }
 
@@ -234,11 +238,17 @@ final class OverlayLyricScrollView: NSView {
         return abs(nowMs - predictedMs) > Self.resyncToleranceMs
     }
 
+    /// 规格里的速率,非正数(读数异常)按 1 算。
+    private var effectiveRate: Double {
+        guard let rate = spec?.rate, rate > 0 else { return 1 }
+        return rate
+    }
+
     /// 已装的那条动画此刻推到哪一毫秒:在跑时线性外推墙钟,停着时就是装的那一刻。
     private var predictedMs: Int {
         guard let installed = installedAtMs else { return 0 }
         if spec?.paused == true { return installed }
-        return installed + Int((CACurrentMediaTime() - installedAtTime) * 1000)
+        return installed + Int((CACurrentMediaTime() - installedAtTime) * 1000 * effectiveRate)
     }
 
     // MARK: - 长图
@@ -480,7 +490,7 @@ final class OverlayLyricScrollView: NSView {
     }
 
     private func installFill(nowMs: Int) {
-        guard let frames = MenuBarMarquee.karaokeFillKeyframes(path: readingPath, nowMs: nowMs, rate: 1)
+        guard let frames = MenuBarMarquee.karaokeFillKeyframes(path: readingPath, nowMs: nowMs, rate: effectiveRate)
         else { return }
         let widths = frames.widths.map { min(max(0, $0), boxWidth) }
         let fill = CAKeyframeAnimation(keyPath: "bounds")
@@ -506,7 +516,7 @@ final class OverlayLyricScrollView: NSView {
     /// 滚动。跟填色是同一条 reading 路径派生、同一个 nowMs,两者天然同步。
     private func installScroll(nowMs: Int, restingX: CGFloat) {
         guard !scrollPath.isEmpty,
-              let frames = MenuBarMarquee.karaokeFillKeyframes(path: scrollPath, nowMs: nowMs, rate: 1)
+              let frames = MenuBarMarquee.karaokeFillKeyframes(path: scrollPath, nowMs: nowMs, rate: effectiveRate)
         else { return }
         let y = (bounds.height - boxHeight) / 2
         let move = CAKeyframeAnimation(keyPath: "position")

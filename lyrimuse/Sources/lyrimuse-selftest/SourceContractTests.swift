@@ -3676,8 +3676,19 @@ func runSourceContractTests() {
         expectEqual(rows.contains("ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current))"), true,
                     "主题: 内置与自存主题都画成预览卡,选中判据是配色全等")
         expectEqual(rows.contains("Menu(Self.currentThemeLabel)"), false, "主题: 不再是下拉")
-        expectEqual(rows.contains("let isUnsaved = !(ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: current) }"), true,
+        expectEqual(rows.contains("let isUnsaved = !UnsavedColorThemeSnapshot.isKnown(current, settings: settings)"), true,
                     "主题: 当前配色跟哪套都对不上时才出「自定义」卡")
+        let themeSrc = stripComments(code("Settings/ColorTheme.swift"))
+        expectEqual(themeSrc.contains("(ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: theme) }"), true,
+                    "主题: 「对得上某一套」的判据仍是内置 + 自存主题配色全等")
+        // 套用主题前把手调没存的配色留一份(可恢复),三个入口都得走它,漏一个就又会丢配色。
+        let quickMenu = stripComments(code("UI/OverlayQuickSettingsMenu.swift"))
+        expectEqual(rows.components(separatedBy: "theme.applyKeepingUnsaved(to: settings)").count - 1, 2,
+                    "主题: 设置页两处套用都先留存手调配色")
+        expectEqual(quickMenu.contains("theme.applyKeepingUnsaved(to: AppSettings.shared)"), true,
+                    "主题: 快捷菜单套用也先留存手调配色")
+        expectEqual(rows.contains("theme.apply(to: settings)") || quickMenu.contains("theme.apply(to: AppSettings.shared)"), false,
+                    "主题: 没有绕过留存直接套用的入口")
         expectEqual(rows.contains("theme: ColorTheme.current(settings, name: L10n.t(\"自定义\")), isCurrent: true,"), true,
                     "主题: 「自定义」卡用当前配色画、描选中框")
         expectEqual(rows.contains("Toggle(isOn: Binding("), false,

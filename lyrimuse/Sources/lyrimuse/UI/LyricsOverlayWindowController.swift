@@ -42,6 +42,17 @@ private let overlayDefaultHeight: CGFloat = 120
 // 对 NotchChromeSource 的处理。
 @MainActor
 final class LyricsOverlayWindowController: NSWindowController, ObservableObject, OverlayChromeSource {
+    /// 见 `OverlayChromeSource.isSurfaceVisible`。默认 true:宁可多跑,不能把看得见的窗口停表。
+    @Published private(set) var isSurfaceVisible = true
+    private var occlusionObserver: NSObjectProtocol?
+
+    /// orderOut 之后系统不一定补发遮挡通知,显隐那一处自己也调一次。刚 orderFront 那一拍 occlusionState
+    /// 可能还是「不可见」,那时先记成看不见,窗口真正上屏时系统会发遮挡变化通知,这里再翻回来。
+    private func refreshSurfaceVisible() {
+        guard let window else { return }
+        let visible = window.isVisible && window.occlusionState.contains(.visible)
+        if isSurfaceVisible != visible { isSurfaceVisible = visible }
+    }
     static let shared = LyricsOverlayWindowController()
 
     // 真值在 AppSettings.classicOverlayEnabled,这里只是它的镜像(菜单栏/悬浮窗本身要观察
@@ -61,7 +72,9 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
     @Published private(set) var isPositionLocked: Bool = AppSettings.shared.lockPosition
     // "暂停/无播放时自动隐藏"这个开关本身——跟 isVisible(用户手动的显示/隐藏偏好)是
     // 两个独立维度,见 updateActualVisibility() 的组合逻辑,不能互相覆盖对方的语义。
-    @Published private(set) var hideWhenNotPlaying: Bool = false
+    // 初值直接读设置(同 isVisible):现在靠 AppDelegate 在同一拍补齐才不闪,任何先构造 `.shared` 的新路径
+    // 都会先按「不隐藏」把窗口摆出来。
+    @Published private(set) var hideWhenNotPlaying: Bool = AppSettings.shared.hideWhenNotPlaying
 
     private var moveObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -202,6 +215,33 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         if isHoveringForControls { isHoveringForControls = false }
         if isHoveringControlPill { isHoveringControlPill = false }
         if hoveredControl != nil { hoveredControl = nil }
+        setControlCapture(false)
+    }
+
+    /// 指针停在一颗看得见的按钮上时,这扇窗临时收回点击穿透(同边缘的 `captureEdge`)。
+    ///
+    /// 窗口常年 `ignoresMouseEvents = true`,按钮点击靠全局监听器自己分发 —— 而全局监听器看得到的事件,
+    /// 系统已经派给了下层 App:点播放 / 关闭 / ⚙ 时下层窗口同时挨了这一下(被激活、点中链接或按钮;
+    /// 「按住歌词立即拖」开着时还会收到半截手势)。收回穿透之后这次点击只到我们自己的窗口,由本地监听器
+    /// 照旧分发(控件不是 SwiftUI Button,不会触发两遍)。代价只在按钮那几块矩形上:指针停在按钮上时
+    /// 滚轮滚不到下层,其余地方照旧穿透。
+    private var controlCaptured = false
+
+    private func setControlCapture(_ on: Bool) {
+        guard on != controlCaptured, let window else { return }
+        controlCaptured = on
+        if on {
+            window.acceptsMouseMovedEvents = true
+            if !isDragArmed { window.ignoresMouseEvents = false }
+        } else {
+            restorePassthroughIfIdle()
+        }
+    }
+
+    /// 边缘和按钮两处都没在接管、也没在拖时,还原点击穿透。
+    private func restorePassthroughIfIdle() {
+        guard !edgeCaptured, !controlCaptured, !isDragArmed else { return }
+        window?.ignoresMouseEvents = true
     }
 
     private var globalMouseMonitor: Any?
@@ -256,6 +296,8 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
             mode: AppSettings.shared.overlayPlacementMode, restored: placement.origin, size: size
         ) ?? placement.origin
         let panel = LyricsOverlayWindow(contentRect: NSRect(origin: origin, size: size))
+        // 「截屏 / 录屏时隐藏」同理从窗口建出来那一刻就按设置来。
+        panel.sharingType = AppSettings.shared.hideDuringScreenCapture ? .none : .readWrite
         self.init(window: panel)
         // 存的位置在当前显示器配置下一块屏都看不见(外接屏拔了/睡了)时,上面那个落点是临时
         // 借主屏摆的 —— 标记成"借来的",这次运行不许把它写回磁盘,那块屏回来自己回去。
@@ -290,6 +332,13 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         // 消费者 —— 每次换行/开关译文都白做几档 sizeThatFits,显式声明掐掉整条路径。
         hosting.sizingOptions = []
         panel.contentView = hosting
+
+        // 真的看不看得见:被整扇盖住、锁屏、熄屏、在别的桌面时 occlusionState 不含 .visible。
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSurfaceVisible() }
+        }
 
         // 鼠标监听器不在这里装死 —— 生命周期跟着"实际可见且未锁定"走,见 syncMouseMonitors:
         // global monitor 会把全系统的指针移动/拖拽事件经 mach IPC 逐个送进本进程,窗口
@@ -450,6 +499,11 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
     private func updateActualVisibility(isPlayingNow: Bool) {
         let shouldShow = isVisible && (!hideWhenNotPlaying || isPlayingNow)
         if shouldShow { window?.orderFront(nil) } else { window?.orderOut(nil) }
+        refreshSurfaceVisible()
+        // 兜底:万一上屏之后系统没发遮挡变化通知,这里过一小会儿再核一次,别让填色停在「看不见」。
+        if shouldShow {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.refreshSurfaceVisible() }
+        }
         syncMouseMonitors()
     }
 
@@ -460,6 +514,7 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
     func setLocked(_ locked: Bool) {
         isPositionLocked = locked
         window?.isMovableByWindowBackground = false
+        controlCaptured = false
         window?.ignoresMouseEvents = true
         if locked {
             // 锁定这一刻可能正悬停/正长按/正拖到一半,全部清零,不留任何残留状态。
@@ -991,6 +1046,8 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
             if hoveredControl != nowHovered {
                 hoveredControl = nowHovered
             }
+            // 悬停高亮的那一颗就是「看得见、点得到」的按钮(可见性两道闸同上),压在它上面才接管点击。
+            setControlCapture(nowHovered != nil)
             // 歌词命中是**独立**的一套:窗口内 + 压在文字矩形上才算。热区还没上报上来
             // (刚显示、或者这一轮没有任何文字)时退回窗口判定,别让功能整个失灵。
             let insideLyrics = insideWindow
@@ -1084,6 +1141,7 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         case .leftMouseUp:
             if widthDrag != nil {
                 widthDrag = nil
+                commitDraggedWidth(baseFrame(of: window).width)
                 if OverlayWidthDrag.edge(at: localPoint, windowSize: window.frame.size) == nil {
                     releaseEdgeCapture()
                 }
@@ -1180,6 +1238,7 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
     func setAdjustingWidth(_ on: Bool) {
         let next = on && !isPositionLocked && (window?.isVisible ?? false)
         if !next {
+            if widthDrag != nil, let window { commitDraggedWidth(baseFrame(of: window).width) }
             widthDrag = nil
             releaseEdgeCapture()
         }
@@ -1210,7 +1269,7 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         edgeCaptured = false
         edgeCursorTimer?.invalidate()
         edgeCursorTimer = nil
-        window?.ignoresMouseEvents = true
+        restorePassthroughIfIdle()
         NSCursor.arrow.set()
         BackgroundCursor.setEnabled(false)
     }
@@ -1231,11 +1290,29 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         next.origin.y = current.origin.y
         next.size.height = current.height
         guard next != window.frame else { return }
+        // 高度动画在飞时它的目标 frame 还是旧宽度:同步改成这一帧,不然下一次换行的 updateHeight 按旧宽度
+        // 算,窗口宽度会弹回去一下。
+        if animatingTargetFrame != nil { animatingTargetFrame = next }
         window.setFrame(next, display: true)
         NSCursor.resizeLeftRight.set()
-        let width = Double(next.width)
-        if AppSettings.shared.overlayWidth != width { AppSettings.shared.overlayWidth = width }
+        // 宽度写回设置按节流来,松手时再补最后一次(commitDraggedWidth):每帧都写的话,每帧一次全局发布、
+        // 一次 UserDefaults 写入,外加所有订阅方(这扇窗自己三条、开着的设置页编辑台)跟着重算。
+        // 设置页那根宽度滑杆早就是「拖动中只改本地、松手才落盘」。
+        let now = CACurrentMediaTime()
+        if now - lastWidthCommitTime >= Self.widthCommitInterval {
+            lastWidthCommitTime = now
+            commitDraggedWidth(next.width)
+        }
         recomputeHitRegions()
+    }
+
+    /// 拖宽度期间写回设置的最小间隔(秒)。卡片里跟宽度走的几何(对唱留白等)按这个频率跟上。
+    private static let widthCommitInterval: CFTimeInterval = 0.15
+    private var lastWidthCommitTime: CFTimeInterval = 0
+
+    private func commitDraggedWidth(_ width: CGFloat) {
+        let value = Double(width)
+        if AppSettings.shared.overlayWidth != value { AppSettings.shared.overlayWidth = value }
     }
 
     private func cancelPendingPress() {
@@ -1263,6 +1340,9 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
     private func reconcilePlacementWithScreens() {
         guard let window else { return }
         let screens = Self.allVisibleFrames()
+        // 改分辨率、切菜单栏自动隐藏、Dock 换边时窗口不一定挪,但它离菜单栏还有多远变了:控制排该放卡片上方
+        // 还是下方要重判,不然可能被菜单栏盖住。(窗口真挪了的话 didMove 那边还会再判一次,判等所以无妨。)
+        recomputeControlsBelowCard()
 
         // 预设模式:位置由几何推导,对账 = 在该在的那块屏上按预设重算。Dock 改大小 /
         // 换边 / 开关自动隐藏也走这条通知(visibleFrame 变了),所以"Dock 之上"能跟着 Dock 走。
@@ -1286,6 +1366,15 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
             }
         }
 
+        // 有锚点、但锚点那块屏一块都看不见了,而窗口此刻好端端在另一块屏上 —— 那是系统在显示器消失时替我们
+        // 搬的家(预设模式那边同一条判断)。标记借屏:这次搬家触发的 didMove、之后换行的程序性 resize 都不写盘,
+        // 锚点继续指着那块不在的屏,它回来时上面 ① 那一支把窗口送回去。已经排着的那次落盘也作废。
+        if Self.savedAnchor() != nil, Self.homeFrame(size: window.frame.size)
+            .map({ !OverlayPlacement.isSufficientlyVisible(frame: $0, screens: screens) }) ?? true {
+            isBorrowingScreen = true
+            moveDebounceTimer?.invalidate()
+            moveDebounceTimer = nil
+        }
         guard let target = OverlayPlacement.repositionIfOffscreen(frame: window.frame, screens: screens) else {
             return
         }
@@ -1375,7 +1464,8 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         if source == .windowMoved, isPositionLocked { return }
         moveDebounceTimer?.invalidate()
         let t = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
-            guard let frame = self?.window?.frame else { return }
+            // 排队这 0.3 秒里可能刚进了借屏(显示器没了、系统搬了窗口):到点再核一次。
+            guard let self, !self.isBorrowingScreen, let frame = self.window?.frame else { return }
             let value = "\(frame.origin.x),\(frame.maxY)"
             // 值没变就别写 —— CFPreferences 的一次写路径不便宜,而高度动画结束后 x/顶边
             // 恰恰都是不变量,原来每次换行都会落一笔跟盘上完全相同的字符串。
@@ -1387,12 +1477,10 @@ final class LyricsOverlayWindowController: NSWindowController, ObservableObject,
         moveDebounceTimer = t
     }
 
-    // 主屏排在第一个:窗口无处可去时的落脚点(见 OverlayPlacement 里的约定)。
+    // 主屏排在第一个:窗口无处可去时的落脚点(见 OverlayPlacement 里的约定)。主屏取 `NSScreen.screens.first`
+    // (带菜单栏的那块),不取 `NSScreen.main` —— 后者是键盘焦点所在的屏,救援落点会跟着焦点跑。
     private static func allVisibleFrames() -> [CGRect] {
-        var screens: [CGRect] = []
-        if let main = NSScreen.main { screens.append(main.visibleFrame) }
-        for s in NSScreen.screens where s != NSScreen.main { screens.append(s.visibleFrame) }
-        return screens
+        NSScreen.screens.map(\.visibleFrame)
     }
 
     // 这个 frame **自己落在**的那块屏的可见区域(相交面积最大的那块);一块都不沾时 nil。

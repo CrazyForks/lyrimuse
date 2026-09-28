@@ -490,7 +490,7 @@ struct OverlayThemeSettingsRows: View {
             LazyVGrid(columns: ThemeGalleryMetrics.columns, spacing: ThemeGalleryMetrics.rowSpacing) {
                 ForEach(ColorTheme.builtInPresets) { theme in
                     ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current)) {
-                        theme.apply(to: settings)
+                        theme.applyKeepingUnsaved(to: settings)
                     }
                 }
             }
@@ -507,7 +507,12 @@ struct OverlayThemeSettingsRows: View {
     private func customSection(current: ColorTheme) -> some View {
         // 当前配色跟哪套都对不上 = 用户调过、还没存:排第一张「自定义」卡,用当前配色画、描选中框、
         // 右上角一个存储标记,点一下长出命名行。对得上时它不出现 —— 那时存下来只是某套主题的复本。
-        let isUnsaved = !(ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: current) }
+        let isUnsaved = !UnsavedColorThemeSnapshot.isKnown(current, settings: settings)
+        // 套用主题之前手调、没存过的那套(见 ColorTheme.applyKeepingUnsaved)。当前配色本身就是没存过的
+        // 那套时不再另外摆:上面那张「自定义」卡已经是它。
+        let restorable: ColorTheme? = isUnsaved ? nil : UnsavedColorThemeSnapshot.load().flatMap {
+            UnsavedColorThemeSnapshot.isKnown($0, settings: settings) ? nil : $0
+        }
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(L10n.t("我的配色主题"))
@@ -518,7 +523,7 @@ struct OverlayThemeSettingsRows: View {
                 editorControls
             }
             .frame(minHeight: 22)
-            if isUnsaved || !settings.customColorThemes.isEmpty {
+            if isUnsaved || restorable != nil || !settings.customColorThemes.isEmpty {
                 LazyVGrid(columns: ThemeGalleryMetrics.columns, spacing: ThemeGalleryMetrics.rowSpacing) {
                     if isUnsaved {
                         ThemePreviewCard(
@@ -529,9 +534,17 @@ struct OverlayThemeSettingsRows: View {
                             editing = .naming
                         }
                     }
+                    if let restorable {
+                        ThemePreviewCard(
+                            theme: { var t = restorable; t.name = L10n.t("之前的自定义"); return t }(), isCurrent: false,
+                            badge: "arrow.uturn.backward", help: L10n.t("套用主题之前手调的配色，点一下恢复")
+                        ) {
+                            restorable.apply(to: settings)
+                        }
+                    }
                     ForEach(settings.customColorThemes) { theme in
                         ThemePreviewCard(theme: theme, isCurrent: theme.hasSameColors(as: current)) {
-                            theme.apply(to: settings)
+                            theme.applyKeepingUnsaved(to: settings)
                         }
                         .contextMenu { customThemeMenu(theme) }
                     }

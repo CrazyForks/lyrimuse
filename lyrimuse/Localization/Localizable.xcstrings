@@ -37410,6 +37410,52 @@
           }
         }
       }
+    },
+    "之前的自定义" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous custom"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之前的自定义"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "之前的自訂"
+          }
+        }
+      }
+    },
+    "套用主题之前手调的配色，点一下恢复" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The colors you set before applying a theme. Click to restore them"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "套用主题之前手调的配色，点一下恢复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "套用主題之前手調的配色，點一下回復"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

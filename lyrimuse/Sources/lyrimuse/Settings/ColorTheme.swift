@@ -283,6 +283,43 @@ extension ColorTheme {
 }
 
 extension ColorTheme {
+    /// 所有「点一下套用主题」的入口都走这里(设置页主题库、「我的配色主题」、悬浮窗快捷菜单)。
+    ///
+    /// 套用会整套覆盖当前配色;当前配色要是手调过、还没存成主题(跟哪一套都对不上),先记一份到
+    /// `UnsavedColorThemeSnapshot`,不然「自定义」那张卡随即消失、手调的颜色就找不回来了。
+    @MainActor
+    func applyKeepingUnsaved(to settings: AppSettings) {
+        let current = ColorTheme.current(settings)
+        if !UnsavedColorThemeSnapshot.isKnown(current, settings: settings) {
+            UnsavedColorThemeSnapshot.save(current)
+        }
+        apply(to: settings)
+    }
+}
+
+/// 套用主题之前那套手调、没存过的配色。只留最近一份;「我的配色主题」里显示成一张可恢复的卡,
+/// 点一下套回去(恢复之后当前配色又是「没存过」,那张「自定义」卡照旧出现,可以接着存)。
+enum UnsavedColorThemeSnapshot {
+    private static let key = "np:unsavedColorThemeSnapshotJSON"
+
+    static func load() -> ColorTheme? {
+        guard let json = UserDefaults.standard.string(forKey: key), let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ColorTheme.self, from: data)
+    }
+
+    static func save(_ theme: ColorTheme) {
+        guard let data = try? JSONEncoder().encode(theme), let json = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(json, forKey: key)
+    }
+
+    /// 这套配色是不是已经在内置主题或「我的配色主题」里(是的话不用单独留着)。
+    @MainActor
+    static func isKnown(_ theme: ColorTheme, settings: AppSettings) -> Bool {
+        (ColorTheme.builtInPresets + settings.customColorThemes).contains { $0.hasSameColors(as: theme) }
+    }
+}
+
+extension ColorTheme {
     /// 悬浮窗快捷菜单「配色主题」子菜单条目左边的四段色条(已唱 / 未唱 / 背景 / 描边)。
     func swatchImage() -> NSImage {
         ThemeSwatch.image(

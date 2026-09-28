@@ -259,7 +259,7 @@ final class OverlayQuickSettingsMenu: NSObject, NSMenuDelegate {
 
     @objc private func applyColorTheme(_ sender: NSMenuItem) {
         guard let theme = sender.representedObject as? ColorTheme else { return }
-        theme.apply(to: AppSettings.shared)
+        theme.applyKeepingUnsaved(to: AppSettings.shared)
     }
 
     @objc private func nudgeEarlier() {

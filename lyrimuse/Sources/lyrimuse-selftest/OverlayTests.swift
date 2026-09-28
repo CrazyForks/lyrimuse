@@ -1437,4 +1437,25 @@ func runOverlayTests() {
         expectEqual(LyricsWindowGradientDirection(rawValue: "vertical"), .vertical, "渐变方向: 竖向 rawValue")
         expectEqual(LyricsWindowGradientDirection(rawValue: "horizontal"), .horizontal, "渐变方向: 横向 rawValue")
     }
+
+    // ---- 悬浮歌词审计那一批的接线(契约) ----
+    do {
+        let ui = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("lyrimuse/UI")
+        func src(_ name: String) -> String {
+            (try? String(contentsOf: ui.appendingPathComponent(name), encoding: .utf8)) ?? ""
+        }
+        let view = src("LyricsOverlayView.swift")
+        let controller = src("LyricsOverlayWindowController.swift")
+        expectEqual(view.components(separatedBy: "timingEpoch: playback.timingEpoch").count - 1, 3,
+                    "悬浮接线: 三处图层行都接时间基准指纹(拖进度 / 调偏移当场重排)")
+        expectEqual(view.components(separatedBy: "rate: playback.playbackRate").count - 1, 3,
+                    "悬浮接线: 三处图层行都按播放速率排关键帧")
+        expectEqual(controller.contains("setControlCapture(nowHovered != nil)"), true,
+                    "悬浮接线: 指针在按钮上时收回点击穿透,点按钮不再连带点到下层")
+        expectEqual(controller.contains("isBorrowingScreen = true\n            moveDebounceTimer?.invalidate()"), true,
+                    "悬浮接线: 锚点那块屏不在了就算借屏,并作废已排队的落盘")
+        expectEqual(view.contains("!surfaceVisible") && controller.contains("didChangeOcclusionStateNotification"), true,
+                    "悬浮接线: 看不见时停表")
+    }
 }
