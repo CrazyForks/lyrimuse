@@ -1270,4 +1270,47 @@ func runCoverArtTests() {
         expectEqual(service.contains("return await requestDetailed(method: method, cred: cred, extra: extra, priority: .interactive)"), true,
                     "简介兜底契约: 查询走 LastfmStatsService 那条带限速与退避的通道")
     }
+
+    // ---- 缩略图下载:用到多大就向图床要多大、哪种失败马上再试 ----
+    //
+    // 「搜索候选歌词」里网易云那条一直是占位图:缩略档照着 collector 给的 3000px 地址去下(约 3MB),
+    // 撞上图床一次 503,失败被记 10 分钟,整段时间都不再请求。一次搜索十来条候选原来要下约 10MB 封面,
+    // 按缩略档要图之后约 0.4MB。每家的档位是同一张图逐档实测出来的(见 CoverThumbnailFetch 头注)。
+    do {
+        typealias F = CoverThumbnailFetch
+        func t(_ s: String) -> String { F.url(for: URL(string: s)!, maxPixel: 256).absoluteString }
+        expectEqual(t("https://p1.music.126.net/abc==/1099.jpg?imageView&thumbnail=3000y3000&type=jpg&quality=90"),
+                    "https://p1.music.126.net/abc==/1099.jpg?param=256y256", "缩略图下载: 网易云要 256,原查询串整个换掉")
+        expectEqual(t("https://p4.music.126.net/x/1.jpg"), "https://p4.music.126.net/x/1.jpg?param=256y256",
+                    "缩略图下载: 没有查询串的网易云地址也加上尺寸")
+        expectEqual(t("https://is1-ssl.mzstatic.com/image/thumb/Music221/v4/a0/x.rgb.jpg/10000x10000bb.jpg"),
+                    "https://is1-ssl.mzstatic.com/image/thumb/Music221/v4/a0/x.rgb.jpg/256x256bb.jpg", "缩略图下载: Apple 要 256")
+        expectEqual(t("https://y.qq.com/music/photo_new/T002R800x800M000003zeVgY4BE7Sk.jpg"),
+                    "https://y.qq.com/music/photo_new/T002R300x300M000003zeVgY4BE7Sk.jpg", "缩略图下载: QQ 取 300(不小于 256 的那档)")
+        expectEqual(t("https://imge.kugou.com/stdmusic/0/20260926/1.jpg"),
+                    "https://imge.kugou.com/stdmusic/480/20260926/1.jpg", "缩略图下载: 酷狗原图换 480(240 比 256 小)")
+        expectEqual(t("https://img1.kuwo.cn/star/albumcover/0/s4s67/89/1.jpg"),
+                    "https://img1.kuwo.cn/star/albumcover/300/s4s67/89/1.jpg", "缩略图下载: 酷我原图换 300")
+        expectEqual(t("https://p3-luna.douyinpic.com/img/tos-cn/abc~tplv-b829550vbb-resize:0:0.jpg"),
+                    "https://p3-luna.douyinpic.com/img/tos-cn/abc~tplv-b829550vbb-resize:300:300.jpg", "缩略图下载: 汽水原图换 300")
+        expectEqual(t("https://s.mxmcdn.net/images-storage/albums2/1/125051961_800_800.jpg"),
+                    "https://s.mxmcdn.net/images-storage/albums2/1/125051961_350_350.jpg", "缩略图下载: Musixmatch 取 350(100 是 403)")
+        // 形状对不上一个字都不改:改错是 404、整张封面消失
+        for s in ["https://d.musicapp.migu.cn/data/oss/resource/00/60/ig/9cf9564aff9544f4983d16b25e85d250.webp",
+                  "https://evilmusic.126.net/a.jpg?x=1",
+                  "https://imge.kugou.com/other/0/1.jpg",
+                  "https://is1-ssl.mzstatic.com/image/thumb/Music221/x.rgb.jpg/600x600bb-60.jpg",
+                  "https://y.qq.com/music/photo_new/T003R800x800M000003zeVgY4BE7Sk.jpg",
+                  "https://i.scdn.co/image/ab67616d0000b273abc"] {
+            expectEqual(t(s), s, "缩略图下载: 没实测过的形状原样 —— \(s)")
+        }
+        expectEqual(F.url(for: URL(string: "https://p1.music.126.net/abc==/1099.jpg?param=600y600")!, maxPixel: 2048).absoluteString,
+                    "https://p1.music.126.net/abc==/1099.jpg?param=600y600", "缩略图下载: 原图档(2048)不改地址")
+        expectEqual(F.shouldRetry(statusCode: 503, urlErrorCode: nil), true, "缩略图下载: 503 再试")
+        expectEqual(F.shouldRetry(statusCode: 429, urlErrorCode: nil), true, "缩略图下载: 429 再试")
+        expectEqual(F.shouldRetry(statusCode: 404, urlErrorCode: nil), false, "缩略图下载: 404 不再试")
+        expectEqual(F.shouldRetry(statusCode: 200, urlErrorCode: nil), false, "缩略图下载: 200 但解码失败不再试")
+        expectEqual(F.shouldRetry(statusCode: nil, urlErrorCode: URLError.Code.timedOut.rawValue), true, "缩略图下载: 超时再试")
+        expectEqual(F.shouldRetry(statusCode: nil, urlErrorCode: URLError.Code.cancelled.rawValue), false, "缩略图下载: 被取消不再试")
+    }
 }

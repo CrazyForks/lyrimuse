@@ -189,7 +189,34 @@ struct CachedImage<Placeholder: View>: View {
     /// `nonisolated` 不能省:这个类型遵循 `View`,静态方法会被推断成主线程隔离,网络回来之后的解码 /
     /// 降采样就全落在主线程上(一张 3000² 降到 2048 几十毫秒,换歌、换行动画那一刻正好卡)。标成
     /// nonisolated 之后解码跑在后台,调用方(ImageMemoryCache)await 完再回主线程写缓存。
+    ///
+    /// 缩略档去下载的地址按图床换小(`CoverThumbnailFetch.url`,网易云要 512px 而不是 3000px),
+    /// 服务端 5xx / 临时网络错隔 1 秒再试一次(`CoverThumbnailFetch.shouldRetry`):失败会被
+    /// ImageMemoryCache 记 10 分钟、这期间不再请求,一次偶发 503 就是十分钟的占位图。
     private nonisolated static func load(_ url: URL, maxPixel: CGFloat?) async -> NSImage? {
+        let fetchURL = maxPixel.map { CoverThumbnailFetch.url(for: url, maxPixel: Int($0)) } ?? url
+        for attempt in 0..<2 {
+            let outcome = await fetchOnce(fetchURL, maxPixel: maxPixel)
+            switch outcome {
+            case .image(let image):
+                return image
+            case .failed(let status, let urlErrorCode):
+                guard attempt == 0,
+                      CoverThumbnailFetch.shouldRetry(statusCode: status, urlErrorCode: urlErrorCode),
+                      !Task.isCancelled
+                else { return nil }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        return nil
+    }
+
+    private enum FetchOutcome {
+        case image(NSImage)
+        case failed(statusCode: Int?, urlErrorCode: Int?)
+    }
+
+    private nonisolated static func fetchOnce(_ url: URL, maxPixel: CGFloat?) async -> FetchOutcome {
         // 这里记的是"这个函数被调用了几次",不是"真的上网发了几次请求"——命中
         // URLCache.shared 时字节从本地缓存出、根本不上网,而 URLSession 的这个便捷 API
         // 不暴露"这次是不是缓存命中"的信号(要拿到得换成带 URLSessionTaskDelegate 的
@@ -209,13 +236,14 @@ struct CachedImage<Placeholder: View>: View {
                    kCGImageSourceCreateThumbnailWithTransform: true,
                    kCGImageSourceThumbnailMaxPixelSize: maxPixel,
                ] as CFDictionary) {
-                return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+                return .image(NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height)))
             }
-            return NSImage(data: data)
+            if let image = NSImage(data: data) { return .image(image) }
+            return .failed(statusCode: status, urlErrorCode: nil)
         } catch {
             NetworkAuditLog.recordSummarized(service: "image", operation: "image", host: url.host ?? "unknown",
                                    statusCode: nil, durationMs: Date().timeIntervalSince(start) * 1000, error: error)
-            return nil
+            return .failed(statusCode: nil, urlErrorCode: (error as? URLError)?.code.rawValue)
         }
     }
 }
