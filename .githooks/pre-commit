@@ -40,6 +40,20 @@ case "$staged" in
         ;;
 esac
 
+# 歌词声明行规则同理:两侧规则表与例句由 shared/lyric-notices.json 生成,过期了编译照样过。
+case "$staged" in
+    *shared/lyric-notices.json*|*lyricnotices_generated*|*LyricNotices+Generated.swift*|*LyricNoticeExamples+Generated.swift*)
+        python3 "$root/scripts/gen-lyric-notices.py" --check >/dev/null 2>&1 || {
+            echo "" >&2
+            echo "  歌词声明行规则的生成物跟 shared/lyric-notices.json 对不上。" >&2
+            echo "  跑 python3 scripts/gen-lyric-notices.py 重新生成,把结果一起提交。" >&2
+            echo "  确实要放行:git commit --no-verify" >&2
+            echo "" >&2
+            exit 1
+        }
+        ;;
+esac
+
 # 只看本次新增/改动的、检查器认得的源码文件(删除的不算)。
 files=$(printf '%s\n' "$staged" | grep -E '\.(swift|go|js|mjs|ts|py|sh)$')
 [ -n "$files" ] || exit 0

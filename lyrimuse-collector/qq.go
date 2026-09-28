@@ -2234,16 +2234,11 @@ func isLRCOffsetTag(line string) bool {
 	return strings.HasPrefix(strings.ToLower(line), "[offset:")
 }
 
-// isTranslationNotice 认腾讯系(QQ音乐 / 酷狗)塞在译文轨开头的两种声明,它们挂在第一句之前的
-// 时间戳上,会被贴成标题行或第一句的译文:
-//   - 版权声明「QQ音乐享有本翻译作品的著作权」「TME享有本翻译作品的著作权」「腾讯享有本翻译作品的著作权」。
-//     要求「著作权」一定在——别把歌词里恰好出现「QQ音乐」的句子误杀。
-//   - 译者声明「以下歌词翻译由文曲大模型提供」「以下歌词翻译由微信翻译提供」。要求「歌词翻译由」
-//     与「提供」同时在。
+// isTranslationNotice 认腾讯系(QQ音乐 / 酷狗)塞在译文轨开头的声明:版权声明「TME享有本翻译作品的著作权」、
+// 译者声明「以下歌词翻译由文曲大模型提供」。它们挂在第一句之前的时间戳上,会被贴成标题行或第一句的译文。
 //
-// QQ 与酷狗两处译文轨出口、存量清洗 stripTranslationNotices 共用这一个判断,改判据三处一起生效。
+// 判据是 shared/lyric-notices.json 里 scopes 含 translation 的那几条,App 显示正文时用同一份
+// (见 lyricnotices.go);改判据改那份 JSON。QQ 与酷狗两处译文轨出口、存量清洗 stripTranslationNotices 共用这一个入口。
 func isTranslationNotice(text string) bool {
-	return strings.Contains(text, "翻译作品的著作权") ||
-		(strings.Contains(text, "QQ音乐") && strings.Contains(text, "著作权")) ||
-		(strings.Contains(text, "歌词翻译由") && strings.Contains(text, "提供"))
+	return lyricNoticeMatches(text, true)
 }

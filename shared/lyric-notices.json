@@ -1,0 +1,120 @@
+{
+  "$doc": [
+    "歌词源塞进歌词里的声明行(版权 / 授权 / 译文版权 / 来源说明)的判据,Swift 与 collector 共用这一份。",
+    "改完跑 python3 scripts/gen-lyric-notices.py 重新生成两侧代码;CI 与提交前检查跑 --check 对账。",
+    "scopes: translation = collector 清洗译文轨(isTranslationNotice);body = App 显示正文时的署名过滤(LyricNotices.matchesBody)。",
+    "比较前去掉首尾空白;ignoreCase 只影响拉丁字母。",
+    "正则只能用 Go RE2 与 NSRegularExpression(ICU) 语义一致的写法:不许 \\b \\B、前后查看、反向引用、原子组、占有量词、命名组、内联标志,生成脚本会拒收。",
+    "drop 里的每一句必须被本条命中;keep 里的每一句任何一条规则都不许命中。两侧测试跑同一批例句。"
+  ],
+  "rules": [
+    {
+      "id": "translation-copyright",
+      "note": "腾讯系平台给译文挂的版权声明;酷我会把它混进正文。",
+      "pattern": "翻[译譯]作品的?著作[权權]",
+      "ignoreCase": false,
+      "scopes": ["translation", "body"],
+      "drop": ["TME享有本翻译作品的著作权", "TME享有翻译作品的著作权", "腾讯享有本翻译作品的著作权", "本翻译作品的著作权归QQ音乐所有", "騰訊享有本翻譯作品的著作權"],
+      "keep": ["翻译你眼里的作品", "著作权"]
+    },
+    {
+      "id": "qq-copyright",
+      "note": "带平台名的译文版权声明,「QQ音乐」与「著作权」同时在才认。",
+      "pattern": "QQ音乐.*著作[权權]|著作[权權].*QQ音乐",
+      "ignoreCase": false,
+      "scopes": ["translation", "body"],
+      "drop": ["QQ音乐享有本翻译作品的著作权"],
+      "keep": ["我在QQ音乐上听到这首歌"]
+    },
+    {
+      "id": "translator-notice",
+      "note": "译者声明,「歌词翻译由」与「提供」同时在才认。",
+      "pattern": "歌词翻译由.*提供|提供.*歌词翻译由",
+      "ignoreCase": false,
+      "scopes": ["translation", "body"],
+      "drop": ["以下歌词翻译由文曲大模型提供", "以下歌词翻译由微信翻译提供", "以下歌词翻译由微信翻译+文曲大模型提供"],
+      "keep": ["翻译由我提供"]
+    },
+    {
+      "id": "unlicensed-use",
+      "note": "「未经…许可/授权/同意」,法务词成对出现才认。",
+      "pattern": "未经[^。]{0,12}(许可|授权|同意)",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["未经著作权人许可不得翻录翻唱或使用", "未经著作权人许可 不得翻录翻唱或使用", "（未经许可,不得翻唱或使用）"],
+      "keep": ["未经允许的心动"]
+    },
+    {
+      "id": "forbidden-use",
+      "note": "「不得翻录/翻唱/复制/转载/使用/下载」。",
+      "pattern": "不得(翻录|翻唱|复制|转载|使用|下载)",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["（未经许可,不得翻唱或使用）", "本作品不得转载"],
+      "keep": ["我不得不承认"]
+    },
+    {
+      "id": "rights-reserved-zh",
+      "note": "「版权所有」「保留(所有)权利」。",
+      "pattern": "版权所有|保留(所有)?权利",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["版权所有 翻录必究", "保留所有权利"],
+      "keep": ["我要赌上我的版权"]
+    },
+    {
+      "id": "rights-reserved-en",
+      "note": "英文成句的 All rights reserved / Unauthorized copying 之类。",
+      "pattern": "all rights reserved|unauthor(i[sz]ed)? (copying|reproduction|duplication)",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["All Rights Reserved", "Unauthorized reproduction is prohibited"],
+      "keep": ["All my rights reserved for you"]
+    },
+    {
+      "id": "license-obtained",
+      "note": "反过来说的「我拿到了授权」:取得类动词 + 「授权」成对才认。",
+      "pattern": "(已获|已獲|获得|獲得|取得|经过|經過|通过|通過|获授|獲授)[^。]{0,10}授[权權]",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["【本音乐作品已获得正版授权】", "已通过「腾讯音乐·启明星」获得官方翻唱授权", "（本作品已经过词曲著作权利方授权）", "【英文版翻译自花粥《二十岁的某一天》, 已获词曲授权】", "本作品已獲得正版授權"],
+      "keep": ["谁授权你这样对我", "我们经过那条街"]
+    },
+    {
+      "id": "license-official",
+      "note": "「正版/正式/独家/官方授权」,光一个「授权」不认。",
+      "pattern": "(正版|正式|独家|獨家|官方)授[权權]",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["（此版本为正式授权翻唱作品）"],
+      "keep": ["我把心授权给你"]
+    },
+    {
+      "id": "subtitle-generated",
+      "note": "AI 生成字幕的水印,认「字幕由…技术生成」这个句式。",
+      "pattern": "字幕由.{0,24}(技术|技術)生成",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["本字幕由AI语音对齐技术生成", "本字幕由TME AI技术生成", "本字幕由酷狗AI语音识别技术生成"],
+      "keep": ["新的世界正在生成"]
+    },
+    {
+      "id": "company-provided",
+      "note": "公司供词:整行以「由」起、以「公司提供」收。",
+      "pattern": "^由.{1,30}(公司|Co\\.?,? ?Ltd\\.?)提供$",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["由星演国际有限公司提供"],
+      "keep": ["由你决定", "由我来提供温暖的怀抱", "我会努力提供", "为反对纳粹的派对提供房间", "无声的贡献有天会懂"]
+    },
+    {
+      "id": "sample-credit",
+      "note": "采样 / 改编出处:整行以 contains 起句。",
+      "pattern": "^contains (an? )?(interpolations?|samples?|elements?) (of|from)([^A-Za-z]|$)",
+      "ignoreCase": true,
+      "scopes": ["body"],
+      "drop": ["Contains an interpolation of “Weak” written by Brian Alexander Morgan,", "Contains samples from \"Song\" performed by Someone", "Contains interpolations from \"Physical\" written by Steve Kipner"],
+      "keep": ["It contains all of my love", "Contains multitudes, like me", "Contains samples offered"]
+    }
+  ]
+}

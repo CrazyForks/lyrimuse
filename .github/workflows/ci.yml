@@ -50,6 +50,10 @@ jobs:
         # 手改时**编译照样过**（它本身是合法代码），只有这一步能发现 —— 所以排在最前面。
         run: python3 scripts/gen-players.py --check
 
+      - name: 歌词声明行规则与 shared/lyric-notices.json 一致
+        # 同上:两侧的规则表和例句都由那份 JSON 生成,过期或被手改时编译照样过。
+        run: python3 scripts/gen-lyric-notices.py --check
+
       - name: gofmt
         run: |
           cd lyrimuse-collector

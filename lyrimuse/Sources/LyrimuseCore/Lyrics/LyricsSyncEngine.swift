@@ -894,29 +894,6 @@ public final class LyricsSyncEngine {
         return out.trimmingCharacters(in: .whitespaces)
     }
 
-    // 版权/免责声明行。跟职员表不是一回事:它**没有冒号**,上面所有以"角色+冒号"为形状的
-    // 规则全都够不着,所以要单独一条。
-    //
-    // 全库扫描实测:郭顶《飞行器的执行周期》整张专辑(10 首)的末行都是
-    // 「未经著作权人许可不得翻录翻唱或使用」,一条都没被滤掉。
-    //
-    // 判据用"关键短语必须成对出现"而不是单个词:光有「未经」可能是真歌词(「未经允许的
-    // 心动」),必须同时出现"未经/不得/版权/权利"这类法务词与"许可/翻录/翻唱/复制/授权/
-    // 保留"里的一个,才认。英文那条同理只认成句的 All rights reserved 之类。
-    //
-    // 声明还有**反过来说**的一档:「【本音乐作品已获得正版授权】」「已通过「腾讯音乐·启明星」
-    // 获得官方翻唱授权」「(本作品已经过词曲著作权利方授权)」—— 说的是"我拿到了授权",
-    // 一个未经/不得/版权所有/保留权利都没有,上面几档一条都够不着;它同样没有冒号,也不是
-    // 角色词开头,所以只能并进这条。判据照旧成对:取得类动词(获得/取得/经过/通过/已获/
-    // 获授)或「正版/正式/独家/官方」,再加「授权」二字,光秃秃一个「授权」不认。
-    // 拿本机 21285 份歌词、1284501 行量过:这一档捞起 5 行、全部是真的授权声明,0 误杀;
-    // 语料里含「授权」二字的行没有一行是真歌词,这是它误杀空间极小的原因。繁体写法
-    // (獲得/經過/授權)一并收下,本机语料里还没出现过。
-    private static let copyrightNoticePattern = try! NSRegularExpression(
-        pattern: #"(未经[^。]{0,12}(许可|授权|同意))|(不得(翻录|翻唱|复制|转载|使用|下载))|(版权所有)|(保留(所有)?权利)|(all rights reserved)|(unauthor(i[sz]ed)? (copying|reproduction|duplication))|((已获|已獲|获得|獲得|取得|经过|經過|通过|通過|获授|獲授)[^。]{0,10}授[权權])|((正版|正式|独家|獨家|官方)授[权權])"#,
-        options: [.caseInsensitive]
-    )
-
     /// 整行只有符号/标点的行(实测到过单独一行 `-`)。它不是歌词,也不是署名,就是分隔用的
     /// 排版残渣;逐行规则里没有任何一条够得着它。
     ///
@@ -951,7 +928,7 @@ public final class LyricsSyncEngine {
     /// 为什么现有规则一条都够不着:上面那两条主力(creditLinePattern 的关键词表、
     /// genericHanCreditLinePattern 的结构化"短标签+冒号")**都要求冒号**,而这种宣传语是一句
     /// 完整的话、根本没有冒号。这不是"再补一个角色词"能解决的形状,所以另起一条,跟
-    /// matchesCopyrightNotice / matchesDateStampLine 同属"无冒号、靠形状锚定"那一档。
+    /// LyricNotices.matchesBody / matchesDateStampLine 同属"无冒号、靠形状锚定"那一档。
     ///
     /// 判据是**两个条件同时成立**:去掉尾部标点引号后以出品/出版/发行/企划/呈现/呈献结尾,
     /// **并且**整行里出现平台/厂牌词。
@@ -1030,7 +1007,7 @@ public final class LyricsSyncEngine {
 
     /// 反盗版**口号** —— `〖盗版者必不火歌〗` 这类。
     ///
-    /// 跟 `matchesCopyrightNotice` 不是一回事:那条认的是成句的**法务声明**(未经…许可 /
+    /// 跟 `LyricNotices.matchesBody` 不是一回事:那边认的是成句的**法务声明**(未经…许可 /
     /// 不得翻录 / 版权所有 / 已获得…授权),这一句一个法务词都没有,它是喊话。跟
     /// `matchesPlatformWatermarkLine` 也不是一回事:那条锚在平台品牌名上,这句里没有品牌名。
     ///
@@ -1062,32 +1039,6 @@ public final class LyricsSyncEngine {
             in: inner, range: NSRange(inner.startIndex..., in: inner)) != nil
     }
 
-    /// 交代这份歌词**从哪来**的说明行,三种形状,各自都没有冒号、没有角色词收尾、不一定带平台品牌名,
-    /// 上面的规则一条都够不着:
-    ///  - AI 生成字幕的水印:「本字幕由AI语音对齐技术生成」「本字幕由TME AI技术生成」。带平台名的写法
-    ///    `matchesPlatformWatermarkLine` 已经认,这里认的是「字幕由…技术生成」这个句式本身。
-    ///  - 公司供词:「由某某有限公司提供」,整行以「由」起、以「公司提供」收。
-    ///  - 采样 / 改编出处:「Contains an interpolation of "X" written by …」「Contains samples from …」,
-    ///    整行以 contains 起句。英文署名规则要求角色词在句首,这句的 written by 在句中。
-    ///
-    /// 三条都锚在整句句式上,不是关键词:「提供」「生成」「contains」单独出现在真歌词里很常见。
-    /// 全库量化见 08 章第二十三轮。
-    private static let provenanceNoticePatterns: [NSRegularExpression] = [
-        #"字幕由.{0,24}(技术|技術)生成"#,
-        #"^由.{1,30}(公司|Co\.?,? ?Ltd\.?)提供$"#,
-        #"^contains (an? )?(interpolations?|samples?|elements?) (of|from)\b"#,
-    ].map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
-
-    public static func matchesProvenanceNoticeLine(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        let range = NSRange(trimmed.startIndex..., in: trimmed)
-        return provenanceNoticePatterns.contains { $0.firstMatch(in: trimmed, range: range) != nil }
-    }
-
-    /// 版权/免责声明行——见 copyrightNoticePattern 上的注释。
-    public static func matchesCopyrightNotice(_ text: String) -> Bool {
-        copyrightNoticePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
-    }
 
     /// 带**版权标记**的著作权行 —— 「著作权人：+© 2019、赋音乐」(用户在
     /// 方大同《白发》的悬浮窗上看到它;那首歌 12 行职员表里只有这一行漏网)。
@@ -1102,7 +1053,7 @@ public final class LyricsSyncEngine {
     ///    也不是字母数字。刻意**不**放宽那道校验 —— 逐段的字符集是那条规则唯一的精度
     ///    来源(它没有词表锚点,只有"整份 ≥2 行"这一道闸),为一个版权标记就把符号放进去,
     ///    换来的覆盖面还不如单独写这一条;
-    ///  - matchesCopyrightNotice 认的是「未经…许可」「不得翻录」这类**成句**的法务声明,
+    ///  - LyricNotices.matchesBody 认的是「未经…许可」「不得翻录」这类**成句**的法务声明,
     ///    这一行只有标记 + 年份 + 公司名,一个法务词都没有。
     ///
     /// 判据:整行同时出现 ①版权/录音版权标记(© ℗ 及其圆圈变体,或加括号的 (C)/(P))
@@ -1383,9 +1334,9 @@ public final class LyricsSyncEngine {
             // 纯英文、没有冒号的那类("Mixed by X at Y")。同样逐行生效:它要求整行以角色词
             // 开头且紧跟 by/at,误杀面很小。
             if matchesEnglishCredit(text) { return true }
-            // 版权/免责声明("未经著作权人许可不得翻录翻唱或使用")——没有冒号,上面几条
-            // 以"角色+冒号"为形状的规则一条都够不着,见 copyrightNoticePattern。
-            if matchesCopyrightNotice(text) { return true }
+            // 源塞进来的声明行:版权 / 授权 / 译文版权 / 来源说明(「未经著作权人许可不得翻录翻唱或使用」
+            // 「本字幕由AI语音对齐技术生成」)。规则跟 collector 共用 shared/lyric-notices.json,见 LyricNotices。
+            if LyricNotices.matchesBody(text) { return true }
             // 带版权标记的著作权行(「著作权人：+© 2019、赋音乐」「℗ 2016 北京享耳音乐」)。
             // 跟上面那条"成句的法务声明"不是一回事:那条认法务词,这条认版权标记 + 年份,
             // 见 matchesCopyrightMarkLine(那里记着四条现有规则各差在哪一步)。
@@ -1410,8 +1361,6 @@ public final class LyricsSyncEngine {
             // 反盗版口号(「〖盗版者必不火歌〗」)——没有法务词也没有品牌名,上面两条都够不着,
             // 见 matchesAntiPiracySloganLine。
             if matchesAntiPiracySloganLine(text) { return true }
-            // 字幕 / 供词 / 采样出处这类来源说明,见 matchesProvenanceNoticeLine。
-            if matchesProvenanceNoticeLine(text) { return true }
             // 整行只有符号(单独一行 `-` 之类),见 isSymbolOnlyLine。
             if isSymbolOnlyLine(text) { return true }
             // 抬头只在第一行认 —— 别的位置出现同样的字样多半是真歌词。

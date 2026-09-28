@@ -434,23 +434,23 @@ func runRomanizationTests() {
     expectEqual(LyricsSyncEngine.matchesAntiPiracySloganLine("【盗版】可耻【盗版】"), false,
                 "反盗版口号(反向): 首尾像括号但内部还有同种括号,不是一整块")
 
-    // 来源说明(AI 字幕水印 / 公司供词 / 采样出处),见 matchesProvenanceNoticeLine。
+    // 来源说明(AI 字幕水印 / 公司供词 / 采样出处),见 LyricNotices。
     // 三条都锚在整句句式上;「提供」「生成」「contains」单独出现的真歌词不能碰。
     for notice in ["本字幕由AI语音对齐技术生成", "本字幕由TME AI技术生成", "本字幕由酷狗AI语音识别技术生成",
                    "由星演国际有限公司提供",
                    "Contains an interpolation of “Weak” written by Brian Alexander Morgan,",
                    "Contains samples from \"Song\" performed by Someone"] {
-        expectEqual(LyricsSyncEngine.matchesProvenanceNoticeLine(notice), true, "来源说明: \(notice)")
+        expectEqual(LyricNotices.matchesBody(notice), true, "来源说明: \(notice)")
     }
     for real in ["我会努力提供", "为反对纳粹的派对提供房间", "无声的贡献有天会懂", "由你决定",
                  "由我来提供温暖的怀抱", "新的世界正在生成", "It contains all of my love",
                  "Contains multitudes, like me"] {
-        expectEqual(LyricsSyncEngine.matchesProvenanceNoticeLine(real), false, "来源说明(反向): \(real)")
+        expectEqual(LyricNotices.matchesBody(real), false, "来源说明(反向): \(real)")
     }
-    // 授权声明的「正式授权」写法走 matchesCopyrightNotice;光秃秃一个「授权」照旧不认。
-    expectEqual(LyricsSyncEngine.matchesCopyrightNotice("（此版本为正式授权翻唱作品）"), true,
+    // 授权声明的「正式授权」写法走 LyricNotices.matchesBody;光秃秃一个「授权」照旧不认。
+    expectEqual(LyricNotices.matchesBody("（此版本为正式授权翻唱作品）"), true,
                 "授权声明: 正式授权")
-    expectEqual(LyricsSyncEngine.matchesCopyrightNotice("我把心授权给你"), false,
+    expectEqual(LyricNotices.matchesBody("我把心授权给你"), false,
                 "授权声明(反向): 没有取得类动词或正版/正式/独家/官方修饰")
     // 走整份入口:来源说明行被删,前后真歌词留着。
     expectEqual(LyricsSyncEngine.creditLineDropDecisions(

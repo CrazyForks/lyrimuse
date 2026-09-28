@@ -235,38 +235,63 @@ func runCreditLineTests() {
     }
 
     do {
+        // 声明行规则跟 collector 共用 shared/lyric-notices.json,例句也共用(go test 跑同一批):
+        // drop 必须被那一条命中,keep 任何一条都不许命中;规则在 ICU 下必须全部编得过。
+        expectEqual(LyricNotices.compiledCount, LyricNotices.ruleCount, "声明行规则: 每一条在 ICU 下都编得过")
+        for ex in lyricNoticeExamples {
+            if ex.drop {
+                expectEqual(LyricNotices.matches(ex.text, rule: ex.rule), true, "声明行规则 \(ex.rule) 应当命中: \(ex.text)")
+            } else {
+                expectEqual(LyricNotices.matchingRules(ex.text), [], "声明行规则(反向): 真歌词不许命中: \(ex.text)")
+            }
+        }
+    }
+
+    do {
         // 版权/免责声明:没有冒号,所有"角色+冒号"规则都够不着,所以单独一条。
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("未经著作权人许可不得翻录翻唱或使用"),
+        expectEqual(LyricNotices.matchesBody("未经著作权人许可不得翻录翻唱或使用"),
                     true, "版权声明: 郭顶整张专辑末行的实测形态")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("未经著作权人许可 不得翻录翻唱或使用"),
+        expectEqual(LyricNotices.matchesBody("未经著作权人许可 不得翻录翻唱或使用"),
                     true, "版权声明: 中间带空格的变体")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("（未经许可,不得翻唱或使用）"),
+        expectEqual(LyricNotices.matchesBody("（未经许可,不得翻唱或使用）"),
                     true, "版权声明: 带括号的短变体")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("All Rights Reserved"),
+        expectEqual(LyricNotices.matchesBody("All Rights Reserved"),
                     true, "版权声明: 英文成句写法")
         // 反向:光有"未经"不够,必须成对出现法务词,否则真歌词会被吞。
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("未经允许的心动"), false,
+        expectEqual(LyricNotices.matchesBody("未经允许的心动"), false,
                     "版权声明(反向): 只有「未经」的真歌词不算")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("我不得不承认"), false,
+        expectEqual(LyricNotices.matchesBody("我不得不承认"), false,
                     "版权声明(反向): 只有「不得」的真歌词不算")
+        // 腾讯系译文版权声明:酷我把它混进正文,collector 的译文轨清洗够不着。
+        expectEqual(LyricNotices.matchesBody("TME享有本翻译作品的著作权"), true,
+                    "译文版权声明: 酷我正文里的 TME 写法")
+        expectEqual(LyricNotices.matchesBody("本翻译作品的著作权归QQ音乐所有"), true,
+                    "译文版权声明: 「著作权归…所有」的倒装写法")
+        expectEqual(LyricNotices.matchesBody("騰訊享有本翻譯作品的著作權"), true,
+                    "译文版权声明: 繁体写法")
+        expectEqual(LyricNotices.matchesBody("翻译你眼里的作品"), false,
+                    "译文版权声明(反向): 只沾到「翻译」「作品」的真歌词不算")
+        expectEqual(LyricsSyncEngine.creditLineDropDecisions(
+            ["TME享有本翻译作品的著作权", "She's not as hot as she was", "She was never a girls' girl"]),
+                    [true, false, false], "译文版权声明: 整份歌词里只剔掉那一行")
 
         // 反过来说的「我拿到了授权」那一档:一个法务禁止词都没有,靠"取得类动词 + 授权"成对认。
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("【本音乐作品已获得正版授权】"),
+        expectEqual(LyricNotices.matchesBody("【本音乐作品已获得正版授权】"),
                     true, "授权声明: 括号包着的正版授权声明")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("已通过「腾讯音乐·启明星」获得官方翻唱授权"),
+        expectEqual(LyricNotices.matchesBody("已通过「腾讯音乐·启明星」获得官方翻唱授权"),
                     true, "授权声明: 动词和「授权」之间隔着平台名")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("（本作品已经过词曲著作权利方授权）"),
+        expectEqual(LyricNotices.matchesBody("（本作品已经过词曲著作权利方授权）"),
                     true, "授权声明: 「经过…授权」写法")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("【英文版翻译自花粥《二十岁的某一天》, 已获词曲授权】"),
+        expectEqual(LyricNotices.matchesBody("【英文版翻译自花粥《二十岁的某一天》, 已获词曲授权】"),
                     true, "授权声明: 「已获…授权」写法")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("本作品已獲得正版授權"),
+        expectEqual(LyricNotices.matchesBody("本作品已獲得正版授權"),
                     true, "授权声明: 繁体写法")
         // 反向:两半必须齐,光有一个「授权」不删 —— 这是它误杀空间小的唯一来源。
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("谁授权你这样对我"), false,
+        expectEqual(LyricNotices.matchesBody("谁授权你这样对我"), false,
                     "授权声明(反向): 只有「授权」没有取得类动词不算")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("我要赌上我的版权"), false,
+        expectEqual(LyricNotices.matchesBody("我要赌上我的版权"), false,
                     "授权声明(反向): 语料里真出现过的、含「版权」的真歌词")
-        expectEqual(LyricsSyncEngine.matchesCopyrightNotice("我们经过那条街"), false,
+        expectEqual(LyricNotices.matchesBody("我们经过那条街"), false,
                     "授权声明(反向): 只有「经过」的真歌词不算")
     }
 
