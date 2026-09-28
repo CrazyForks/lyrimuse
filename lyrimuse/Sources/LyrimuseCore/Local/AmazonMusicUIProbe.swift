@@ -16,7 +16,8 @@ import Foundation
 /// (调用方退回不校准)。剩余时间用来核对读到的是当前这首:已播 + 剩余要跟时长对得上。
 ///
 /// 自动连播切歌时界面跟日志同一刻换到下一首,但时间停在 `00:00` 直到真正出声才走;所以 0 秒的读数不用,
-/// 否则几次停住的 0 会收敛出一个偏早的起点。
+/// 否则几次停住的 0 会收敛出一个偏早的起点。停在 `00:00` 的这段最多等 `startWait`,不算进 `timeout`:调用方切歌后
+/// 很快就来读,上一首的尾巴还在放(实测最长 4.6 秒)。
 public enum AmazonMusicUIProbe {
     public struct Sample: Equatable, Sendable {
         /// 切换开关的时刻与树建好、读到数的时刻。
@@ -37,8 +38,12 @@ public enum AmazonMusicUIProbe {
     /// 交集窄到这个宽度就停。下限由读数本身定:每次读数对应的时刻在「切换到建好」这约 0.23 秒里不确定,界面文字又最多晚
     /// `displayLag`,交集最窄也有 0.33 秒左右 —— 别把门槛设到这个量以下,否则永远收不住。
     public static let targetWidth: TimeInterval = 0.45
-    /// 最多读这么久。
+    /// 从读到第一个非 0 读数起最多再读这么久。
     public static let timeout: TimeInterval = 4
+    /// 界面停在 `00:00` 最多等这么久(上一首的尾巴还没放完)。
+    public static let startWait: TimeInterval = 7
+    /// 停在 `00:00` 时两次读之间隔多久:每读一次整棵辅助功能树都要重建,等出声这段不必读得太密。
+    static let startPollInterval: TimeInterval = 0.25
     /// 一次重建最多等这么久。
     public static let rebuildTimeout: TimeInterval = 1
 
@@ -82,6 +87,16 @@ public enum AmazonMusicUIProbe {
     /// 已播 + 剩余跟时长差多少还算同一首(界面取整、元数据时长取整)。
     public static let durationTolerance: Double = 3
 
+    /// 读到的已播秒数跟日志推出的位置(没扣提前量的 `engineTimelinePosition`)对不对得上。切歌后头一秒界面偶尔还是
+    /// 上一首的时间,时长又跟这首差不多时 `matchesTrack` 拦不住,靠这条拦:界面比日志位置超前不了多少。余量
+    /// `elapsedSlack` = 提前量下限(`AmazonMusicPlayhead.audibleLeadRange` 的 −4)+ 秒级取整。纯函数。
+    public static func plausibleElapsed(_ elapsed: Int, timelinePosition: TimeInterval?) -> Bool {
+        guard let timelinePosition else { return true }
+        return Double(elapsed) <= timelinePosition + elapsedSlack
+    }
+
+    static let elapsedSlack: TimeInterval = 5
+
     /// 一组读数是不是当前这首的进度条。纯函数。
     public static func matchesTrack(elapsed: Int, remaining: Int?, duration: Double?) -> Bool {
         guard let remaining, let duration, duration > 0 else { return true }
@@ -92,13 +107,17 @@ public enum AmazonMusicUIProbe {
     public enum Failure: String, Sendable {
         case notTrusted = "no accessibility permission"
         case noClock = "no clock text in the accessibility tree"
+        case notStarted = "the clock on screen stayed at 0:00"
         case otherTrack = "the clock on screen belongs to another track"
         case inconsistent = "readings do not advance with time (paused or seeking?)"
         case timedOut = "did not narrow down in time"
     }
 
-    /// 同步读,阻塞最多 `timeout`,返回这首的真实起点(epoch 秒)。别在主线程调。
-    public static func sampleOrigin(pid: pid_t, duration: Double?) -> Result<Double, FailureBox> {
+    /// 同步读,阻塞最多 `startWait` + `timeout`,返回这首的真实起点(epoch 秒)。别在主线程调。
+    /// `timelineOrigin`:日志位置的零点(当前时刻 − `engineTimelinePosition`),给 `plausibleElapsed` 用。`isCurrent`
+    /// 每读一次问一下,返回 false(已经换歌)就不读了。
+    public static func sampleOrigin(pid: pid_t, duration: Double?, timelineOrigin: Date? = nil,
+                                    isCurrent: () -> Bool = { true }) -> Result<Double, FailureBox> {
         guard AXIsProcessTrusted() else { return .failure(.init(.notTrusted, samples: 0)) }
         let durationText = duration.map { String(Int($0)) } ?? "?"
         let app = AXUIElementCreateApplication(pid)
@@ -106,8 +125,10 @@ public enum AmazonMusicUIProbe {
         var samples: [Sample] = []
         var restarts = 0
         var otherTrack: String?
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
+        var sawZero = false
+        let waitDeadline = Date().addingTimeInterval(startWait)
+        var deadline: Date?
+        while Date() < (deadline ?? waitDeadline), isCurrent() {
             AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
             let toggledAt = Date()
             AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
@@ -119,15 +140,18 @@ public enum AmazonMusicUIProbe {
             let readAt = Date()
             guard !pairs.isEmpty else { continue }
             // 开关之后头一次读到的偶尔还是上次那棵旧树(上一首的时间),跳过接着读,别整次放弃。
-            guard let (elapsed, _) = pickPair(pairs, duration: duration) else {
+            guard let (elapsed, _) = pickPair(pairs, duration: duration),
+                  plausibleElapsed(elapsed, timelinePosition: timelineOrigin.map { readAt.timeIntervalSince($0) }) else {
                 otherTrack = pairs.map { "\($0.elapsed)+\($0.remaining.map(String.init) ?? "?")" }.joined(separator: ",")
                 Thread.sleep(forTimeInterval: 0.1)
                 continue
             }
             if elapsed == 0 {
-                Thread.sleep(forTimeInterval: 0.1)
+                sawZero = true
+                Thread.sleep(forTimeInterval: startPollInterval)
                 continue
             }
+            if deadline == nil { deadline = Date().addingTimeInterval(timeout) }
             samples.append(Sample(toggledAt: toggledAt, readAt: readAt, seconds: elapsed))
             if originInterval(samples) == nil {
                 restarts += 1
@@ -139,6 +163,7 @@ public enum AmazonMusicUIProbe {
         if samples.isEmpty, let otherTrack {
             return .failure(.init(.otherTrack, samples: 0, detail: "clocks \(otherTrack) vs duration \(durationText)"))
         }
+        if samples.isEmpty, sawZero { return .failure(.init(.notStarted, samples: 0)) }
         let reason: Failure = samples.isEmpty ? .noClock : (restarts > 0 ? .inconsistent : .timedOut)
         return .failure(.init(reason, samples: samples.count, detail: restarts > 0 ? "restarted \(restarts)x" : nil))
     }

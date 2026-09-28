@@ -23,8 +23,9 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
     static let initialTailBytes = 256 << 10
     /// 日志不存在(没装 / 还没启动)时隔多久再看一眼。
     static let missingRetry: TimeInterval = 10
-    /// 开播后隔多久再校准:自动连播时界面跟着声音走,开播后头几秒还在放上一首的尾巴(实测提前量最多 3.5 秒),先等它放完。
-    static let calibrationDelay: TimeInterval = 5
+    /// 开播后隔多久开始校准。自动连播时开播后头几秒还在放上一首的尾巴,界面停在 `00:00`,探针自己等它走起来
+    /// (`AmazonMusicUIProbe.startWait`);这里只让界面先换到这一首。没有前奏的歌开口就唱,别把它调回几秒。
+    static let calibrationDelay: TimeInterval = 1
     /// 卡顿(含暂停后恢复跟着的那次)平息后隔多久重新校准。探针自己会丢掉界面停住那几次的读数,不用等太久。
     static let stallSettleDelay: TimeInterval = 0.5
     static let calibrationRetry: TimeInterval = 5
@@ -116,8 +117,13 @@ public final class AmazonMusicLogWatcher: @unchecked Sendable {
         }
         calibrating = true
         let stallBefore = state.lastStallAt
+        let timelineOrigin = AmazonMusicPlayhead.engineTimelinePosition(state, at: now).map { now.addingTimeInterval(-$0) }
         calibrationQueue.async { [self] in
-            let result = AmazonMusicUIProbe.sampleOrigin(pid: pid, duration: duration)
+            let result = AmazonMusicUIProbe.sampleOrigin(pid: pid, duration: duration, timelineOrigin: timelineOrigin) { [self] in
+                lock.lock()
+                defer { lock.unlock() }
+                return state.trackID == id && state.trackStartedAt == startedAt
+            }
             let origin = try? result.get()
             lock.lock()
             calibrating = false

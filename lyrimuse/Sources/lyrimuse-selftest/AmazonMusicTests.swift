@@ -183,6 +183,12 @@ func runAmazonMusicTests() {
         expectEqual(U.pickPair(pairs, duration: 173).map { $0.elapsed }, 61, "Amazon 界面: 挑对得上时长的那一对")
         expectEqual(U.pickPair([U.ClockPair(elapsed: 5, remaining: 300)], duration: 173) == nil, true,
                     "Amazon 界面: 没有一对对得上 = 读到的不是这首")
+        expectEqual(U.plausibleElapsed(230, timelinePosition: 1.2), false,
+                    "Amazon 界面: 切歌后一秒读到 230 秒 = 还是上一首的时间")
+        expectEqual(U.plausibleElapsed(185, timelinePosition: 181.5), true,
+                    "Amazon 界面: 卡顿后模型可能慢,界面超前几秒还认(拖动过也按日志位置比)")
+        expectEqual(U.plausibleElapsed(8, timelinePosition: 2.9), false, "Amazon 界面: 超出余量的不认")
+        expectEqual(U.plausibleElapsed(900, timelinePosition: nil), true, "Amazon 界面: 不知道日志位置就不拦")
     }
 
     // ---- 曲目页 ----
