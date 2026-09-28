@@ -1555,12 +1555,15 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	// 路径就算什么都没补上也会推进重试计数/时间戳(那些只要落盘、不涉及 lyrics/ 文件)。
 	lyricsChanged := false
 	defer func() {
+		if lyricsChanged {
+			translateAfterLyricsSwapLocked(key)
+		}
 		enrichMu.Unlock()
 		if !lyricsChanged {
 			requestEnrichBookkeepingSave(key)
 			return
 		}
-		requestEnrichSave()
+		commitEnrichSave(key)
 		exportLyricsFilesFor(key)
 		// 非阻塞通知 poll 立刻重推。跟 saveEnrichCache 一样,**四条补全路径都要做** —— 漏了
 		// 的话,同一首歌播到中途才补出来的译文要等下一次换歌才会被推出去(译文其实早就翻好、
@@ -1848,12 +1851,15 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	// 路径就算什么都没补上也会推进重试计数/时间戳(那些只要落盘、不涉及 lyrics/ 文件)。
 	lyricsChanged := false
 	defer func() {
+		if lyricsChanged {
+			translateAfterLyricsSwapLocked(key)
+		}
 		enrichMu.Unlock()
 		if !lyricsChanged {
 			requestEnrichBookkeepingSave(key)
 			return
 		}
-		requestEnrichSave()
+		commitEnrichSave(key)
 		exportLyricsFilesFor(key)
 		// 非阻塞通知 poll 立刻重推。跟 saveEnrichCache 一样,**四条补全路径都要做** —— 漏了
 		// 的话,同一首歌播到中途才补出来的译文要等下一次换歌才会被推出去(译文其实早就翻好、

@@ -180,3 +180,64 @@ func TestTranslationStartIsWired(t *testing.T) {
 		t.Error("同专辑预取不该排机翻")
 	}
 }
+
+// 自动换正文之后:正在播的那首当场按新正文起机翻,翻完写单条快照(App 不等整份缓存落盘);没在播的
+// (补空扫描 / 全量扫库换下来的)不起。
+func TestTranslateAfterLyricsSwapOnlyForPlayingKey(t *testing.T) {
+	setupTranslateStart(t)
+	savedPlaying := enrichPlayingKey.Load()
+	t.Cleanup(func() { enrichPlayingKey.Store(savedPlaying) })
+	const playing, other = "Someone|Playing Song|Some Album", "Someone|Swept Song|Some Album"
+	noteEnrichPlayingKey(playing)
+	enrichMu.Lock()
+	enrichCache = map[string]enrichEntry{
+		playing: {Lyrics: translateStartLyrics},
+		other:   {Lyrics: translateStartLyrics},
+	}
+	translateAfterLyricsSwapLocked(other)
+	sweptStarted := translationInflight[other]
+	translateAfterLyricsSwapLocked(playing)
+	playingStarted := translationInflight[playing]
+	enrichMu.Unlock()
+	if sweptStarted || !playingStarted {
+		t.Fatalf("swept=%v playing=%v:只该给正在播的那首起", sweptStarted, playingStarted)
+	}
+	waitTranslationDone(t, playing)
+	b, err := os.ReadFile(playingEntryPath())
+	if err != nil {
+		t.Fatalf("翻完没写单条快照: %v", err)
+	}
+	if !strings.Contains(string(b), `"key":"`+playing+`"`) || !strings.Contains(string(b), "译The painful youth") {
+		t.Fatalf("单条快照里没有这首的译文: %s", b)
+	}
+}
+
+// 接线守卫:升级 / 重新打分两条换正文的路径换完当场起机翻,三条路径(外加机翻本身)换了歌词族字段都写单条快照。
+func TestLyricsSwapPathsTranslateAndWritePlayingEntry(t *testing.T) {
+	b, err := os.ReadFile("enrich.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrich := string(b)
+	swap := "\t\tif lyricsChanged {\n\t\t\ttranslateAfterLyricsSwapLocked(key)\n\t\t}\n\t\tenrichMu.Unlock()\n\t\tif !lyricsChanged {\n\t\t\trequestEnrichBookkeepingSave(key)\n\t\t\treturn\n\t\t}\n\t\tcommitEnrichSave(key)\n\t\texportLyricsFilesFor(key)\n"
+	for _, fn := range []string{"func retryLyricsUpgrade(", "func rescoreLyrics("} {
+		i := strings.Index(enrich, fn)
+		if i < 0 {
+			t.Fatalf("enrich.go 找不到 %s", fn)
+		}
+		body := enrich[i:]
+		if j := strings.Index(body[1:], "\nfunc "); j >= 0 {
+			body = body[:j+1]
+		}
+		if !strings.Contains(body, swap) {
+			t.Errorf("%s 收尾没接 translateAfterLyricsSwapLocked / commitEnrichSave", fn)
+		}
+	}
+	tb, err := os.ReadFile("translate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tb), "\t\tcommitEnrichSave(key)\n\t\texportLyricsFilesFor(key)\n") {
+		t.Error("backfillTranslation 翻出译文之后没写单条快照")
+	}
+}

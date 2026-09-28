@@ -49,6 +49,17 @@ func startTranslationBackfillLocked(key string, e enrichEntry) bool {
 	return true
 }
 
+// translateAfterLyricsSwapLocked:自动换正文的路径(retryLyricsUpgrade / rescoreLyrics)换完之后调,
+// 只管正在播的那首。同一首播放期间 trackEnrichment 只在中继 / ListenBrainz 推送时才会再被调到,
+// 不在这里起,换下来的新正文要等下一次推送或下一次播放才有译文。补空扫描 / 全量扫库换的是没在播的歌,
+// 不在这里翻。调用方持有 enrichMu。
+func translateAfterLyricsSwapLocked(key string) {
+	if cur := enrichPlayingKey.Load(); cur == nil || *cur != key {
+		return
+	}
+	startTranslationBackfillLocked(key, enrichCache[key])
+}
+
 // translateUpcomingLocked 给待播队列里一首已经解析好的歌补机翻,排进 prefetchTranslateSlot。
 // 调用方持有 enrichMu。
 func translateUpcomingLocked(key string) bool {

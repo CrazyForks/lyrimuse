@@ -932,10 +932,11 @@ func backfillTranslation(key string) {
 	lyricsChanged := false
 	defer func() {
 		enrichMu.Unlock()
-		requestEnrichSave()
 		if !lyricsChanged {
+			requestEnrichSave()
 			return
 		}
+		commitEnrichSave(key)
 		exportLyricsFilesFor(key)
 		// 非阻塞通知 poll 立刻重推。跟 saveEnrichCache 一样,**四条补全路径都要做** —— 漏了
 		// 的话,同一首歌播到中途才补出来的译文,要等下一次换歌才会被推出去(表现是"为什么当前这
@@ -983,7 +984,7 @@ func backfillTranslation(key string) {
 		e.LyricsTrSource = lyricsTrSourceMachine
 		e.LyricsTrLang = target
 		// 节流与次数只管没翻成的歌。翻成了就清零:之后正文被重打分 / 升级换掉、译文跟着清空时,
-		// 下一次轮询就能按新正文重翻,不用等 6 小时。
+		// 换正文那条路径当场按新正文重翻(translateAfterLyricsSwapLocked),不被节流挡住。
 		e.TranslationTS, e.TranslationRetryCount = 0, 0
 		lyricsChanged = true
 		log.Printf("translate: %s got a machine translation (%d lines)", key, strings.Count(res.lrc, "\n")+1)
