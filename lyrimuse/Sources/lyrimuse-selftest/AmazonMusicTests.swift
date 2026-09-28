@@ -183,6 +183,28 @@ func runAmazonMusicTests() {
         expectEqual(U.pickPair(pairs, duration: 173).map { $0.elapsed }, 61, "Amazon 界面: 挑对得上时长的那一对")
         expectEqual(U.pickPair([U.ClockPair(elapsed: 5, remaining: 300)], duration: 173) == nil, true,
                     "Amazon 界面: 没有一对对得上 = 读到的不是这首")
+        expectEqual(U.pickIndex(pairs, duration: 173), 1, "Amazon 界面: 挑中的是第几对(按它记路径)")
+        // 下一次开关:两种读数结果的切点(开关 − 0.1、开关 + 0.23)对称夹住区间中点 + 整秒,取不早于 notBefore 的最近一刻。
+        let nt = U.nextToggleTime(origin: 1000.2...1001.0, notBefore: 1010.0)
+        expectEqual(abs(nt - 1010.535) < 0.001, true, "Amazon 界面: 下一次开关对准中点 + 整秒(\(nt))")
+        // 模拟:真实起点落在一秒里的不同位置,开关后 0~0.23 秒里某一刻读到整秒(界面晚 0~0.1 秒),按新策略取样。
+        for (k, frac) in [0.03, 0.27, 0.5, 0.71, 0.96].enumerated() {
+            let truth = 2000 + frac
+            var got: [U.Sample] = []
+            var tg = 2020.0 + Double(k) * 0.37
+            var settled: Double?
+            for n in 0..<U.maxSampleToggles {
+                let capture = tg + 0.23 * Double((n * 7 + k * 3) % 5) / 4
+                let lag = 0.1 * Double((n + k) % 3) / 2
+                got.append(U.Sample(toggledAt: Date(timeIntervalSince1970: tg), readAt: Date(timeIntervalSince1970: tg + 0.23),
+                                    seconds: Int((capture - truth - lag).rounded(.down))))
+                if let o = U.settledOrigin(got) { settled = o; break }
+                guard let r = U.originInterval(got) else { break }
+                tg = U.nextToggleTime(origin: r, notBefore: tg + 0.28)
+            }
+            expectEqual(settled.map { abs($0 - truth) < 0.25 }, true,
+                        "Amazon 界面: 二分取样 \(U.maxSampleToggles) 次内收住、起点准(真值 +\(frac),读了 \(got.count) 次)")
+        }
         expectEqual(U.plausibleElapsed(230, timelinePosition: 1.2), false,
                     "Amazon 界面: 切歌后一秒读到 230 秒 = 还是上一首的时间")
         expectEqual(U.plausibleElapsed(185, timelinePosition: 181.5), true,
