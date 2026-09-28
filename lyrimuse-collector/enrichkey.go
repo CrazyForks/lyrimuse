@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // 歌词缓存 key 的**唯一**构造点,以及把存量旧 key 归并过来的一次性迁移。
@@ -331,6 +332,33 @@ func migrateEnrichKeys() {
 	}
 }
 
+// backupEnrichKeyMergeGroups 把这一次要合并的组(不止一条的)原样写到 `<缓存>.keynorm-<时间>.bak`。
+// 没有要合并的组(只改名)不写。调用方持 enrichMu。
+func backupEnrichKeyMergeGroups(groups map[string][]string) error {
+	losers := map[string]enrichEntry{}
+	for _, olds := range groups {
+		if len(olds) < 2 {
+			continue
+		}
+		for _, k := range olds {
+			losers[k] = enrichCache[k]
+		}
+	}
+	if len(losers) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(losers)
+	if err != nil {
+		return err
+	}
+	path := enrichPath + ".keynorm-" + time.Now().Format("20060102-150405") + ".bak"
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	log.Printf("enrich key migration: backed up %d entries about to be merged to %s", len(losers), filepath.Base(path))
+	return nil
+}
+
 // applyEnrichKeyMigration 自己取锁做完内存态的归并,返回"有没有真的改过东西"。落盘交给
 // 调用方,理由见 migrateEnrichKeys 里那行注释。
 func applyEnrichKeyMigration() bool {
@@ -363,6 +391,13 @@ func applyEnrichKeyMigration() bool {
 					return false
 				}
 				log.Printf("enrich key migration: backed up %d entries to %s", len(enrichCache), filepath.Base(backup))
+			}
+		} else if err == nil {
+			// 最初那份已经在了(不覆盖它),这一次的合并另留一份:只存这一次要并到一起的那几组,每次各留各的 ——
+			// 配置搬家带来别处的旧写法、清洗规则或版本词表改了,都会在以后的启动里触发新的合并。
+			if err := backupEnrichKeyMergeGroups(groups); err != nil {
+				log.Printf("enrich key migration: merge backup failed (%v), aborting", err)
+				return false
 			}
 		}
 	}

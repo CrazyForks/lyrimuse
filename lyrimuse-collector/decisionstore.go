@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // 判决记录的**候选明细**(candidates + queries_tried)不进主缓存,单独存一个目录:
@@ -102,6 +104,7 @@ func stripDecision(d *lyricsDecision) *lyricsDecision {
 	}
 	cp := *d
 	cp.WinnerArtist = decisionWinnerArtist(d)
+	cp.SongDurationSecs = decisionSongDurationSecs(d)
 	cp.Candidates = nil
 	cp.QueriesTried = nil
 	cp.DetailsExternal = true
@@ -253,6 +256,34 @@ func writeDecisionSidecarFile(path string, rec decisionSidecar) error {
 	}
 	return nil
 }
+
+// appliedSongDurationSecs 同 decisionSongDurationSecs;这个字段出现之前就拆过明细的老记录(内存里只剩指纹)
+// 从旁路文件补一次。poll 每一拍都会问到这里,读过的按 key + 判决时刻记住,不重复读盘。
+func appliedSongDurationSecs(key string, d *lyricsDecision) float64 {
+	if d == nil {
+		return 0
+	}
+	if v := decisionSongDurationSecs(d); v > 0 || !d.DetailsExternal || hasDecisionDetails(d) {
+		return v
+	}
+	memo := key + "\x00" + strconv.FormatInt(d.DecidedAt, 10)
+	songDurationMemoMu.Lock()
+	v, ok := songDurationMemo[memo]
+	songDurationMemoMu.Unlock()
+	if ok {
+		return v
+	}
+	v = decisionSongDurationSecs(withDecisionDetails(key, d))
+	songDurationMemoMu.Lock()
+	songDurationMemo[memo] = v
+	songDurationMemoMu.Unlock()
+	return v
+}
+
+var (
+	songDurationMemoMu sync.Mutex
+	songDurationMemo   = map[string]float64{}
+)
 
 // withDecisionDetails:判决已经拆过(不带明细)时,从 key 那条的旁路文件按指纹把明细补回来,返回一份
 // 带明细的新拷贝;找不到或本来就带明细时原样返回。跨专辑复用搬运兄弟那一槽之前用 —— 搬过来要改

@@ -54,8 +54,9 @@ func runBackfillRoma(apply bool, limit int) int {
 	// 而整个回补可能是几千条、几分钟量级,不能把 enrichMu 一直攥着不放:常驻 collector
 	// 虽然此刻不该在跑(-apply 有独占闸),但预演模式没有那道闸。
 	type candidate struct {
-		key    string
-		lyrics string
+		key      string
+		lyrics   string
+		language string
 	}
 	var cands []candidate
 	skipped := map[string]int{}
@@ -70,13 +71,17 @@ func runBackfillRoma(apply bool, limit int) int {
 			skipped["已有罗马音(源自带/粤拼),不覆盖"]++
 			continue
 		}
+		if e.SongLanguage == songLanguageHokkien {
+			skipped["台语歌,不标普通话拼音"]++
+			continue
+		}
 		switch dominantScript(e.Lyrics) {
 		case scriptHan, scriptKana, scriptHangul:
 		default:
 			skipped["不是中日韩文字,无需注音"]++
 			continue
 		}
-		cands = append(cands, candidate{key: k, lyrics: e.Lyrics})
+		cands = append(cands, candidate{key: k, lyrics: e.Lyrics, language: e.SongLanguage})
 	}
 	enrichMu.Unlock()
 
@@ -86,7 +91,7 @@ func runBackfillRoma(apply bool, limit int) int {
 	}
 
 	fmt.Printf("候选(有歌词 + 没罗马音 + 中日韩文字): %d\n", len(cands))
-	for _, reason := range []string{"没有歌词", "已有罗马音(源自带/粤拼),不覆盖", "不是中日韩文字,无需注音"} {
+	for _, reason := range []string{"没有歌词", "已有罗马音(源自带/粤拼),不覆盖", "台语歌,不标普通话拼音", "不是中日韩文字,无需注音"} {
 		fmt.Printf("  跳过 %-28s : %d\n", reason, skipped[reason])
 	}
 	if len(cands) == 0 {
@@ -105,7 +110,16 @@ func runBackfillRoma(apply bool, limit int) int {
 	var empty, failed int
 	start := time.Now()
 	for i, c := range cands {
-		roma, err := onDeviceRomanize(c.lyrics)
+		// 顺序同 maybeGenerateRoma:粤语先查粤拼,查不出来才交给 helper(粤语汉字走 helper 出的是普通话拼音)。
+		jy := enrichEntry{Lyrics: c.lyrics, SongLanguage: c.language}
+		jy.maybeGenerateJyutpingRoma()
+		var roma string
+		var err error
+		if jy.LyricsRoma != "" {
+			roma = jy.LyricsRoma
+		} else {
+			roma, err = onDeviceRomanize(c.lyrics)
+		}
 		switch {
 		case err != nil:
 			failed++

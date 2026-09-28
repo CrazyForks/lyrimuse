@@ -98,6 +98,12 @@ func exportLyricsFilesFor(keys ...string) {
 	exportLyricsFilesMatching(folds)
 }
 
+// lyricsDisambiguatedBase 碰撞组里这个 key 用的文件名(不含后缀):确定性哈希后缀,见下面碰撞消歧那段。
+func lyricsDisambiguatedBase(key string) string {
+	sum := crc32.ChecksumIEEE([]byte(key))
+	return fmt.Sprintf("%s~%06x", sanitizeLyricsFilename(key), sum&0xFFFFFF)
+}
+
 // lyricsFileFold 是"文件系统会认成同一份文件"的分组键,见下面碰撞消歧那段。
 func lyricsFileFold(key string) string {
 	return strings.ToLower(sanitizeLyricsFilename(key))
@@ -199,8 +205,7 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 			continue
 		}
 		for _, idx := range idxs {
-			sum := crc32.ChecksumIEEE([]byte(jobs[idx].key))
-			disambiguated[idx] = fmt.Sprintf("%s~%06x", sanitizeLyricsFilename(jobs[idx].key), sum&0xFFFFFF)
+			disambiguated[idx] = lyricsDisambiguatedBase(jobs[idx].key)
 		}
 	}
 
@@ -211,6 +216,12 @@ func exportLyricsFilesMatching(onlyFolds map[string]bool) {
 		base, ok := disambiguated[i]
 		if !ok {
 			base = sanitizeLyricsFilename(j.key)
+			// 碰撞组缩回这一个 key 之后,它当初那份带哈希后缀的文件没人管了:导入按头部认身份,状态记录一失效
+			// 就可能拿这份旧内容把新写的顶掉。名字是按这个 key 算的,确定是它自己的。
+			hashed := lyricsDisambiguatedBase(j.key)
+			for _, suffix := range lyricsFileSuffixes {
+				remove(hashed + suffix)
+			}
 		} else {
 			// 这个 key 被判定需要消歧——顺手清掉它在"未加哈希后缀的原始文件名"下可能
 			// 残留的旧文件:那个文件名现在同时"属于"碰撞组里好几个 key,内容早晚会被

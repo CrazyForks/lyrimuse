@@ -205,6 +205,11 @@ func (s *lastfmScrobbler) scrobbleBatch(ctx context.Context, items []listenLogLi
 		// 以后改一处漏一处。
 		durationParam(p, "duration["+idx+"]", it.DUR)
 	}
+	// 取标签那一步可能已经把总时限耗完:这时请求还没发出去,别让 callBatch 带着过期的 ctx 失败、
+	// 被当成「可能已经落库」整批隔离。
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", errScrobbleBatchNotSent, err)
+	}
 	// 签名不需要为批量做任何特殊处理:sign() 用 sort.Strings 按字节序排,而官方要求的
 	// 正是 ASCII 字节序 —— "artist[0]" / "artist[10]" 这类名字排出来跟官方一致。
 	return s.callBatch(ctx, "track.scrobble", p)
@@ -338,6 +343,39 @@ func markQuarantined(uts int64) {
 	})
 }
 
+// errScrobbleBatchNotSent:这一批一个字节都没发出去(见 scrobbleBatch)。
+var errScrobbleBatchNotSent = errors.New("scrobble batch not sent")
+
+// backfillBatchNeverStored:这一批失败时服务端确定没落库,可以留在清单里等下次 —— 服务端明确拒了(限流、凭据失效),
+// 或者请求根本没离开本机(总时限在发送之前耗完、DNS / dial 失败,口径同 provablyNeverSent)。其余一律当可能已落库。
+func backfillBatchNeverStored(err error) bool {
+	var apiErr *lastfmAPIError
+	if errors.As(err, &apiErr) {
+		return !apiErr.mayHaveStored()
+	}
+	return errors.Is(err, errScrobbleBatchNotSent) || provablyNeverSent(err)
+}
+
+// stillPendingForBackfill 从一批里去掉此刻已经不需要补的:日志里已经有回执("s" / "q"),或者正排在常驻进程的
+// Last.fm 重发队列里(交给那边重发,两边都发就重复了)。
+func stillPendingForBackfill(batch []listenLogLine, now time.Time) []listenLogLine {
+	current, _ := pendingBackfillListens(now)
+	pending := make(map[int64]bool, len(current))
+	for _, l := range current {
+		pending[l.UTS] = true
+	}
+	for _, ts := range lfmRetryQueuedTimestamps() {
+		delete(pending, ts)
+	}
+	out := make([]listenLogLine, 0, len(batch))
+	for _, l := range batch {
+		if pending[l.UTS] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // runBackfill 跑一次回填。dryRun=true 时只统计、一个请求都不发。
 //
 // 中止策略一律"停下来,不退避重试":
@@ -378,7 +416,13 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 	log.Printf("backfill: %d listen(s) to submit (%d too old to accept)", len(pending), tooOld)
 	for start := 0; start < len(pending); start += backfillBatchSize {
 		end := min(start+backfillBatchSize, len(pending))
-		batch := pending[start:end]
+		// 这条命令一跑就是几分钟(按标签查 Last.fm 限速 1 次/秒),开头那份清单到发送这一刻可能已经过期:常驻进程的
+		// 重发队列(lfmretry.go)这期间交掉了其中几条,或者它们正排在那个队列里等下一轮。每批发送前重读一遍,
+		// 只发此刻仍然待补、又不在重发队列里的 —— 同一条收听交两次,删不掉。
+		batch := stillPendingForBackfill(pending[start:end], now)
+		if len(batch) == 0 {
+			continue
+		}
 
 		res, err := s.scrobbleBatch(ctx, batch)
 		if err != nil {
@@ -391,8 +435,7 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 			// 这些恰恰是最该留在清单里等下次的。一次限流就永久吃掉 50 条,而限流在补
 			// 几百条历史时几乎必然会遇到。判据跟 recordFailedMirror 共用 mayHaveStored(),
 			// 口径统一。
-			var apiErr *lastfmAPIError
-			definitelyNotStored := errors.As(err, &apiErr) && !apiErr.mayHaveStored()
+			definitelyNotStored := backfillBatchNeverStored(err)
 			if definitelyNotStored {
 				out.AbortedReason = err.Error()
 				log.Printf("backfill: aborted, %d listen(s) stay pending (server refused, nothing stored): %v", len(batch), err)

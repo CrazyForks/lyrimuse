@@ -29,6 +29,7 @@ type crossAlbumMember struct {
 	duration float64
 	source   string
 	score    int
+	version  int // LyricsScoringVersion:分数只在同一版本之间比
 	lines    int
 	lyrics   string
 }
@@ -118,12 +119,7 @@ func runCrossAlbumReuseCLI(args []string) {
 			mark = "⚠️"
 		}
 		fmt.Printf("%s %s | %s\n", mark, g.artist, g.title)
-		best := 0
-		for i, m := range g.members {
-			if m.score > g.members[best].score {
-				best = i
-			}
-		}
+		best := g.bestMember()
 		for i, m := range g.members {
 			keep := " "
 			if i == best && g.diverged() {
@@ -148,6 +144,19 @@ func runCrossAlbumReuseCLI(args []string) {
 	fmt.Printf("\n已复用 %d 条;跳过 %d 条(用户手改过内容或手动选过源的一律不动)。\n", n, skipped)
 }
 
+// bestMember 组里歌词要复用给其余成员的那一条的下标:打分版本最新的那几条里评分最高的。旧版本的分数不在
+// 一把尺子上(同 crossAlbumSiblingLyrics),不跟新版本的比。预演报告和 -apply 共用,两边结论一致。
+func (g crossAlbumGroup) bestMember() int {
+	best := 0
+	for i, m := range g.members {
+		b := g.members[best]
+		if m.version > b.version || (m.version == b.version && m.score > b.score) {
+			best = i
+		}
+	}
+	return best
+}
+
 // applyCrossAlbumReuse 把每组评分最高那条的歌词族字段复用给同组其余条目,返回改了几条、
 // 跳过几条。只动内存里的 enrichCache,落盘和导出由调用方负责。
 //
@@ -165,12 +174,7 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 		if !g.diverged() {
 			continue
 		}
-		best := 0
-		for i, m := range g.members {
-			if m.score > g.members[best].score {
-				best = i
-			}
-		}
+		best := g.bestMember()
 		src, ok := enrichCache[g.members[best].key]
 		if !ok || strings.TrimSpace(src.Lyrics) == "" {
 			continue
@@ -196,6 +200,7 @@ func applyCrossAlbumReuse(groups []crossAlbumGroup) (applied, skipped int) {
 			dst.LyricsRoma = src.LyricsRoma
 			dst.LyricsSource = src.LyricsSource
 			dst.LyricsScore = src.LyricsScore
+			dst.LyricsScoringVersion = src.LyricsScoringVersion
 			// 当前歌词的出处现在确实是 src 那一轮的决策,整份搬过来再标明复用来源;
 			// lyrics_decision(最近一次评估)保持不动 —— 那记的是这条自己评估过什么,
 			// 是事实,不该被别人的记录盖掉。
@@ -239,6 +244,7 @@ func groupCrossAlbumCandidates(cache map[string]enrichEntry, tolerance float64) 
 			duration: e.DurationSecs,
 			source:   e.LyricsSource,
 			score:    e.LyricsScore,
+			version:  e.LyricsScoringVersion,
 			lines:    strings.Count(e.Lyrics, "\n") + 1,
 			lyrics:   e.Lyrics,
 		})

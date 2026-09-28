@@ -196,32 +196,39 @@ func queueUpcomingEnrich(tracks []upcomingTrack) {
 			continue
 		}
 		key := enrichKey(t.artist, t.title, t.album)
-		enrichMu.Lock()
-		cachedKey := key
-		_, exists := enrichCache[key]
-		if !exists {
-			// 宽松再找一次:队列里的曲目名来自**播放器自己的曲库**,跟解析时写进缓存的
-			// 拼法在繁简、中英文空格、多歌手分隔符上系统性不一致(同 albumprefetch.go
-			// 那两段注释讲的坑)。精确没命中不等于没解析过。
-			if alt, found := canonicalEnrichKey(key); found {
-				exists, cachedKey = true, alt
+		// 先只看、等完上一首再重查并占位,理由同 albumprefetch.go 同一处。
+		eligible := func(claim bool) bool {
+			enrichMu.Lock()
+			cachedKey := key
+			_, exists := enrichCache[key]
+			if !exists {
+				// 宽松再找一次:队列里的曲目名来自**播放器自己的曲库**,跟解析时写进缓存的
+				// 拼法在繁简、中英文空格、多歌手分隔符上系统性不一致(同 albumprefetch.go
+				// 那两段注释讲的坑)。精确没命中不等于没解析过。
+				if alt, found := canonicalEnrichKey(key); found {
+					exists, cachedKey = true, alt
+				}
 			}
+			_, inflight := looseInflightKey(key)
+			ok := !exists && !inflight
+			if ok && claim {
+				enrichInflight[key] = true
+			} else if exists && !claim {
+				// 解析过、但还没译文的(开机翻之前解析的,或上次没翻成):播到之前补上,见 translatestart.go。
+				translateUpcomingLocked(cachedKey)
+			}
+			enrichMu.Unlock()
+			return ok
 		}
-		_, inflight := looseInflightKey(key)
-		eligible := !exists && !inflight
-		if eligible {
-			enrichInflight[key] = true
-		} else if exists {
-			// 解析过、但还没译文的(开机翻之前解析的,或上次没翻成):播到之前补上,见 translatestart.go。
-			translateUpcomingLocked(cachedKey)
-		}
-		enrichMu.Unlock()
-		if !eligible {
+		if !eligible(false) {
 			continue
 		}
 		if prevKey != "" {
 			// 只在真要起下一个之前才等 —— 跳过的(已解析/在途)不用等。
 			waitPrefetchResolved(prevKey)
+		}
+		if !eligible(true) {
+			continue
 		}
 		queued++
 		prevKey = key

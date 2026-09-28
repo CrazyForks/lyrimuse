@@ -97,6 +97,9 @@ type lyricsDecision struct {
 	// 文件之后(见 decisionstore.go),albumhint / learnedartistalias 要的就只是这一个字段,不必为它
 	// 去读旁路文件。老记录没有它时由拆分那一步从候选里补上(decisionWinnerArtist)。
 	WinnerArtist string `json:"winner_artist,omitempty"`
+	// SongDurationSecs:decisionSongDurationSecs 的结论,同 WinnerArtist 在拆出候选明细时留下 —— albumhint 给 MV
+	// 配专辑要的只是这一个数,拆完之后内存里已经没有候选了。
+	SongDurationSecs float64 `json:"song_duration_secs,omitempty"`
 	// DetailsExternal:这一槽的 candidates / queries_tried 已经挪到旁路文件(decisionstore.go)。读的一方
 	// 按指纹补不回来时据此显示「候选明细缺失」,而不是误报成「本轮没有源返回候选」—— 候选为空时
 	// Candidates 本来就因 omitempty 不落盘,光看字段在不在分不清这两种情况。
@@ -239,6 +242,9 @@ func decisionWinnerArtist(d *lyricsDecision) string {
 func decisionSongDurationSecs(d *lyricsDecision) float64 {
 	if d == nil {
 		return 0
+	}
+	if len(d.Candidates) == 0 && d.SongDurationSecs > 0 {
+		return d.SongDurationSecs
 	}
 	var all []float64
 	for _, c := range d.Candidates {

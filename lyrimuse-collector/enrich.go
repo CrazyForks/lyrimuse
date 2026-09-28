@@ -994,6 +994,9 @@ func siblingAlbumCover(artist, title, album string) (url, source string, albumVe
 // 按 key **定序**扫,不吃 map 的随机迭代顺序:同一张专辑有两条可借邻居时,不排序的话
 // 每次启动可能借到不同的图,表现是"这首歌的封面偶尔自己变了"、且复现不出来。
 func siblingCoverLocked(self, artist, album string, verifiedOnly bool) (url, source string) {
+	// 专辑名按繁简折叠后比:首次解析传进来的是转成简体的检索用专辑名,缓存 key 里是播放器的原写法。
+	// 逐字比的话繁体专辑整张借不到,补全那一路又按原写法判「有邻居可借」,白补满次数。
+	simpAlbum := toSimplified(album)
 	keys := make([]string, 0, len(enrichCache))
 	for k := range enrichCache {
 		keys = append(keys, k)
@@ -1015,7 +1018,7 @@ func siblingCoverLocked(self, artist, album string, verifiedOnly bool) (url, sou
 			continue
 		}
 		a, _, al := splitEnrichKey(key)
-		if al != album || !artistMatches(a, artist) {
+		if (al != album && toSimplified(al) != simpAlbum) || !artistMatches(a, artist) {
 			continue
 		}
 		return e.CoverURL, e.CoverSource
@@ -1645,6 +1648,11 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 			log.Printf("lyrics: %s auto-adopted plain-text fallback from %s (no timed version from any source)", key, source)
 		}
 	}
+	// 跟首次解析同一条「同一段录音、评分高的兄弟赢」(判据见 crossalbum.go),不挂的话
+	// cross-album-reuse 对齐过的组会在这两条路径上各自重选、又长出分歧。
+	if adoptCrossAlbumSiblingLyrics(key, &e) {
+		lyricsChanged = true
+	}
 	enrichCache[key] = e
 	enrichDirty = true
 }
@@ -1850,16 +1858,18 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 	e.LyricsSourcesSkipped = round.skippedSources()
 	// 不可判(当前源这轮没应答)时不写决策记录 —— 那一轮没有做出任何决定,盖掉上一份
 	// 完整评估的证据反而是损失。可判的两个分支都写(见 decision.go 的 Applied 语义)。
+	// 冠军换词之前先看当前这份有没有真的参与比较,见 rescoreKeepsCurrent。
+	keep := decidable && picked != nil && rescoreKeepsCurrent(e, scored, picked)
 	if decidable {
 		e.LyricsDecision = buildLyricsDecision(
 			lyricsDecisionPathRescore, artist, title, album, durationSecs, scored, picked,
-			picked != nil && (picked.Lyrics != e.Lyrics || gainsWordTiming(e, picked)))
+			picked != nil && !keep && (picked.Lyrics != e.Lyrics || gainsWordTiming(e, picked)))
 		e.LyricsDecision.SourcesSkipped = e.LyricsSourcesSkipped
 		e.LyricsDecision.QueriesTried = queries.queries()
 		traceLyricsDecision(key, e.LyricsDecision)
 		// rescore 可判且有胜者:无论内容换没换,这一轮之后当前歌词就是 picked 那份
 		// (见下面 default 分支),它就是新的出处(分槽语义见 LyricsDecisionApplied)。
-		if picked != nil {
+		if picked != nil && !keep {
 			e.LyricsDecisionApplied = e.LyricsDecision
 		}
 	}
@@ -1874,6 +1884,12 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 		e.LyricsScoringVersion = lyricsScoringVersion
 		e.ResolvedDurationSecs = durationSecs
 		log.Printf("lyrics rescore: %s  no valid candidate under v%d, keeping %s", key, lyricsScoringVersion, e.LyricsSource)
+	case keep:
+		// 当前这份没进这一轮的比较,而它已经是这一版规则打的分、冠军又不比它高:留着,只记这一轮做过。
+		e.LyricsScoringVersion = lyricsScoringVersion
+		e.ResolvedDurationSecs = durationSecs
+		log.Printf("lyrics rescore: %s  keeping %s(%d), current lyrics not among candidates and %s(%d) is no better",
+			key, e.LyricsSource, e.LyricsScore, picked.Source, picked.Score)
 	default:
 		if picked.Lyrics != e.Lyrics {
 			log.Printf("lyrics rescore: %s  %s(v%d) -> %s(%d)", key, e.LyricsSource, e.LyricsScoringVersion, picked.Source, picked.Score)
@@ -1910,6 +1926,11 @@ func rescoreLyrics(ctx context.Context, key, artist, title, album string, durati
 		e.LyricsScoringVersion = lyricsScoringVersion
 		e.ResolvedDurationSecs = durationSecs
 	}
+	// 跟首次解析同一条「同一段录音、评分高的兄弟赢」(判据见 crossalbum.go),不挂的话
+	// cross-album-reuse 对齐过的组会在这两条路径上各自重选、又长出分歧。
+	if adoptCrossAlbumSiblingLyrics(key, &e) {
+		lyricsChanged = true
+	}
 	enrichCache[key] = e
 	enrichDirty = true
 }
@@ -1943,6 +1964,21 @@ func lookupPeripheralQQMids(ctx context.Context, key string, fresh enrichEntry) 
 	}
 	albumMid, singerMid := qqSongCatalogMids(ctx, songMid)
 	return peripheralQQMids{songMid: songMid, albumMid: albumMid, singerMid: singerMid}
+}
+
+// rescoreKeepsCurrent:重评可判(当前歌词的来源这一轮回了话),但回来的不是当前这一份 —— 当前这份没参与这一轮
+// 的比较。它已经是这一版规则下打的分时,两个分数可以比:冠军不比它高就不换(不然一次换了个版本回来的应答就能
+// 让 820 分的词换成 500 分的)。打分版本落后的,旧分数没法比,照原规则让这一轮说了算。
+func rescoreKeepsCurrent(e enrichEntry, scored []scoredLyricCandidateResult, picked *scoredLyricCandidateResult) bool {
+	if picked.Lyrics == e.Lyrics || e.LyricsScoringVersion != lyricsScoringVersion {
+		return false
+	}
+	for i := range scored {
+		if scored[i].Lyrics == e.Lyrics {
+			return false // 当前这份参与了比较,输了就换
+		}
+	}
+	return picked.Score <= e.LyricsScore
 }
 
 // gainsWordTiming:正文不变时唯一要补写的情况 —— 缓存里没有逐字、这一轮的胜者带了逐字。
@@ -2120,9 +2156,9 @@ func commitEnrichEntrySince(key string, e enrichEntry, stamp uint64) {
 		return
 	}
 	// 落盘前对齐到评分更高的跨专辑兄弟(同一段录音收在多张专辑下时,让它们用同一份歌词)。
-	// 判据、保护位、以及「为什么只做单向」见 crossalbum.go。放在这里而不是解析路径里面:
-	// 所有写入歌词的路径(首次解析 / 升级重试 / 重评 / 取消收尾)都收口到这个函数,
-	// 少挂一处就会又长出一条分歧。
+	// 判据、保护位、以及「为什么只做单向」见 crossalbum.go。首次解析的几次提交和取消收尾都收口到这个函数;
+	// 升级重试、重评在各自的写回处调同一个函数(见 retryLyricsUpgrade / rescoreLyrics 末尾)。
+	// 写歌词的路径少挂一处就会又长出一条分歧。
 	adoptCrossAlbumSiblingLyrics(key, &e)
 	enrichCache[key] = e
 	enrichDirty = true

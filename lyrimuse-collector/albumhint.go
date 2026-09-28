@@ -633,16 +633,23 @@ func lyricResolvedArtists(artist, title, album string) []string {
 
 // resolvedEnrichEntry:这首歌在内存 enrich 缓存里的条目(先按原 key,再按归一后的 key)。只读、不发请求。
 func resolvedEnrichEntry(artist, title, album string) (enrichEntry, bool) {
+	_, e, ok := resolvedEnrichEntryKey(artist, title, album)
+	return e, ok
+}
+
+// resolvedEnrichEntryKey 同 resolvedEnrichEntry,另外返回命中的那个 key。
+func resolvedEnrichEntryKey(artist, title, album string) (string, enrichEntry, bool) {
 	key := enrichKey(artist, title, album)
 	enrichMu.Lock()
 	defer enrichMu.Unlock()
 	e, ok := enrichCache[key]
 	if !ok {
 		if alt, found := canonicalEnrichKey(key); found {
+			key = alt
 			e, ok = enrichCache[alt]
 		}
 	}
-	return e, ok
+	return key, e, ok
 }
 
 // albumHintDurationSecs:拿去 Apple 目录配专辑的时长。MV 的时长带着片头片尾、不是这首歌的长度,拿它配
@@ -652,9 +659,9 @@ func albumHintDurationSecs(s snapshot) float64 {
 	if !s.NotAudio {
 		return s.Duration
 	}
-	e, ok := resolvedEnrichEntry(s.Artist, s.Title, s.Album)
+	key, e, ok := resolvedEnrichEntryKey(s.Artist, s.Title, s.Album)
 	if !ok {
 		return 0
 	}
-	return decisionSongDurationSecs(e.LyricsDecisionApplied)
+	return appliedSongDurationSecs(key, e.LyricsDecisionApplied)
 }

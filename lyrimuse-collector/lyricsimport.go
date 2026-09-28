@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -199,6 +200,7 @@ func importLyricsFrom(dir string, persist bool) int {
 	useState := lyricsFileStateEnabled(dir)
 
 	type group struct {
+		base      string
 		files     map[string]string // suffix -> 完整路径
 		infos     map[string]fs.FileInfo
 		unchanged int
@@ -225,7 +227,7 @@ func importLyricsFrom(dir string, persist bool) int {
 		base := strings.TrimSuffix(name, suffix)
 		g, ok := groups[base]
 		if !ok {
-			g = &group{files: map[string]string{}, infos: map[string]fs.FileInfo{}}
+			g = &group{base: base, files: map[string]string{}, infos: map[string]fs.FileInfo{}}
 			groups[base] = g
 		}
 		g.files[suffix] = filepath.Join(dir, name)
@@ -239,10 +241,36 @@ func importLyricsFrom(dir string, persist bool) int {
 		}
 	}
 
+	// 同一个 key 可能落在两组文件里(大小写碰撞组缩回一个 key 后留下的 `~hash` 旧文件,导出会顺手清掉):
+	// 按组里最新的修改时间从旧到新处理,新的那组最后写、赢,不吃 map 的随机顺序。
+	groupsOldestFirst := make([]*group, 0, len(groups))
+	newest := make(map[*group]int64, len(groups))
+	for _, g := range groups {
+		groupsOldestFirst = append(groupsOldestFirst, g)
+		for suffix, path := range g.files {
+			info, ok := g.infos[suffix]
+			if !ok {
+				if st, err := os.Stat(path); err == nil {
+					info, ok = st, true
+				}
+			}
+			if ok {
+				newest[g] = max(newest[g], info.ModTime().UnixNano())
+			}
+		}
+	}
+	sort.Slice(groupsOldestFirst, func(i, j int) bool {
+		a, b := groupsOldestFirst[i], groupsOldestFirst[j]
+		if newest[a] != newest[b] {
+			return newest[a] < newest[b]
+		}
+		return a.base < b.base
+	})
+
 	enrichMu.Lock()
 	restoreAll, restoreKeys := lyricsImportRestoreAll, lyricsImportRestoreKeys
 	lyricsImportRestoreAll, lyricsImportRestoreKeys = false, nil
-	for _, g := range groups {
+	for _, g := range groupsOldestFirst {
 		groupUnchanged := useState && g.unchanged == len(g.files)
 		if groupUnchanged && !restoreAll && len(restoreKeys) == 0 {
 			continue
@@ -290,6 +318,7 @@ func importLyricsFrom(dir string, persist bool) int {
 
 		e := enrichCache[key] // 不存在时是 enrichEntry{} 零值,TS 自然留 0
 		changed := false
+		prevLyrics, prevTr, prevRoma := e.Lyrics, e.LyricsTr, e.LyricsRoma
 		if v, ok := variantBody(".lrc"); ok {
 			if e.Lyrics != v {
 				e.Lyrics, changed = v, true
@@ -314,6 +343,17 @@ func importLyricsFrom(dir string, persist bool) int {
 			if e.LyricsYRC != v {
 				e.LyricsYRC, changed = v, true
 				e.LyricsBG = ""
+			}
+		}
+		// 正文被文件换了、译文 / 罗马音那两个文件却没动:它们描述的是旧正文(同歌词管理保存那条规则,见 applySaveEdit)。
+		// 机翻清掉、留给机翻重翻;罗马音清掉,导出时同步删掉 .roma.lrc。用户自己的、歌词源自带的译文不动。
+		if prevLyrics != "" && e.Lyrics != prevLyrics {
+			if e.LyricsTr != "" && e.LyricsTr == prevTr && e.LyricsTrSource == lyricsTrSourceMachine {
+				e.LyricsTr, e.LyricsTrLang, e.LyricsTrSource = "", "", ""
+				e.TranslationTS, e.TranslationRetryCount = 0, 0
+			}
+			if e.LyricsRoma != "" && e.LyricsRoma == prevRoma {
+				e.LyricsRoma = ""
 			}
 		}
 		if e.LyricsSource != parsed.source {

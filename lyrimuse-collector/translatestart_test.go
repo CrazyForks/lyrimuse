@@ -169,7 +169,7 @@ func TestTranslationStartIsWired(t *testing.T) {
 	upcoming := read("upcoming.go")
 	for _, needle := range []string{
 		"go resolveEnrichAsync(withBackgroundOutbound(withTranslateAfterResolve(context.Background())), key,",
-		"} else if exists {\n\t\t\t// 解析过、但还没译文的",
+		"} else if exists && !claim {\n\t\t\t\t// 解析过、但还没译文的",
 	} {
 		if !strings.Contains(upcoming, needle) {
 			t.Errorf("upcoming.go 缺 %q", needle)

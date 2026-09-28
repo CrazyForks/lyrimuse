@@ -196,6 +196,11 @@ func setLyricsFullScanStatePath(path string) {
 		// 这是唯一能察觉版本变化的时机:下面那行一写,盘上的版本号就跟当前的一样了。
 		if state.ScoringVersion != lyricsScoringVersion {
 			state.Total, state.Done, state.Filled = 0, 0, 0
+			// 跑到一半换了算法 = 另起一场:起点不刷新的话,这一场已经跑过的条目尝试时刻都晚于旧起点,
+			// lyricsFullScanTier 会把它们当「这一场跑过了」整批跳过,可它们的打分版本恰恰落后了一版。
+			if state.Active {
+				state.StartedAt = time.Now().Unix()
+			}
 		}
 		state.ScoringVersion = lyricsScoringVersion
 		state.SecondsPerTrack = lyricsFullScanSecondsPerTrack()

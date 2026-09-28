@@ -41,6 +41,8 @@ func runBackfillLastfmCLI(args []string) {
 	// 只记路径、**不做压缩**:压缩会重写整份日志,而这条命令可能与常驻 collector 的
 	// 追加写并发。initListenLog 的压缩只该由启动路径做一次。
 	listenLogPath = filepath.Join(cfgDir, clientName+"-listens.jsonl")
+	// 常驻进程的 Last.fm 重发队列,只读:排在里面的这边不发(见 stillPendingForBackfill)。路径同 main.go。
+	lfmRetryPath = filepath.Join(cfgDir, clientName+"-lastfm-retry.json")
 
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {

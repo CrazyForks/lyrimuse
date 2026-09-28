@@ -119,33 +119,42 @@ func prefetchAlbumSiblings(currentArtist, currentTitle, album, bundleID string) 
 			// 表),跟播放器报的拼法天然不一致 —— 播放器给 `不散的筵席（I Miss You）`、
 			// 网易云给 `不散的筵席`,自己拼就等于每张专辑都预取出一批重复条目。
 			key := enrichKey(t.artist, t.title, album)
-			enrichMu.Lock()
-			_, exists := enrichCache[key]
-			if !exists {
-				// 补上:预取是重复条目最大的产生源 —— 曲目名来自**网易云曲库**,
-				// 跟播放器报的拼法在"中英文之间加不加空格""繁体还是简体"上系统性不一致。
-				// 上面那句"走 enrichKey 而不是自己拼"只挡住了译名括号这一档,挡不住这两档。
-				// 精确没命中时再宽松找一次,已经有等价条目就不预取了(实测那 14 组重复里,
-				// 丁世光/方大同/孙燕姿那批繁简对就是这么来的)。
-				if _, found := canonicalEnrichKey(key); found {
-					exists = true
+			// claim=false 只看,claim=true 看完顺手占位。先只看一遍再等上一首(跳过的曲目不用等),等完在同一把锁里
+			// 重查一遍才占位:等的这段(最长 prefetchResolveMaxWait)里用户可能已经切到这首,由正常路径接手解析 ——
+			// 先占位的话正常路径看到「在途」就不起,正在播的这首要空等预取排到它,还拿不到设备封面、停不下来。
+			eligible := func(claim bool) bool {
+				enrichMu.Lock()
+				_, exists := enrichCache[key]
+				if !exists {
+					// 补上:预取是重复条目最大的产生源 —— 曲目名来自**网易云曲库**,
+					// 跟播放器报的拼法在"中英文之间加不加空格""繁体还是简体"上系统性不一致。
+					// 上面那句"走 enrichKey 而不是自己拼"只挡住了译名括号这一档,挡不住这两档。
+					// 精确没命中时再宽松找一次,已经有等价条目就不预取了(实测那 14 组重复里,
+					// 丁世光/方大同/孙燕姿那批繁简对就是这么来的)。
+					if _, found := canonicalEnrichKey(key); found {
+						exists = true
+					}
 				}
+				// 在途的也要宽松查:专辑预取一次会排一整批曲目,跟"正在播的那首"几乎同时
+				// 发起,而那首的解析这时还没写进 enrichCache —— 只查精确键会漏。
+				_, inflight := looseInflightKey(key)
+				ok := !exists && !inflight
+				if ok && claim {
+					enrichInflight[key] = true
+				}
+				enrichMu.Unlock()
+				return ok
 			}
-			// 在途的也要宽松查:专辑预取一次会排一整批曲目,跟"正在播的那首"几乎同时
-			// 发起,而那首的解析这时还没写进 enrichCache —— 只查精确键会漏。
-			_, inflight := looseInflightKey(key)
-			eligible := !exists && !inflight
-			if eligible {
-				enrichInflight[key] = true
-			}
-			enrichMu.Unlock()
-			if !eligible {
+			if !eligible(false) {
 				continue // 已经解析过、或者已经有别的 goroutine 在解析,不重复起
 			}
 			if prevKey != "" {
 				// 只在真正要起下一个解析前才等——跳过的曲目(已解析/在途)不用等,
 				// 不然一张大半已经解析过的专辑,光是跳过那些曲目就会被拖慢一路。
 				waitPrefetchResolved(prevKey)
+			}
+			if !eligible(true) {
+				continue
 			}
 			queued++
 			prevKey = key

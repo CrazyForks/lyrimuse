@@ -40,7 +40,8 @@ const crossAlbumReuseToleranceSecs = 2.0
 //
 // 只返回**歌词评分比 self 高**的那条 —— 跟存量合并命令 `cross-album-reuse -apply` 用的是
 // 同一条「评分高的赢」规则,两处结论保持一致。同分不动:同分说明两份都站得住,这时换一份
-// 只会让用户觉得歌词莫名其妙变了。
+// 只会让用户觉得歌词莫名其妙变了。只跟**同一打分版本**的兄弟比:不同版本的分数不在一把尺子上
+// (早期版本普遍多算几百分),拿旧版本的虚高分换掉新解析的词,还会让这条顶着新版本号再也不被重排。
 func crossAlbumSiblingLyrics(cache map[string]enrichEntry, key string, self enrichEntry) string {
 	if self.DurationSecs <= 0 {
 		return ""
@@ -54,7 +55,7 @@ func crossAlbumSiblingLyrics(cache map[string]enrichEntry, key string, self enri
 		if k == key || strings.TrimSpace(e.Lyrics) == "" || e.DurationSecs <= 0 {
 			continue
 		}
-		if e.LyricsScore <= bestScore {
+		if e.LyricsScore <= bestScore || e.LyricsScoringVersion != self.LyricsScoringVersion {
 			continue
 		}
 		a, t, al := splitEnrichKey(k)

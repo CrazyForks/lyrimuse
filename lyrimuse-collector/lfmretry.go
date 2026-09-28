@@ -72,6 +72,19 @@ func loadLfmRetryLocked() []lfmRetryItem {
 	return items
 }
 
+// lfmRetryQueuedTimestamps 重发队列里此刻排着的收听时间戳。补提交发送前拿它排除(见 stillPendingForBackfill);
+// 补提交是另一个进程,读的是同一份文件。
+func lfmRetryQueuedTimestamps() []int64 {
+	lfmRetryMu.Lock()
+	items := loadLfmRetryLocked()
+	lfmRetryMu.Unlock()
+	out := make([]int64, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Timestamp)
+	}
+	return out
+}
+
 func saveLfmRetryLocked(items []lfmRetryItem) {
 	if lfmRetryPath == "" {
 		return
