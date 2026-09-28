@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // 主缓存里的**精简条目**:形状跟精简索引那一条一样(`leanForIndex`)—— 带 `body_crc`,主歌词 `lyrics`
@@ -39,6 +40,9 @@ type bodyHydrateStats struct {
 	missingKeys                    []string // 最多记 3 条,日志里点名
 	// missingSet:正文小文件缺失或损坏的全部 key。启动那次导入按它让 lyrics/ 里的文件补回正文。
 	missingSet map[string]bool
+	// unreadable:文件在、却读不出来(I/O 错误,不是不存在、也不是内容坏了)的正文小文件路径。常驻进程加载时
+	// 把它们挪到旁边(moveUnreadableBodiesAside),免得下一次保存拿只剩主歌词的内容把它们盖掉。
+	unreadable []string
 	// full:正文还整块写在主缓存里的条目(老格式)。非零时第一次改写成精简格式之前要先留一份备份。
 	full int
 }
@@ -51,6 +55,19 @@ func (s bodyHydrateStats) log() {
 	if s.missing > 0 {
 		slog.Warn("cache: lyrics body side files missing or damaged, keeping only the main lyrics until the lyrics folder refills them",
 			"entries", s.missing, "examples", s.missingKeys)
+	}
+}
+
+// moveUnreadableBodiesAside 把读不出来的正文小文件挪到旁边(`.unreadable-<时间>`),留给手工救回:那几条这一场只剩
+// 主歌词,导入会从 lyrics/ 补回四块正文,但纯文本和背景人声只在这些文件里。挪不走只记一笔。
+func moveUnreadableBodiesAside(paths []string) {
+	suffix := ".unreadable-" + time.Now().Format("20060102-150405")
+	for _, p := range paths {
+		if err := os.Rename(p, p+suffix); err != nil {
+			slog.Error("lyrics bodies: could not move an unreadable side file aside", "path", p, "err", err)
+			continue
+		}
+		slog.Warn("lyrics bodies: side file unreadable, moved aside", "path", p+suffix)
 	}
 }
 
@@ -71,6 +88,7 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 		return st
 	}
 	bodies := make([]*enrichBody, len(keys))
+	readErrs := make([]error, len(keys))
 	workers := min(enrichBodyLoadWorkers, runtime.NumCPU(), len(keys))
 	next := make(chan int)
 	var wg sync.WaitGroup
@@ -79,7 +97,7 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				bodies[i] = readEnrichBody(filepath.Join(dir, decisionSidecarName(keys[i])))
+				bodies[i], readErrs[i] = readEnrichBodyChecked(filepath.Join(dir, decisionSidecarName(keys[i])))
 			}
 		}()
 	}
@@ -95,6 +113,9 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 		e.BodyCRC, e.BodyFields = 0, 0
 		switch b := bodies[i]; {
 		case b == nil:
+			if readErrs[i] != nil {
+				st.unreadable = append(st.unreadable, filepath.Join(dir, decisionSidecarName(k)))
+			}
 			st.missing++
 			if st.missingSet == nil {
 				st.missingSet = map[string]bool{}
@@ -119,10 +140,24 @@ func hydrateEnrichBodies(m map[string]enrichEntry, dir string) bodyHydrateStats 
 
 // readEnrichBody 读一份正文小文件,自洽才返回(读不到、解不开、校验值对不上内容都是 nil)。
 func readEnrichBody(path string) *enrichBody {
+	b, _ := readEnrichBodyChecked(path)
+	return b
+}
+
+// readEnrichBodyChecked 同 readEnrichBody,另外交回「文件在、却读不出来」的 I/O 错误(不存在、内容坏了都不算)。
+func readEnrichBodyChecked(path string) (*enrichBody, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
+	return parseEnrichBody(data), nil
+}
+
+// parseEnrichBody 解一份正文小文件的内容,自洽才返回。
+func parseEnrichBody(data []byte) *enrichBody {
 	var b enrichBody
 	if json.Unmarshal(data, &b) != nil || b.CRC == 0 {
 		return nil

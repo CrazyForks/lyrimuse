@@ -113,7 +113,12 @@ func loadAppleAlbumHintCache(path string) {
 	}
 }
 
+// appleAlbumHintSaveMu 让两次保存串行:各自锁内取快照、锁外写的话,旧快照可能晚落盘、盖掉新的(脏标记已经清了)。
+var appleAlbumHintSaveMu sync.Mutex
+
 func saveAppleAlbumHintCache() {
+	appleAlbumHintSaveMu.Lock()
+	defer appleAlbumHintSaveMu.Unlock()
 	appleAlbumHintMu.Lock()
 	if !appleAlbumHintDirty || appleAlbumHintPath == "" {
 		appleAlbumHintMu.Unlock()

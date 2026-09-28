@@ -74,6 +74,11 @@ func planDedupe(cache map[string]enrichEntry) dedupePlan {
 	for _, loose := range looseKeys {
 		keys := byLoose[loose]
 		sort.Strings(keys) // 同上,且让胜者选择在并列时也是确定的
+		// 宽松 key 相同不等于同一段录音:时长差超过 12% 的(另一个版本、只是写法碰巧折成一样)不并,
+		// 跟启动时的 key 归一迁移同一道兜底(splitByDuration)。
+		if keys, _ = splitByDuration(cache, "", keys); len(keys) < 2 {
+			continue
+		}
 		// 质量胜者:歌词取谁的。跟迁移合并同一套规则,结论一致。
 		source := keys[0]
 		for _, k := range keys[1:] {

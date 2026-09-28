@@ -194,9 +194,14 @@ func applyEnrichEditLocked(req enrichEditRequest) enrichEditOutcome {
 		if req.Key == "" {
 			return enrichEditOutcome{err: fmt.Errorf("save_edit: empty key")}
 		}
-		e := enrichCache[req.Key]
+		e, existed := enrichCache[req.Key]
 		if err := applySaveEdit(&e, req); err != nil {
 			return enrichEditOutcome{err: err}
+		}
+		// 缓存里没有这首(App 退回按归一化 key 发的保存):新建的条目记上解析时刻。TS 为 0 在 App 那边是
+		// 「还没解析完」,collector 的重搜节流也从 TS 起算。
+		if !existed {
+			e.TS = time.Now().Unix()
 		}
 		enrichCache[req.Key] = e
 		cancelInFlightEnrichLocked(req.Key)
@@ -345,7 +350,8 @@ func cancelInFlightEnrichLocked(key string) {
 // 形态的数据,下次启动让存量迁移照常全量跑。
 func adoptRestoreEdit() enrichEditOutcome {
 	adopted := enrichRestorePath != "" && adoptEnrichRestore(enrichRestorePath)
-	imported := importLyricsFromFiles()
+	// 常驻进程运行中:不清歌词临时文件,可能是另一轮导出正写到一半的(见 importLyricsFromOpts)。
+	imported := importLyricsFromOpts(lyricsDir(), true, false)
 	if adopted || imported > 0 {
 		invalidateMigrationState("restored from a lyrics snapshot")
 	}
@@ -403,7 +409,12 @@ func trashAllLyricsFiles() {
 		if ent.IsDir() || lyricsFileSuffixOf(ent.Name()) == "" {
 			continue
 		}
-		trashFile(filepath.Join(dir, ent.Name()))
+		// 只挪头部认得出的(这边导出的):目录可以是用户自己指定的,同后缀的别的文件不归「清空」管。
+		path := filepath.Join(dir, ent.Name())
+		if data, err := os.ReadFile(path); err != nil || !parseLyricsBytes(data).ok {
+			continue
+		}
+		trashFile(path)
 	}
 }
 

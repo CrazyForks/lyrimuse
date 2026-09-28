@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"unicode/utf8"
@@ -340,8 +341,12 @@ func writeLyricsFileAtomic(path string, data []byte) error {
 // `.tmp.` 且不以四个歌词后缀收尾——后一条是为了绝不把用户自己命名成 "xx.tmp.lrc" 的正常
 // 歌词文件当垃圾扫掉。
 func isLyricsTempFile(name string) bool {
-	return strings.Contains(name, ".tmp.") && lyricsFileSuffixOf(name) == ""
+	return lyricsTempFilePattern.MatchString(name)
 }
+
+// lyricsTempFilePattern writeLyricsFileAtomic 的临时文件名(`X.lrc.tmp.123456`:歌词后缀 + `.tmp.` + CreateTemp 填的
+// 一段随机串)。只认这一种:歌词目录可以是用户自己指定的,「名字里带 .tmp.」的别的文件不归这边删。
+var lyricsTempFilePattern = regexp.MustCompile(`^.+\.(lrc|yrc)\.tmp\.[A-Za-z0-9]+$`)
 
 // sanitizeLyricsFilename turns a "艺人|歌名|专辑" cache key into a safe,
 // readable filename: "|" becomes " - ", then filesystem-unsafe characters are

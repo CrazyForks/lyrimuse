@@ -997,16 +997,13 @@ func siblingCoverLocked(self, artist, album string, verifiedOnly bool) (url, sou
 	// 专辑名按繁简折叠后比:首次解析传进来的是转成简体的检索用专辑名,缓存 key 里是播放器的原写法。
 	// 逐字比的话繁体专辑整张借不到,补全那一路又按原写法判「有邻居可借」,白补满次数。
 	simpAlbum := toSimplified(album)
-	keys := make([]string, 0, len(enrichCache))
-	for k := range enrichCache {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if key == self {
+	// 取够格的里 key 最小的那条,结果跟按 key 排序后取第一条一样,不用每次把几千个 key 分配出来再排一遍
+	// (缓存命中路径上每次 trackEnrichment 都可能问到这里,而且持着 enrichMu)。
+	bestKey := ""
+	for key, e := range enrichCache {
+		if key == self || (bestKey != "" && key >= bestKey) {
 			continue
 		}
-		e := enrichCache[key]
 		if e.CoverURL == "" {
 			continue
 		}
@@ -1021,9 +1018,9 @@ func siblingCoverLocked(self, artist, album string, verifiedOnly bool) (url, sou
 		if (al != album && toSimplified(al) != simpAlbum) || !artistMatches(a, artist) {
 			continue
 		}
-		return e.CoverURL, e.CoverSource
+		bestKey, url, source = key, e.CoverURL, e.CoverSource
 	}
-	return "", ""
+	return url, source
 }
 
 // coverSourceLendsAlbumIdentity 回答"这个来源的封面,归属能不能被同专辑其它曲目借走"。
@@ -1436,13 +1433,19 @@ func needsLyricsRetry(e enrichEntry, wrongDuration, pinned, autoUpgrade bool) bo
 	if nativeMissedOut || wrongDuration {
 		return true
 	}
+	// 「缺席」= 这个源这一轮压根没露面(超时 / 失败),看应答名单(给出过候选就算,哪怕是负分候选)。
+	// 拿「给出了能用候选」的名单判,开着十几个源时几乎每条都算有源缺席。老条目没记应答名单时退回它。
+	answered := e.LyricsSourcesResponded
+	if len(answered) == 0 {
+		answered = e.LyricsSourcesSeen
+	}
 	missing := false
 	for _, source := range lyricSourceNames {
 		if !lyricSourceEnabled(source) {
 			continue
 		}
 		found := false
-		for _, s := range e.LyricsSourcesSeen {
+		for _, s := range answered {
 			if s == source {
 				found = true
 				break
@@ -1622,7 +1625,9 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	//
 	// 只在**没选出歌词**时看:选出了歌词还标纯音乐是自相矛盾(合并轮的
 	// hasRealFromMarkerSource 已经挡住同源那种,这里再挡跨源那种)。
-	if picked == nil && !e.Instrumental {
+	// 条目本来就有歌词(升级重试)时也不看:时长对不上的重试里候选全被判掉、只剩一条纯音乐标记,
+	// 会给一首明明有逐行歌词的歌打上「纯音乐」,之后扫库、补空、外围补收都跳过它。
+	if picked == nil && !e.Instrumental && e.Lyrics == "" {
 		if ok, src := instrumentalFromScored(scored, artist, title, album, durationSecs); ok {
 			e.Instrumental = true
 			log.Printf("lyrics: %s marked instrumental by %s (no lyrics from any source)", key, src)
@@ -1642,7 +1647,7 @@ func retryLyricsUpgrade(ctx context.Context, key, artist, title, album string, d
 	// 同时出现在同一份 scored 里,见 scoreAndSort 里那段互斥的候选构造逻辑),即便日后
 	// 某个源两者都给,这里的顺序(先纯音乐、后纯文本)也天然让纯音乐结论优先,不会两条
 	// 都命中打架。
-	if picked == nil && !e.Instrumental && e.PlainLyrics == "" {
+	if picked == nil && !e.Instrumental && e.PlainLyrics == "" && e.Lyrics == "" {
 		if lyrics, source := plainTextFallbackFromScored(scored); lyrics != "" {
 			e.PlainLyrics, e.PlainLyricsSource = lyrics, source
 			log.Printf("lyrics: %s auto-adopted plain-text fallback from %s (no timed version from any source)", key, source)
@@ -4307,6 +4312,10 @@ func lyricSourceSkipFor(source string, enabled func(string) bool, plan lyricSour
 }
 
 func fetchScoredLyricCandidatesStreaming(ctx context.Context, artist, title, album string, durationSecs float64, onUpdate lyricSearchUpdateFunc) (neteaseInfo, []scoredLyricCandidateResult) {
+	// 截止时间一到就返回,还没回来的源请求跟着取消:不然它们各自跑到自己的 HTTP 超时(网易云最坏接近 30 秒),
+	// 全量扫库每首只隔几秒,残留请求会跟下一首的叠在一起抢出站配额。取消不计进源的熔断(sourcebreaker.go)。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// 缓冲开到"每个 goroutine 都能不阻塞地放下自己那一份"= 源数(每个源一个 goroutine)。同样不写
 	// 字面量:下面那个 collect 循环就是栽在字面量跟源数脱钩上的。
 	resultsCh := make(chan lyricSourceResult, len(lyricSourceNames))
@@ -4680,6 +4689,7 @@ func loadEnrichCache(path string) {
 	bodies := hydrateEnrichBodies(m, enrichBodiesDirFor(path))
 	// 正文小文件缺了的那几条只剩主歌词:启动那次导入要让 lyrics/ 里的文件把它们补回来,见 lyricsImportRestoreKeys。
 	lyricsImportRestoreKeys = bodies.missingSet
+	moveUnreadableBodiesAside(bodies.unreadable)
 	enrichDiskFullFormat = bodies.full > 0
 	shared := shareIdenticalDecisions(m) // 内存里两槽相同的判决记录共用一个对象,见 enrichdedupe.go
 	enrichMu.Lock()

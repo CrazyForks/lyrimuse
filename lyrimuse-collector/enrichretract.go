@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"hash/crc32"
 	"log"
@@ -88,7 +87,6 @@ func lyricsFilesOwnedBy(key string) []string {
 		return nil
 	}
 	artist, title, album := splitEnrichKey(key)
-	want := []byte(fmt.Sprintf("[ar:%s]\n[ti:%s]\n[al:%s]\n", artist, title, album))
 	base := sanitizeLyricsFilename(key)
 	hashed := fmt.Sprintf("%s~%06x", base, crc32.ChecksumIEEE([]byte(key))&0xFFFFFF)
 	bases := []string{base, hashed}
@@ -101,7 +99,12 @@ func lyricsFilesOwnedBy(key string) []string {
 		for _, suffix := range lyricsFileSuffixes {
 			path := filepath.Join(dir, b+suffix)
 			data, err := os.ReadFile(path)
-			if err != nil || !bytes.HasPrefix(data, want) {
+			if err != nil {
+				continue
+			}
+			// 按头部认身份,口径同导入(parseLyricsBytes 容忍 CRLF 和 BOM):用户手改成 CRLF 的文件逐字节比对不上,
+			// 删除时漏删,状态记录一失效就被导入复活。
+			if p := parseLyricsBytes(data); !p.ok || p.artist != artist || p.title != title || p.album != album {
 				continue
 			}
 			out = append(out, path)

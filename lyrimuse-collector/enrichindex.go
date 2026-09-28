@@ -322,9 +322,14 @@ func writeEnrichIndex(snapshot map[string]enrichEntry, crcs map[string]uint32) {
 	if path == "" {
 		return
 	}
+	// 只有正文小文件这次确实写成了的条目才换成精简形态、带上校验值(同 leanEnrichSnapshot):没写成的也记上新
+	// 校验值的话,下一个进程从这份索引种回「已经写过」,写出指向旧正文文件的精简条目,加载时静默回退成旧内容。
 	lean := make(map[string]enrichEntry, len(snapshot))
 	for k, e := range snapshot {
-		lean[k] = leanForIndex(e, crcs[k])
+		if crc := crcs[k]; crc != 0 && enrichBodyCRCs != nil && enrichBodyCRCs[k] == crc {
+			e = leanForIndex(e, crc)
+		}
+		lean[k] = e
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp.*")
 	if err != nil {

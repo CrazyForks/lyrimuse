@@ -328,7 +328,9 @@ func lyricsFullScanCandidates() []string {
 	polluted := lyricsPollutedKeys(enrichCache)
 	var tiers [3][]string
 	for key, e := range enrichCache {
-		tier := lyricsFullScanTier(e, pins[key], enrichInflight[key], passStart)
+		// 挑候选这一刻在途的照样挑:一场要跑一两天,这里排除的话不重启就再也轮不到它。轮到时 lyricsFullScanOne
+		// 会再核一遍(那时还在途就算跳过)。
+		tier := lyricsFullScanTier(e, pins[key], false, passStart)
 		if tier < 0 {
 			continue
 		}
@@ -356,7 +358,7 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 	before, ok := enrichCache[key]
 	if !ok || before.ManualLyrics || before.Instrumental || enrichInflight[key] {
 		enrichMu.Unlock()
-		return lyricsSweepOutcome{}
+		return lyricsSweepOutcome{skipped: true}
 	}
 	enrichMu.Unlock()
 	// 没词的整条交给补空那支:写回规则(升级/纯音乐标记/纯文本兜底/退避账)全在那边,
@@ -365,7 +367,7 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 		return lyricsFillSweepOne(ctx, key)
 	}
 	if lyricsPinned(key) {
-		return lyricsSweepOutcome{}
+		return lyricsSweepOutcome{skipped: true}
 	}
 	duration := before.ResolvedDurationSecs
 	if duration <= 0 {
@@ -375,7 +377,7 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 	// 重新确认没被别人抢走 —— 上面那段解锁期间可能有播放侧的后台任务插进来。
 	if enrichInflight[key] {
 		enrichMu.Unlock()
-		return lyricsSweepOutcome{}
+		return lyricsSweepOutcome{skipped: true}
 	}
 	enrichInflight[key] = true
 	enrichMu.Unlock()
@@ -392,5 +394,32 @@ func lyricsFullScanOne(ctx context.Context, key string) lyricsSweepOutcome {
 		filled: after.Lyrics != before.Lyrics || after.LyricsYRC != before.LyricsYRC ||
 			after.LyricsTr != before.LyricsTr,
 		offline: !round.reachedAny(),
+	}
+}
+
+// releaseLyricsFullScanAttempt 断网停下时,停在的那一首这一场并没有真搜成(一个源都没连上),但升级重试 / 重评
+// 照样推进了它的尝试时刻(免得断网期间播放侧每拍重搜)。续跑按「尝试时刻不早于本场起点 = 跑过了」跳过它,
+// 这一首就被白白漏掉。把晚于起点的那几个时刻拨回起点之前,续跑时它照常进候选。
+func releaseLyricsFullScanAttempt(key string) {
+	passStart := readLyricsFullScanState().StartedAt
+	if passStart <= 0 {
+		return
+	}
+	enrichMu.Lock()
+	defer enrichMu.Unlock()
+	e, ok := enrichCache[key]
+	if !ok {
+		return
+	}
+	changed := false
+	for _, ts := range []*int64{&e.LyricsFillTS, &e.LyricsRetryTS, &e.LyricsRescoreTS} {
+		if *ts >= passStart {
+			*ts = passStart - 1
+			changed = true
+		}
+	}
+	if changed {
+		enrichCache[key] = e
+		enrichDirty = true
 	}
 }

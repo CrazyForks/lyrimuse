@@ -66,8 +66,18 @@ func runRecheckCoverCLI(args []string) {
 		fmt.Fprintln(os.Stderr, "请先停掉常驻实例再跑:launchctl bootout gui/$UID/com.lyrimuse.collector")
 		os.Exit(1)
 	}
-	loadEnrichCache(filepath.Join(cfgDir, clientName+"-enrich-cache.json"))
+	loadEnrichCacheForCLI(filepath.Join(cfgDir, clientName+"-enrich-cache.json"), *apply)
 	os.Exit(runRecheckCover(keys, *apply))
+}
+
+// loadEnrichCacheForCLI:带 -apply(已经拿到独占锁)才走 loadEnrichCache;预演时常驻进程可能正开着,走只读加载 ——
+// loadEnrichCache 会设落盘路径,解析不动时还会把用户的缓存挪成坏文件(见 loadEnrichCacheReadOnly 头注)。
+func loadEnrichCacheForCLI(path string, apply bool) {
+	if apply {
+		loadEnrichCache(path)
+		return
+	}
+	loadEnrichCacheReadOnly(path)
 }
 
 // recheckCoverPlan 是一条记录重新解析封面的结果,dry-run 与 -apply 共用。
@@ -222,7 +232,7 @@ func runRecheckInstrumentalCLI(args []string) {
 		fmt.Fprintln(os.Stderr, "请先停掉常驻实例再跑:launchctl bootout gui/$UID/com.lyrimuse.collector")
 		os.Exit(1)
 	}
-	loadEnrichCache(filepath.Join(cfgDir, clientName+"-enrich-cache.json"))
+	loadEnrichCacheForCLI(filepath.Join(cfgDir, clientName+"-enrich-cache.json"), *apply)
 	os.Exit(runRecheckInstrumental(keys, *apply))
 }
 

@@ -74,7 +74,8 @@ func runRegenerateJyutping(apply bool) int {
 
 	enrichMu.Lock()
 	for k, e := range enrichCache {
-		if e.SongLanguage != songLanguageCantonese || e.Lyrics == "" || e.LyricsRoma == "" {
+		// 手改过的不动(同 dropHokkienRoma / dropMandarinRomaForCantonese):那份粤拼可能就是用户自己改的。
+		if e.SongLanguage != songLanguageCantonese || e.Lyrics == "" || e.LyricsRoma == "" || e.ManualLyrics {
 			continue
 		}
 		scanned++

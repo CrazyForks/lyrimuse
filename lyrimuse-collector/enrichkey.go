@@ -104,9 +104,17 @@ func normEnrichTitle(title string) string {
 func enrichExportedFileNames(key string) []string {
 	plain := sanitizeLyricsFilename(key)
 	hashed := fmt.Sprintf("%s~%06x", plain, crc32.ChecksumIEEE([]byte(key))&0xFFFFFF)
-	names := make([]string, 0, len(lyricsFileSuffixes)*2)
-	for _, suffix := range lyricsFileSuffixes {
-		names = append(names, plain+suffix, hashed+suffix)
+	bases := []string{plain, hashed}
+	// 加长度上限之前导出的存量文件用的是截断前那个更长的名字(同 lyricsFilesOwnedBy):漏了它,留下的文件
+	// 下次启动会被导入复活成重复条目。
+	if untruncated := sanitizeLyricsFilenameUntruncated(key); untruncated != plain {
+		bases = append(bases, untruncated)
+	}
+	names := make([]string, 0, len(lyricsFileSuffixes)*len(bases))
+	for _, b := range bases {
+		for _, suffix := range lyricsFileSuffixes {
+			names = append(names, b+suffix)
+		}
 	}
 	return names
 }
@@ -445,7 +453,10 @@ func applyEnrichKeyMigration() bool {
 	if dir := lyricsDir(); dir != "" {
 		for k := range stale {
 			for _, name := range enrichExportedFileNames(k) {
-				if err := os.Remove(filepath.Join(dir, name)); err == nil {
+				// 挪进废纸篓而不是直接删:迁移排在导入之前,用户在 lyrics/ 里对这首的手改这时还没导进来。
+				path := filepath.Join(dir, name)
+				if _, err := os.Stat(path); err == nil {
+					trashFile(path)
 					removedFiles++
 				}
 			}

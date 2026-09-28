@@ -113,6 +113,10 @@ func migrateManualPickMarks() {
 		}
 		enrichCache[k] = e
 	}
+	// 置脏,理由同 migrateBorrowedCoverAlbums。
+	if cleared > 0 {
+		enrichDirty = true
+	}
 	enrichMu.Unlock()
 	if cleared > 0 {
 		log.Printf("manual pick migration: converted %d/%d legacy lyrics_source_choice entries into manual pick marks",

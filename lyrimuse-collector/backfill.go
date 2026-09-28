@@ -143,7 +143,13 @@ func pendingBackfillListens(now time.Time) (pending []listenLogLine, tooOld int)
 // 顺序上它必须在**收到服务端确认之后**调用:提前写等于把"发出去了"当成"接受了",
 // 而超时那条路径恰恰是发出去了但不知道结果。
 func markBackfilled(uts int64) {
-	appendListenLogLine(listenLogLine{
+	_ = markBackfilledChecked(uts) // 失败已经记过日志;重发队列那边照旧,下一轮看回执时会再交一次
+}
+
+// markBackfilledChecked 同 markBackfilled,交回写盘错误。补提交用:服务端已经收下、回执却写不进去时必须停手 ——
+// 接着发的每一批都会在下次补提交时再交一遍,重复的删不掉。
+func markBackfilledChecked(uts int64) error {
+	return appendListenLogLine(listenLogLine{
 		T: "s", V: listenLogSchemaVersion, UTS: uts, AT: time.Now().Unix(),
 	})
 }
@@ -455,7 +461,11 @@ func runBackfill(ctx context.Context, s *lastfmScrobbler, dryRun bool) backfillO
 		for _, it := range batch {
 			switch {
 			case res.accepted[it.UTS]:
-				markBackfilled(it.UTS)
+				if err := markBackfilledChecked(it.UTS); err != nil {
+					out.AbortedReason = "listen log write failed: " + err.Error()
+					log.Printf("backfill: aborted, accepted by Last.fm but the receipt could not be written: %v", err)
+					return out
+				}
 				out.Accepted++
 			case res.ignored[it.UTS] != "":
 				// 服务端**明确**拒了这条(时间戳超窗、艺人被判无效等)。重试同样会被拒,

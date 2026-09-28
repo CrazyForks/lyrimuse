@@ -188,6 +188,12 @@ func importLyricsFromDir(dir string) int { return importLyricsFrom(dir, true) }
 
 // importLyricsFrom:persist=false 时不清临时文件、不保存缓存,其余与 importLyricsFromDir 相同。
 func importLyricsFrom(dir string, persist bool) int {
+	return importLyricsFromOpts(dir, persist, persist)
+}
+
+// importLyricsFromOpts:cleanTemps 决定清不清歌词临时文件 —— 只在还没有别的写入方的时候清(启动、刚切过去的新目录)。
+// 常驻进程运行中的导入(从快照恢复)要传 false:另一轮导出可能正写到一半。
+func importLyricsFromOpts(dir string, persist, cleanTemps bool) int {
 	if dir == "" {
 		return 0
 	}
@@ -215,7 +221,7 @@ func importLyricsFrom(dir string, persist bool) int {
 		// 启动时清一次——导出过程中不能扫(会误删另一轮正在写的临时文件)。不在四个后缀里,
 		// 下面的分组本来也认不出它,清扫只是别让它永远躺在文件夹里。
 		if isLyricsTempFile(name) {
-			if persist {
+			if cleanTemps {
 				_ = os.Remove(filepath.Join(dir, name))
 			}
 			continue

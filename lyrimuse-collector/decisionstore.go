@@ -318,10 +318,7 @@ func renameDecisionSidecar(oldKey, newKey string) {
 	if rec == nil {
 		return
 	}
-	if _, err := os.Stat(to); err == nil {
-		os.Remove(from)
-		return
-	}
+	// 目标已经在了(那是被并掉的那条留下的):留胜者的明细,覆盖它。
 	rec.Key = newKey
 	if err := writeDecisionSidecarFile(to, *rec); err != nil {
 		slog.Error("decision sidecar: rename", "from", oldKey, "to", newKey, "err", err)

@@ -61,7 +61,12 @@ const (
 	translateQuotaSentinel = "ALL AVAILABLE FREE TRANSLATIONS"
 )
 
-var lrcLinePattern = regexp.MustCompile(`^\s*(\[\d+:\d+(?:[.:]\d+)?\])\s*(.*)$`)
+// 行首可以有好几个时间标签(`[00:12.00][00:45.00]同一句` 这种重复段的写法):全部算进 tag,正文里不留时间标签 ——
+// 不然后面几个标签会被当成正文送去翻译(翻译器可能把它改坏),说话人标签也认不出来。
+var lrcLinePattern = regexp.MustCompile(`^\s*((?:\[\d+:\d+(?:[.:]\d+)?\]\s*)+)(.*)$`)
+
+// lrcTimeTagPattern 一个时间标签,把 lrcLinePattern 抓到的那一串标签去掉中间的空白、原样拼回。
+var lrcTimeTagPattern = regexp.MustCompile(`\[\d+:\d+(?:[.:]\d+)?\]`)
 
 type lrcLine struct {
 	tag  string // 含方括号的时间标签,如 "[00:20.94]"
@@ -78,7 +83,7 @@ func parseLRCLines(lrc string) []lrcLine {
 			continue
 		}
 		if text := strings.TrimSpace(m[2]); text != "" {
-			out = append(out, lrcLine{tag: m[1], text: text})
+			out = append(out, lrcLine{tag: strings.Join(lrcTimeTagPattern.FindAllString(m[1], -1), ""), text: text})
 		}
 	}
 	return out
@@ -637,6 +642,20 @@ func randomTranslateEmail() string {
 	return "lyrimuse-" + hex.EncodeToString(b[:]) + "@example.com"
 }
 
+// withoutRequestURL 把 *url.Error 里的完整请求地址去掉、只留主机:MyMemory 是 GET,地址里带着整段歌词原文(q=)
+// 和随机邮箱(de=),原样进日志既泄露内容又把日志撑大。
+func withoutRequestURL(err error) error {
+	var uerr *neturl.Error
+	if !errors.As(err, &uerr) {
+		return err
+	}
+	host := uerr.URL
+	if u, perr := neturl.Parse(uerr.URL); perr == nil {
+		host = u.Host
+	}
+	return fmt.Errorf("%s %s: %w", uerr.Op, host, uerr.Err)
+}
+
 // translateChunk 发一次 MyMemory 请求。第二个返回值为真表示当天配额用尽(调用方应该整体
 // 停下,而不是继续把剩下的块也撞上去)。
 func translateChunk(ctx context.Context, hc *http.Client, baseURL string, lines []string, target string) ([]string, bool, error) {
@@ -652,7 +671,7 @@ func translateChunk(ctx context.Context, hc *http.Client, baseURL string, lines 
 	}
 	resp, err := doHTTPTracked(hc, req)
 	if err != nil {
-		return nil, false, fmt.Errorf("translate: %w", err)
+		return nil, false, fmt.Errorf("translate: %w", withoutRequestURL(err))
 	}
 	defer resp.Body.Close()
 	var body struct {

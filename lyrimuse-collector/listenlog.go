@@ -141,22 +141,23 @@ func appendListen(artist, title, album string, uts int64, durationSecs float64) 
 	})
 }
 
-func appendListenLogLine(line listenLogLine) {
+// appendListenLogLine 追加一行;写不进去时记日志并交回错误(补提交靠它决定要不要停手,见 markBackfilledChecked)。
+func appendListenLogLine(line listenLogLine) error {
 	listenLogMu.Lock()
 	defer listenLogMu.Unlock()
 	if listenLogPath == "" {
-		return
+		return nil
 	}
 	data, err := json.Marshal(line)
 	if err != nil {
 		log.Printf("listen log: marshal failed: %v", err)
-		return
+		return err
 	}
 	// collector 全仓库只有 lyricsexport.go 建过目录,而 loadConfig 容忍 config.json
 	// 不存在 —— 也就是说这个目录不一定已经在了,自己建一次。
 	if err := os.MkdirAll(filepath.Dir(listenLogPath), 0o755); err != nil {
 		slog.Error("listen log: mkdir failed", "err", err)
-		return
+		return err
 	}
 	unlock := lockListenLogFile(listenLogPath)
 	defer unlock()
@@ -164,12 +165,14 @@ func appendListenLogLine(line listenLogLine) {
 	f, err := os.OpenFile(listenLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.Error("listen log: open failed", "err", err)
-		return
+		return err
 	}
 	defer f.Close()
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		slog.Error("listen log: write failed", "err", err)
+		return err
 	}
+	return nil
 }
 
 // readListenLog 读出全部行。调用方自己折叠(见 listenLogLine 的注释)。

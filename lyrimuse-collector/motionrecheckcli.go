@@ -49,7 +49,7 @@ func runRecheckMotionCoverCLI(args []string) {
 		os.Exit(1)
 	}
 
-	loadEnrichCache(filepath.Join(cfgDir, clientName+"-enrich-cache.json"))
+	loadEnrichCacheForCLI(filepath.Join(cfgDir, clientName+"-enrich-cache.json"), *apply)
 	// 这份也必须加载。不加载的话 motionCoverFor 对每一张专辑都当"没查过",逐张
 	// 重抓 330 KB 的专辑页(还因为 motionCoverPath 为空而存不下来);而
 	// motionCoverAlbumHasKnownVideo 更是会对全表回 false,下面第②条命中条件直接哑掉。

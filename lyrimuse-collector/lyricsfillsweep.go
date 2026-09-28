@@ -79,6 +79,8 @@ const (
 	lyricsFillSweepOfflineLimit = 5
 	// 全量扫库因为断网停下之后,多久再试着接着跑(「待续」标记留着,见 runLyricsFillSweep 出口)。
 	lyricsFullScanOfflineResumeDelay = 10 * time.Minute
+	// lyricsFullScanHandoffDelay:补空收尾时有一场全量等着,隔多久接着跑。
+	lyricsFullScanHandoffDelay = time.Minute
 )
 
 var (
@@ -375,7 +377,12 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 	lyricsFillSweepMu.Lock()
 	if lyricsFillSweepRunning {
 		lyricsFillSweepMu.Unlock()
-		slog.Info("lyrics fill sweep: already running, ignoring new request", "manual", req.manual)
+		// 全量那一发(用户点的,或进程重启后的续跑)撞上了正在跑的补空:记下「待续」,这一轮收尾时接着跑
+		// (见下面 defer),别静默丢掉、等一整天。
+		if req.full {
+			setLyricsFullScanActive(true)
+		}
+		slog.Info("lyrics fill sweep: already running, ignoring new request", "manual", req.manual, "full", req.full)
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -388,6 +395,13 @@ func runLyricsFillSweep(parent context.Context, req lyricsFillRequest) {
 		lyricsFillSweepRunning = false
 		lyricsFillSweepCancel = nil
 		lyricsFillSweepMu.Unlock()
+		// 这一轮是补空,跑的时候有一场全量等着(续跑或用户点的那一发被上面拒掉了):收尾就接着跑。
+		if !req.full && lyricsFullScanActive() {
+			select {
+			case lyricsFillSweepReschedule <- lyricsFullScanHandoffDelay:
+			default:
+			}
+		}
 	}()
 
 	// 挑候选**之前**就把"待续"标记置上:候选列表几千条、一轮要跑一两天,进程在这中间
@@ -472,6 +486,9 @@ func runLyricsFillSweepKeys(ctx context.Context, keys []string, full bool, gap t
 			status.Offline = true
 			if offlineStreak >= lyricsFillSweepOfflineLimit {
 				slog.Warn("lyrics fill sweep: no lyric source reachable, stopping", "attempts", offlineStreak, "key", keys[i])
+				if full {
+					releaseLyricsFullScanAttempt(keys[i])
+				}
 				break
 			}
 			writeLyricsFillStatus(status)
