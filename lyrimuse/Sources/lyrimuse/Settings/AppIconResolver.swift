@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// 按 bundle identifier 查真实 App 图标——NSWorkspace 找到 .app 再取图标,最好认,还不用
 /// 自带任何商标素材(改图标时定的取图标原则,见调用点)。
@@ -20,9 +21,52 @@ enum AppIconResolver {
         guard !bundleID.isEmpty else { return nil }
         if let cached = cache[bundleID] { return cached }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        let icon = fullBleedLegacyIcon(appURL: url).map(fittedToIconGrid)
+            ?? NSWorkspace.shared.icon(forFile: url.path)
         cache[bundleID] = icon
         return icon
+    }
+
+    /// 只带老式 icns(没有 `CFBundleIconName`)、而且图铺满整张画布的 App,取它自己的 icns。
+    /// 系统给这类图标套一层灰色圆角底板,原图缩在中间(Amazon Music 就是这样);其余情况返回 nil,
+    /// 照旧用 NSWorkspace 的图标。
+    private static func fullBleedLegacyIcon(appURL: URL) -> NSImage? {
+        guard let bundle = Bundle(url: appURL),
+              bundle.object(forInfoDictionaryKey: "CFBundleIconName") == nil,
+              let file = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+              let image = bundle.image(forResource: file)
+        else { return nil }
+        return isFullBleed(image) ? image : nil
+    }
+
+    /// 四条边的中点都不透明 = 图铺满画布、没按 macOS 图标网格留边。
+    private static func isFullBleed(_ image: NSImage) -> Bool {
+        let n = 64
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: n, pixelsHigh: n, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return false }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: n, height: n))
+        NSGraphicsContext.restoreGraphicsState()
+        let edges = [(1, n / 2), (n - 2, n / 2), (n / 2, 1), (n / 2, n - 2)]
+        return edges.allSatisfy { (rep.colorAt(x: $0.0, y: $0.1)?.alphaComponent ?? 0) > 0.8 }
+    }
+
+    /// 铺满的图按 macOS 图标网格摆:1024 的画布里居中一块 824 的连续圆角方块(圆角 185.4),
+    /// 跟别的 App 图标同样大小、同样的留边和圆角。
+    private static func fittedToIconGrid(_ image: NSImage) -> NSImage {
+        let side: CGFloat = 1024, body: CGFloat = 824
+        let rect = CGRect(x: (side - body) / 2, y: (side - body) / 2, width: body, height: body)
+        let clip = RoundedRectangle(cornerRadius: 185.4, style: .continuous).path(in: rect).cgPath
+        return NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.addPath(clip)
+            ctx.clip()
+            image.draw(in: rect)
+            return true
+        }
     }
 
     /// 装不了 App 就没图标可查时的兜底:随 App 一起打包的静态品牌图。
@@ -44,7 +88,9 @@ enum AppIconResolver {
         let key = "bundled:" + name
         if let cached = cache[key] { return cached }
         guard let path = Bundle.main.path(forResource: name, ofType: "png"),
-              let image = NSImage(contentsOfFile: path) else { return nil }
+              let loaded = NSImage(contentsOfFile: path) else { return nil }
+        // 打包图取自那个 App 的 icns,铺满的那种(AmazonMusicIcon)同样按图标网格摆,跟装了时一个样子。
+        let image = isFullBleed(loaded) ? fittedToIconGrid(loaded) : loaded
         cache[key] = image
         return image
     }

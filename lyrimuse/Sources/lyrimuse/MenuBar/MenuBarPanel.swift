@@ -667,8 +667,7 @@ private struct MenuBarPanelView: View {
             .accessibilityLabel(canResume ? L10n.t("继续播放") : String(format: L10n.t("打开 %@"), name))
         }
         .task(id: player) {
-            idlePlayerIcon = NSWorkspace.shared.urlForApplication(withBundleIdentifier: player.bundleIdentifier)
-                .map { NSWorkspace.shared.icon(forFile: $0.path) }
+            idlePlayerIcon = AppIconResolver.icon(forBundleID: player.bundleIdentifier)
         }
         // 有曲目时卡片靠 44pt 的封面撑高,这里只有一行字。给同样的下限,面板在"放着"和
         // "没放"之间切换时顶部这一块不会突然塌掉一截。

@@ -143,8 +143,7 @@ struct MiniIdleStandby: View {
             if cover == nil, !track.title.isEmpty { cover = track.coverURL() }
         }
         .task(id: player) {
-            playerIcon = NSWorkspace.shared.urlForApplication(withBundleIdentifier: player.bundleIdentifier)
-                .map { NSWorkspace.shared.icon(forFile: $0.path) }
+            playerIcon = AppIconResolver.icon(forBundleID: player.bundleIdentifier)
         }
     }
 
