@@ -173,6 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 默认容量小得可怜 —— 最近记录展开到 100 行再切个 tab 回来,九十多张封面全部
         // 重新下载。给共享缓存一个像样的容量,磁盘部分跨启动依然有效。
         URLCache.shared = URLCache(memoryCapacity: 32 << 20, diskCapacity: 256 << 20)
+        // 焦点被网页视频这类 App 占着、屏上的播放器又没有 AppleScript 时,播放控制不发(发出去会控到占用者),
+        // 给一声提示音说明这次没生效。见 MusicPlaybackController.ControlRoute.withheld。
+        MusicPlaybackController.onControlWithheld = { NSSound.beep() }
         // 启动后把 Last.fm 信息页那批小图(头像/封面)提前解码进内存:那一页是用户点进
         // 设置才打开的,启动到点进去之间有充足的空窗,预热完再打开就不会闪占位符了
         // (触发点是 LastfmStatsService 首次实例化 → loadSnapshot → prewarm)。

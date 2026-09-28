@@ -1844,7 +1844,9 @@ final class PlaybackCoordinator: ObservableObject {
     /// (updateSmoothedPlaying 只在 isPlayingNow **变化**时被调),所以 2.5s 后对账一次、
     /// 拨回真值 —— 有 grace 定时在跑说明真值正在按老路径收敛,那种情况不抢。
     func userTogglePlayPause() {
-        MusicPlaybackController.playPause()
+        // 没发出去(焦点被别的 App 占着,见 MusicPlaybackController.ControlRoute.withheld)就不翻:翻了播放器不会跟着变,
+        // 界面要反着显示到 2.5 秒后的对账。
+        guard MusicPlaybackController.playPause() else { return }
         stopGraceWork?.cancel()
         stopGraceWork = nil
         // 按界面此刻显示的翻,不按真值翻:快速连按两下时第二下真值还没回读,按真值翻会连写两次「暂停」,

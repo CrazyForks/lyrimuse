@@ -3342,7 +3342,8 @@ public final class LocalPlaybackSource: ObservableObject {
         // 写路径会走 media-control,而读路径对 Apple Music 走的是精确的 AppleScript 播放头,
         // 两条路不一致。
         let resolvedIsAppleMusic = lastSnapshot?.bundleIdentifier == PlaybackPlayer.appleMusic.bundleIdentifier
-        MusicPlaybackController.seek(toSeconds: seconds, preferAppleScript: resolvedIsAppleMusic)
+        // 没发出去(焦点被别的 App 占着)就别把屏上位置挪到目标:播放器没动,挪了要等下一拍才被拽回来。
+        guard MusicPlaybackController.seek(toSeconds: seconds, preferAppleScript: resolvedIsAppleMusic) else { return }
 
         let now = Date()
         // 记下"从哪跳到哪",用来在接下来一小段时间里识别并丢弃 seek 之前采样的陈旧读数。

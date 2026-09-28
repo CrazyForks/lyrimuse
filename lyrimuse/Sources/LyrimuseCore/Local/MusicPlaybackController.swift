@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // 跟 AppleMusicPositionClient(同目录,"读"精确播放进度)对称的"写"操作——发指令
 // 控制当前选定播放器(PlaybackPlayerPreference.selected,可多选)的播放。
@@ -15,22 +16,31 @@ import Foundation
 // media-control 的播放控制指令走的是系统级 MediaRemote,对"当前系统认定的 Now
 // Playing 焦点"生效,不需要指定具体是哪个 App——跟读取状态那条路径依赖同一个
 // "当前是谁在报告"的系统机制,QQ 音乐/网易云音乐被读取路径确认正在播放时,这几个
-// 控制指令天然作用在它们身上,不会误控到别的 App;焦点被别的 App 占着时例外,见 controlRoute)。失败就静默失败(跟
+// 控制指令天然作用在它们身上,不会误控到别的 App;焦点被别的 App 占着时例外,见 controlRoute)。发出去之后失败就静默失败(跟
 // AppleMusicPositionClient 一样宽松,不是核心路径)。
 public enum MusicPlaybackController {
-    public static func playPause() {
+    private static let logger = Logger(subsystem: LyrimuseIdentity.bundleIdentifier, category: "playback-control")
+
+    /// 控制因为焦点被别的 App 占着而没发时调(主线程)。App 在这里给一声提示音。
+    public nonisolated(unsafe) static var onControlWithheld: (@Sendable () -> Void)?
+
+    /// 返回这次指令发没发出去(见 `ControlRoute.withheld`)。
+    @discardableResult
+    public static func playPause() -> Bool {
         dispatch(appleScript: #"tell application "Music" to playpause"#,
                  spotifyScript: #"tell application "Spotify" to playpause"#,
                  mediaControlCommand: "toggle-play-pause")
     }
 
-    public static func nextTrack() {
+    @discardableResult
+    public static func nextTrack() -> Bool {
         dispatch(appleScript: #"tell application "Music" to next track"#,
                  spotifyScript: #"tell application "Spotify" to next track"#,
                  mediaControlCommand: "next-track")
     }
 
-    public static func previousTrack() {
+    @discardableResult
+    public static func previousTrack() -> Bool {
         dispatch(appleScript: #"tell application "Music" to previous track"#,
                  spotifyScript: #"tell application "Spotify" to previous track"#,
                  mediaControlCommand: "previous-track")
@@ -622,15 +632,16 @@ public enum MusicPlaybackController {
     /// PlaybackPlayerPreference.isExclusivelyAppleMusic 是 false,dispatch 默认会走
     /// media-control;但如果实际在播的就是 Apple Music,那么位置**读**路径走的是精确的
     /// AppleScript 播放头,写路径也该走同一条,两边保持一致。
-    public static func seek(toSeconds seconds: Double, preferAppleScript: Bool = false) {
+    @discardableResult
+    public static func seek(toSeconds seconds: Double, preferAppleScript: Bool = false) -> Bool {
         let value = seekArgument(forSeconds: seconds)
         let script = #"tell application "Music" to set player position to "# + value
         if preferAppleScript {
             runAppleScript(script)
-            return
+            return true
         }
-        dispatch(appleScript: script, spotifyScript: #"tell application "Spotify" to set player position to "# + value,
-                 mediaControlCommand: "seek", mediaControlArguments: [value])
+        return dispatch(appleScript: script, spotifyScript: #"tell application "Spotify" to set player position to "# + value,
+                        mediaControlCommand: "seek", mediaControlArguments: [value])
     }
 
     /// 把秒数格式化成两个后端都吃、且能安全拼进 AppleScript 源码的字符串。抽成独立的纯
@@ -657,31 +668,43 @@ public enum MusicPlaybackController {
         case appleMusicScript
         case spotifyScript
         case mediaControl
+        /// 不发。焦点被别的 App 占着、屏上这首又没有 AppleScript 可发:media-control 的指令会落在占用者身上。
+        /// 按 bundle id 定向发(`MRMediaRemoteSendCommandToApp`)也不行 —— 目标不接时它不报错,照样落到焦点上,
+        /// 见 02 章决策 51。
+        case withheld
     }
 
     /// 纯函数,selftest 覆盖。media-control 的控制指令作用于系统级 Now Playing 焦点;焦点被别的 App
     /// 占着、屏上这首靠 AppleScript 回退问到时(`MediaControlClient.focusControlTarget`),指令要直接发给
-    /// 那个播放器,否则落在占用者身上。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐没有 AppleScript,仍走 media-control。
-    public static func controlRoute(exclusivelyAppleMusic: Bool, focusFallback: PlaybackPlayer?) -> ControlRoute {
+    /// 那个播放器,否则落在占用者身上。QQ 音乐 / 网易云 / 酷狗 / 汽水音乐 / KKBOX / Amazon 没有 AppleScript:焦点被占、
+    /// 屏上这首是按 bundle id 直查问到的(`focusHeldElsewhere`,见 `MediaControlClient.focusHeldByAnotherApp`)时不发。
+    public static func controlRoute(exclusivelyAppleMusic: Bool, focusFallback: PlaybackPlayer?,
+                                    focusHeldElsewhere: Bool = false) -> ControlRoute {
         if exclusivelyAppleMusic { return .appleMusicScript }
         switch focusFallback {
         case .appleMusic: return .appleMusicScript
         case .spotify: return .spotifyScript
-        default: return .mediaControl
+        default: return focusHeldElsewhere ? .withheld : .mediaControl
         }
     }
 
     private static func dispatch(appleScript: String, spotifyScript: String,
-                                 mediaControlCommand: String, mediaControlArguments: [String] = []) {
+                                 mediaControlCommand: String, mediaControlArguments: [String] = []) -> Bool {
         switch controlRoute(exclusivelyAppleMusic: PlaybackPlayerPreference.isExclusivelyAppleMusic,
-                            focusFallback: MediaControlClient.focusControlTarget()) {
+                            focusFallback: MediaControlClient.focusControlTarget(),
+                            focusHeldElsewhere: MediaControlClient.focusHeldByAnotherApp()) {
         case .appleMusicScript:
             runAppleScript(appleScript)
         case .spotifyScript:
             runAppleScript(spotifyRunningGuard + spotifyScript)
         case .mediaControl:
             runMediaControl(mediaControlCommand, arguments: mediaControlArguments)
+        case .withheld:
+            logger.notice("playback control withheld (\(mediaControlCommand, privacy: .public)): now playing focus is held by another app")
+            DispatchQueue.main.async { onControlWithheld?() }
+            return false
         }
+        return true
     }
 
     /// 问播放器要状态的超时上限。

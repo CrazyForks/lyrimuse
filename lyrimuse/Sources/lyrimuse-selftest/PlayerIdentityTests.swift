@@ -116,12 +116,17 @@ func runPlayerIdentityTests() {
         // 播放控制发给谁:media-control 的指令作用于系统焦点,焦点被别的 App 占着、屏上这首靠 AppleScript
         // 回退问到时,要直接发给那个播放器,否则网页视频被暂停 / 被切走。
         typealias Route = MusicPlaybackController.ControlRoute
-        let route = MusicPlaybackController.controlRoute
+        let route = { MusicPlaybackController.controlRoute(exclusivelyAppleMusic: $0, focusFallback: $1) }
         expectEqual(route(true, nil), Route.appleMusicScript, "控制分派: 只勾 Apple Music → AppleScript")
         expectEqual(route(false, nil), Route.mediaControl, "控制分派: 焦点正常 → media-control")
         expectEqual(route(false, .appleMusic), Route.appleMusicScript, "控制分派: 焦点被占、回退到 Apple Music → 发给 Music.app")
         expectEqual(route(false, .spotify), Route.spotifyScript, "控制分派: 焦点被占、回退到 Spotify → 发给 Spotify")
         expectEqual(route(false, .qqMusic), Route.mediaControl, "控制分派: 没有 AppleScript 的播放器 → 仍走 media-control")
+        let held = { MusicPlaybackController.controlRoute(exclusivelyAppleMusic: $0, focusFallback: $1, focusHeldElsewhere: true) }
+        expectEqual(held(false, nil), Route.withheld,
+                    "控制分派: 焦点被占、屏上这首靠直查问到(没有 AppleScript) → 不发,发了会控到网页视频")
+        expectEqual(held(false, .spotify), Route.spotifyScript, "控制分派: 焦点被占但能发 AppleScript → 照发 AppleScript")
+        expectEqual(held(true, nil), Route.appleMusicScript, "控制分派: 只勾 Apple Music → 不受焦点影响")
         do {
             let sourcesRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             func src(_ path: String) -> String {
@@ -130,8 +135,16 @@ func runPlayerIdentityTests() {
             let controller = src("LyrimuseCore/Local/MusicPlaybackController.swift")
             let client = src("LyrimuseCore/Local/MediaControlClient.swift")
             let adProbe = src("LyrimuseCore/Local/YouTubeMusicAdProbe.swift")
-            expectEqual(controller.contains("focusFallback: MediaControlClient.focusControlTarget())"), true,
-                        "控制分派(契约): dispatch 按焦点回退目标分派")
+            expectEqual(controller.contains("focusFallback: MediaControlClient.focusControlTarget(),\n")
+                        && controller.contains("focusHeldElsewhere: MediaControlClient.focusHeldByAnotherApp())"), true,
+                        "控制分派(契约): dispatch 按焦点回退目标与「焦点被占、没有 AppleScript」分派")
+            expectEqual(client.contains("return fallbackActive && !fallbackViaAppleScript"), true,
+                        "控制分派(契约): 焦点被占 = 在回退、且不是经 AppleScript 问到的")
+            let coordinator = src("lyrimuse/PlaybackCoordinator.swift")
+            let source = src("LyrimuseCore/Local/LocalPlaybackSource.swift")
+            expectEqual(coordinator.contains("guard MusicPlaybackController.playPause() else { return }")
+                        && source.contains("guard MusicPlaybackController.seek(toSeconds: seconds, preferAppleScript: resolvedIsAppleMusic) else { return }"),
+                        true, "控制分派(契约): 没发出去时不乐观翻转播放状态、不挪屏上进度")
             expectEqual(client.contains("fallbackViaAppleScript = viaAppleScript")
                         && client.contains("if fallbackActive && fallbackViaAppleScript { return lastAcceptedDirectQueryPlayer }")
                         && client.contains("return channelFallbackPlayer"), true,

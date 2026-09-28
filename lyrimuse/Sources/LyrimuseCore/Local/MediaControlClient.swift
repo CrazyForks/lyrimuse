@@ -655,6 +655,14 @@ public enum MediaControlClient {
         return channelFallbackPlayer
     }
 
+    /// 焦点被别的 App 占着,屏上这首是按 bundle id 直查回退问到的(没有 AppleScript 可发)。这时 media-control 的控制
+    /// 指令会落在占用者身上,播放控制不发(见 `MusicPlaybackController.controlRoute`)。
+    public static func focusHeldByAnotherApp() -> Bool {
+        appleMusicFocusLock.lock()
+        defer { appleMusicFocusLock.unlock() }
+        return fallbackActive && !fallbackViaAppleScript
+    }
+
     private static func setFocusFallbackPlayer(_ value: PlaybackPlayer?) {
         appleMusicFocusLock.lock()
         lastAcceptedDirectQueryPlayer = value
